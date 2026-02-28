@@ -31,7 +31,16 @@ Webapp for patron devices.
 
     <script>
         // --- CONFIGURATION ---
-        const firebaseConfig = { /* PASTE YOUR FIREBASE CONFIG HERE */ };
+        const firebaseConfig = {
+            apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
+            authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
+            databaseURL: "https://smartphoneorchestra-dwt-default-rtdb.firebaseio.com/",
+            projectId: "smartphoneorchestra-dwt",
+            storageBucket: "smartphoneorchestra-dwt.firebasestorage.app",
+            messagingSenderId: "722537253165",
+            appId: "1:722537253165:web:8e8b6495bd508de35b2ba4"
+        };
+
         firebase.initializeApp(firebaseConfig);
         const db = firebase.database();
 
