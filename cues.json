@@ -1,0 +1,16 @@
+[
+  {
+    "label": "The Tempest: Opening Storm",
+    "type": "SPATIAL_SOUND",
+    "asset": "storm_layer_01",
+    "pattern": "circle_expand",
+    "duration": 45
+  },
+  {
+    "label": "Ariel's Appearance",
+    "type": "LIGHT_VECTOR",
+    "color": "#00FFFF",
+    "movement": "linear_sweep_SL_to_SR",
+    "duration": 5
+  }
+]

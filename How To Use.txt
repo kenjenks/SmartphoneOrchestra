@@ -1,0 +1,19 @@
+How to use this for your first run:
+
+1. Firebase Settings: Ensure both files use the exact same Firebase project.
+
+2. Order of Operations: * Open laptopdist.html and click Initialize Audio Engine. The status should say STANDBY.
+
+  Open smartphonedist.html on your Pixel 6.
+
+  As soon as you hit START on the phone, the laptop's LED will turn green and begin chirping silently.
+
+3. The 3m Baseline: Stand exactly 3 meters away. The phone will show a progress bar for 60 seconds. Once finished, you are live!
+
+---
+
+laptopdist.html: The "silent" (19.5 kHz) acoustic lighthouse (Passive, unless devices exist).
+
+smartphonedist.html: The distributed "calculators" (Passive listeners).
+
+admin.html: The supervisor (Wipes data and resets the state).

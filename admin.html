@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<!--
+admin.html
+
+System janitor.
+
+Global Blackout: This sends a specific KILL action to the show/currentCue path. This ensures that even if a device is mid-script, it receives a command to instantly close its AudioContext and black out the screen.
+
+Pillar Monitoring: The Admin panel lets you see if all 4 pillars have successfully claimed a slot and are "Checking in."
+
+Survey Purge: During setup, you might do several "test walks." This button allows the Sound Tech to wipe the survey_results node so the final, clean data for the seat_config.tsv can be generated without old test noise.
+
+Database Health: Keeping the devices node empty when the show isn't running prevents Firebase from racking up unnecessary "Simultaneous Connection" charges.
+
+Operational SOP for Admin:
+
+* Pre-Show: Check Admin to ensure Pillars = 0 and Devices = 0 (a clean slate).
+
+* During Onboarding: Watch the Patron Nodes count climb to match the ticket count.
+
+* Post-Show: Hit Purge Device Registry as the audience leaves to reset for the next performance.
+
+-->
+
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Smartphone Orchestra: System Admin</title>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background: #0b0b0b; color: #eee; padding: 40px; text-align: center; }
+        .container { max-width: 800px; margin: auto; }
+        .dashboard-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 30px; }
+        .panel { background: #1a1a1a; padding: 20px; border-radius: 12px; border: 1px solid #333; }
+        .danger { border: 2px solid #ff4444; }
+        .status-val { font-size: 2rem; font-weight: bold; color: #00ff00; }
+        button {
+            width: 100%; padding: 15px; margin: 10px 0; border-radius: 8px; border: none;
+            font-weight: bold; cursor: pointer; transition: 0.2s; font-size: 1rem;
+        }
+        .btn-soft { background: #444; color: white; }
+        .btn-soft:hover { background: #555; }
+        .btn-danger { background: #dc3545; color: white; }
+        .btn-danger:hover { background: #bd2130; }
+        .btn-warning { background: #ffc107; color: #000; }
+        #log { text-align: left; background: #000; padding: 10px; height: 150px; overflow-y: auto; font-family: monospace; font-size: 0.8rem; margin-top: 20px; border-radius: 5px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>System Admin Control</h1>
+
+    <div class="dashboard-grid">
+        <div class="panel">
+            <h3>Active Patron Nodes</h3>
+            <div id="node-count" class="status-val">0</div>
+            <p>Connected Smartphones</p>
+        </div>
+
+        <div class="panel">
+            <h3>Active A9 Pillars</h3>
+            <div id="pillar-count" class="status-val">0</div>
+            <p>Detection Beacons Live</p>
+        </div>
+    </div>
+
+    <div class="dashboard-grid">
+        <div class="panel">
+            <h3>Show Management</h3>
+            <button class="btn-soft" onclick="sendKillSignal()">GLOBAL BLACKOUT (SILENCE)</button>
+            <p><small>Sends a 'KILL' command to all devices to stop audio/light immediately.</small></p>
+
+            <button class="btn-soft" onclick="resetClock()">RESYNC MASTER CLOCK</button>
+        </div>
+
+        <div class="panel danger">
+            <h3>System Reset (Danger)</h3>
+            <button class="btn-danger" onclick="purgeDevices()">PURGE DEVICE REGISTRY</button>
+            <p><small>Removes all patron phones from the database. Use after every show.</small></p>
+
+            <button class="btn-warning" onclick="purgeSurveyData()">CLEAR SURVEY RESULTS</button>
+            <p><small>Wipes pillar heartbeats and calculated seat coordinates.</small></p>
+        </div>
+    </div>
+
+    <div id="log">System initialized. Waiting for commands...</div>
+</div>
+
+<script>
+    // --- FIREBASE CONFIG ---
+    const firebaseConfig = { /* PASTE YOUR FIREBASE CONFIG HERE */ };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+
+    // 1. Live Monitoring
+    db.ref('devices').on('value', (snap) => {
+        const count = snap.numChildren();
+        document.getElementById('node-count').innerText = count;
+    });
+
+    db.ref('active_pillars').on('value', (snap) => {
+        const count = snap.numChildren();
+        document.getElementById('pillar-count').innerText = count;
+    });
+
+    // 2. Global Kill Signal
+    function sendKillSignal() {
+        const now = Date.now();
+        db.ref('show/currentCue').set({
+            type: 'SYSTEM',
+            action: 'KILL',
+            triggerTime: now,
+            id: 'STOP_' + now
+        }).then(() => log("Sent Global Kill Signal."));
+    }
+
+    // 3. Reset Master Clock
+    function resetClock() {
+        db.ref('laptop/clock').set(Date.now());
+        log("Master Clock Force-Updated.");
+    }
+
+    // 4. Purge Devices (Post-Show Cleanup)
+    async function purgeDevices() {
+        if (confirm("Are you sure? This will disconnect every patron device from the grid.")) {
+            await db.ref('devices').remove();
+            log("Device registry purged.");
+        }
+    }
+
+    // 5. Purge Survey
+    async function purgeSurveyData() {
+        if (confirm("This will clear all A9 pillar data and survey calculations. Proceed?")) {
+            await db.ref('active_pillars').remove();
+            await db.ref('survey_results').remove();
+            log("Survey data purged.");
+        }
+    }
+
+    function log(msg) {
+        const logBox = document.getElementById('log');
+        const time = new Date().toLocaleTimeString();
+        logBox.innerHTML += `<div>[${time}] ${msg}</div>`;
+        logBox.scrollTop = logBox.scrollHeight;
+    }
+</script>
+</body>
+</html>

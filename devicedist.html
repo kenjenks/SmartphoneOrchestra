@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Smartphone Orchestra: Patron Node</title>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
+    <style>
+        body { margin: 0; padding: 0; background: #000; color: #fff; font-family: sans-serif; overflow: hidden; height: 100vh; display: flex; align-items: center; justify-content: center; text-align: center; }
+        #status-display { font-size: 0.8rem; color: #444; position: absolute; bottom: 10px; width: 100%; }
+        #instruction { font-size: 1.5rem; padding: 20px; }
+        .calibration-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #000; z-index: 100; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+        .btn-ready { padding: 20px 40px; font-size: 1.2rem; background: #00ff00; border: none; border-radius: 10px; cursor: pointer; }
+    </style>
+</head>
+<body>
+
+    <div id="calibration-zone" class="calibration-overlay">
+        <h2>PLACE PHONE IN SEAT BAG</h2>
+        <p>Ensure front camera can see the QR code.</p>
+        <button class="btn-ready" id="ready-btn">I AM SEATED</button>
+    </div>
+
+    <div id="instruction">WAITING FOR PERFORMANCE...</div>
+    <div id="status-display">SYNCING CLOCK...</div>
+
+    <script>
+        // --- CONFIGURATION ---
+        const firebaseConfig = { /* PASTE YOUR FIREBASE CONFIG HERE */ };
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
+        let mySeat = { id: null, x: 0, y: 0 };
+        let clockOffset = 0;
+        let hardwareLag = 0; // Calculated during onboarding station scan
+        let audioCtx = null;
+        let currentCueId = null;
+
+        // 1. Unified Master Clock Sync
+        db.ref('laptop/clock').on('value', (snap) => {
+            const laptopTime = snap.val();
+            const now = Date.now();
+            clockOffset = laptopTime - now; 
+            document.getElementById('status-display').innerText = `SYNCED: Offset ${clockOffset}ms`;
+        });
+
+        // 2. Seat Activation Logic (Using Seat-Bag QR)
+        // In a real scenario, this would trigger upon scanning the bag QR code.
+        function activateSeat(seatId, x, y) {
+            mySeat = { id: seatId, x: parseFloat(x), y: parseFloat(y) };
+            db.ref(`devices/${seatId}`).set({
+                status: 'ACTIVE',
+                lastSeen: Date.now()
+            });
+            document.getElementById('calibration-zone').style.display = 'none';
+        }
+
+        // 3. The Cue Listener
+        db.ref('show/currentCue').on('value', (snap) => {
+            const cue = snap.val();
+            if (!cue || cue.id === currentCueId) return;
+            currentCueId = cue.id;
+
+            handleCue(cue);
+        });
+
+        function handleCue(cue) {
+            if (cue.type === 'SYSTEM' && cue.action === 'KILL') {
+                stopAllEffects();
+                return;
+            }
+
+            // Execute based on JSON cue script logic
+            if (cue.type === 'SPATIAL_SOUND') {
+                playSpatialAudio(cue);
+            } else if (cue.type === 'LIGHT_VECTOR') {
+                triggerLightEffect(cue);
+            }
+            
+            document.getElementById('instruction').innerText = cue.label;
+        }
+
+        // 4. Spatial Audio Engine
+        function playSpatialAudio(cue) {
+            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            
+            // Logic: Calculate distance from 'event origin' provided in cue
+            // Example: A storm that starts at the back of the house and moves forward
+            const eventX = cue.originX || 0;
+            const eventY = cue.originY || 0;
+            const distance = Math.sqrt(Math.pow(mySeat.x - eventX, 2) + Math.pow(mySeat.y - eventY, 2));
+
+            // Determine volume or delay based on distance
+            const volume = Math.max(0, 1 - (distance / 50)); 
+            
+            // Trigger playback synced to Master Clock
+            const playbackStartTime = (cue.triggerTime - clockOffset) / 1000;
+            
+            // (Standard WebAudio Buffer Logic would follow here to play the asset)
+            console.log(`Playing ${cue.asset} at Volume ${volume.toFixed(2)}`);
+        }
+
+        function triggerLightEffect(cue) {
+            // Visual sweeps based on X/Y coordinates
+            // Example: Color phones red if their X is within a certain range
+            document.body.style.backgroundColor = cue.color || '#000';
+            setTimeout(() => { document.body.style.backgroundColor = '#000'; }, 1000);
+        }
+
+        function stopAllEffects() {
+            document.body.style.backgroundColor = '#000';
+            document.getElementById('instruction').innerText = "SYSTEM IDLE";
+            // Stop audio nodes...
+        }
+
+        document.getElementById('ready-btn').onclick = () => {
+            // Placeholder: In production, the QR scan provides these coordinates
+            activateSeat("Seat_A12", 5.5, 12.2);
+            if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+        };
+    </script>
+</body>
+</html>

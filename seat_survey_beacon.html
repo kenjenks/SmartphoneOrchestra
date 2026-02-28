@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>A9 Survey Beacon</title>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
+    <style>
+        body { font-family: sans-serif; background: #000; color: #fff; text-align: center; padding: 40px; }
+        .pillar-card { border: 4px solid #333; padding: 30px; border-radius: 20px; display: inline-block; min-width: 300px; }
+        #freq-display { font-size: 5rem; color: #00ff00; margin: 20px 0; font-weight: bold; }
+        .coords { font-size: 1.5rem; color: #888; margin-bottom: 20px; }
+        #status { font-family: monospace; background: #111; padding: 10px; border-radius: 5px; color: #aaa; }
+        .led { width: 20px; height: 20px; border-radius: 50%; background: #300; display: inline-block; margin-top: 20px; }
+        .led.active { background: #f00; box-shadow: 0 0 15px #f00; }
+    </style>
+</head>
+<body>
+
+    <div class="pillar-card">
+        <h1 id="pillar-label">LOADING CONFIG...</h1>
+        <div id="freq-display">--- Hz</div>
+        <div class="coords" id="coords-display">X: --, Y: --</div>
+        <div id="status">Waiting for user interaction...</div>
+        <div id="pulse-led" class="led"></div>
+    </div>
+
+    <script>
+        // --- FIREBASE INITIALIZATION ---
+        const firebaseConfig = { /* PASTE YOUR CONFIG HERE */ };
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
+        let audioCtx, analyser, dataArray;
+        let myConfig = null;
+        const THRESHOLD = -65; // Sensitivity for "Cocktail Party" check
+
+        // 1. Load the XY Coordinates from JSON
+        async function loadPillarIdentity() {
+            try {
+                const response = await fetch('pillar_config.json');
+                const config = await response.json();
+                
+                // Get ID from URL: seat_survey_beacon.html?id=PILLAR_FL
+                const urlParams = new URLSearchParams(window.location.search);
+                const myId = urlParams.get('id');
+
+                myConfig = config.pillars.find(p => p.id === myId);
+
+                if (!myConfig) {
+                    document.body.innerHTML = "<h1>Error: Invalid Pillar ID in URL</h1>";
+                    return;
+                }
+
+                document.getElementById('pillar-label').innerText = myConfig.label;
+                document.getElementById('freq-display').innerText = myConfig.freq + " Hz";
+                document.getElementById('coords-display').innerText = `X: ${myConfig.x}, Y: ${myConfig.y}`;
+                document.getElementById('status').innerText = "Ready. Tap screen to start.";
+            } catch (e) {
+                document.getElementById('status').innerText = "Config Load Failed.";
+            }
+        }
+
+        // 2. Initializing Listen-Before-Talk
+        async function startBeacon() {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const source = audioCtx.createMediaStreamSource(stream);
+            
+            analyser = audioCtx.createAnalyser();
+            analyser.fftSize = 4096;
+            dataArray = new Float32Array(analyser.frequencyBinCount);
+            source.connect(analyser);
+
+            // Announce presence to the network for the surveyor phone
+            db.ref(`active_pillars/${myConfig.id}`).set({
+                x: myConfig.x,
+                y: myConfig.y,
+                freq: myConfig.freq,
+                status: "ONLINE",
+                lastPing: Date.now()
+            });
+
+            checkChannel();
+        }
+
+        // 3. The "Cocktail Party" Logic
+        function checkChannel() {
+            analyser.getFloatFrequencyData(dataArray);
+            
+            // Look specifically at our assigned frequency
+            const bin = Math.round(myConfig.freq / (audioCtx.sampleRate / analyser.fftSize));
+            const currentVolume = dataArray[bin];
+
+            if (currentVolume < THRESHOLD) {
+                document.getElementById('status').innerText = "CHANNEL CLEAR";
+                emitChirp();
+                // randomized interval (approx every 2s) to avoid harmonic clobbering
+                setTimeout(checkChannel, 1800 + Math.random() * 600);
+            } else {
+                document.getElementById('status').innerText = "CHANNEL BUSY - WAITING...";
+                setTimeout(checkChannel, 100); // Check again rapidly
+            }
+        }
+
+        // 4. Emit Audible Chirp
+        function emitChirp() {
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            const led = document.getElementById('pulse-led');
+
+            osc.frequency.setValueAtTime(myConfig.freq, audioCtx.currentTime);
+            
+            gain.gain.setValueAtTime(0, audioCtx.currentTime);
+            gain.gain.linearRampToValueAtTime(0.7, audioCtx.currentTime + 0.01);
+            gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.12);
+
+            osc.connect(gain).connect(audioCtx.destination);
+            
+            led.classList.add('active');
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.15);
+            
+            setTimeout(() => led.classList.remove('active'), 150);
+
+            // Update heartbeat in Firebase
+            db.ref(`active_pillars/${myConfig.id}/lastPing`).set(Date.now());
+        }
+
+        window.onload = loadPillarIdentity;
+        document.body.onclick = () => {
+            if (!audioCtx) startBeacon();
+        };
+    </script>
+</body>
+</html>
