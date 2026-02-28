@@ -48,48 +48,69 @@ Webapp for crew to scan the QR code on each seat bag to determine and record the
         let myConfig = null;
         const THRESHOLD = -65; // Sensitivity for "Cocktail Party" check
 
-        // 1. Load the XY Coordinates from JSON
+        // 1. Load the Identity (Prioritize Cloud over Local JSON)
         async function loadPillarIdentity() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const myId = urlParams.get('id'); // e.g. PILLAR_FL
+
+            if (!myId) {
+                document.body.innerHTML = "<h1>Error: Missing Pillar ID in URL</h1>";
+                return;
+            }
+
             try {
-                const response = await fetch('pillar_config.json');
-                const config = await response.json();
-                
-                // Get ID from URL: seat_survey_beacon.html?id=PILLAR_FL
-                const urlParams = new URLSearchParams(window.location.search);
-                const myId = urlParams.get('id');
+                // Try to get latest config from Cloud
+                const snapshot = await db.ref('active_pillars/' + myId).once('value');
+                let data = snapshot.val();
 
-                myConfig = config.pillars.find(p => p.id === myId);
-
-                if (!myConfig) {
-                    document.body.innerHTML = "<h1>Error: Invalid Pillar ID in URL</h1>";
-                    return;
+                // Fallback to local JSON if Cloud is empty
+                if (!data) {
+                    console.log("Pillar not found in cloud, checking local JSON...");
+                    const response = await fetch('pillar_config.json');
+                    const localConfig = await response.json();
+                    // Handle both array and map formats
+                    data = Array.isArray(localConfig.pillars)
+                        ? localConfig.pillars.find(p => p.id === myId)
+                        : localConfig[myId];
                 }
 
-                document.getElementById('pillar-label').innerText = myConfig.label;
-                document.getElementById('freq-display').innerText = myConfig.freq + " Hz";
-                document.getElementById('coords-display').innerText = `X: ${myConfig.x}, Y: ${myConfig.y}`;
-                document.getElementById('status').innerText = "Ready. Tap screen to start.";
+                if (data) {
+                    myConfig = {
+                        id: myId,
+                        label: data.label || myId,
+                        x: data.x,
+                        y: data.y,
+                        freq: data.preferred_freq || data.freq || 1000 // Support both key names
+                    };
+
+                    document.getElementById('pillar-label').innerText = myConfig.label;
+                    document.getElementById('freq-display').innerText = myConfig.freq + " Hz";
+                    document.getElementById('coords-display').innerText = `X: ${myConfig.x}, Y: ${myConfig.y}`;
+                    document.getElementById('status').innerText = "Ready. Tap screen to start.";
+                } else {
+                    document.getElementById('status').innerText = "Identity Error: ID not in Cloud or JSON.";
+                }
             } catch (e) {
-                document.getElementById('status').innerText = "Config Load Failed.";
+                console.error(e);
+                document.getElementById('status').innerText = "Initialization Failed.";
             }
         }
 
         // 2. Initializing Listen-Before-Talk
         async function startBeacon() {
+            if (!myConfig) return;
+
             audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             const source = audioCtx.createMediaStreamSource(stream);
-            
+
             analyser = audioCtx.createAnalyser();
             analyser.fftSize = 4096;
             dataArray = new Float32Array(analyser.frequencyBinCount);
             source.connect(analyser);
 
-            // Announce presence to the network for the surveyor phone
-            db.ref(`active_pillars/${myConfig.id}`).set({
-                x: myConfig.x,
-                y: myConfig.y,
-                freq: myConfig.freq,
+            // Announce presence/heartbeat to Firebase
+            db.ref(`active_pillars/${myConfig.id}`).update({
                 status: "ONLINE",
                 lastPing: Date.now()
             });
@@ -100,7 +121,7 @@ Webapp for crew to scan the QR code on each seat bag to determine and record the
         // 3. The "Cocktail Party" Logic
         function checkChannel() {
             analyser.getFloatFrequencyData(dataArray);
-            
+
             // Look specifically at our assigned frequency
             const bin = Math.round(myConfig.freq / (audioCtx.sampleRate / analyser.fftSize));
             const currentVolume = dataArray[bin];
@@ -108,11 +129,11 @@ Webapp for crew to scan the QR code on each seat bag to determine and record the
             if (currentVolume < THRESHOLD) {
                 document.getElementById('status').innerText = "CHANNEL CLEAR";
                 emitChirp();
-                // randomized interval (approx every 2s) to avoid harmonic clobbering
+                // Randomized interval to avoid harmonic clobbering
                 setTimeout(checkChannel, 1800 + Math.random() * 600);
             } else {
                 document.getElementById('status').innerText = "CHANNEL BUSY - WAITING...";
-                setTimeout(checkChannel, 100); // Check again rapidly
+                setTimeout(checkChannel, 100);
             }
         }
 
