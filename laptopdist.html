@@ -64,7 +64,14 @@ This is run from the Stage Manager or Sound Tech laptop. The clock of the laptop
 
     <script>
         // --- FIREBASE INITIALIZATION ---
-        const firebaseConfig = { /* YOUR CONFIG HERE */ };
+        const firebaseConfig = {
+            apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
+            authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
+            projectId: "smartphoneorchestra-dwt",
+            storageBucket: "smartphoneorchestra-dwt.firebasestorage.app",
+            messagingSenderId: "722537253165",
+            appId: "1:722537253165:web:8e8b6495bd508de35b2ba4"
+        };
         firebase.initializeApp(firebaseConfig);
         const db = firebase.database();
 
@@ -99,12 +106,17 @@ This is run from the Stage Manager or Sound Tech laptop. The clock of the laptop
 
         function renderCues() {
             const list = document.getElementById('cue-list');
-            list.innerHTML = cueScript.map((cue, i) => `
-                <div class="cue-item" id="cue-${i}" onclick="jumpToCue(${i})">
-                    <div style="font-weight:bold">${cue.label}</div>
-                    <div style="font-size:0.8rem; color:#aaa">${cue.type} | ${cue.action}</div>
-                </div>
-            `).join('');
+            list.innerHTML = cueScript.map((cue, i) => {
+                // This line checks for 'action', then 'asset', then 'movement'
+                const detail = cue.action || cue.asset || cue.movement || "No details";
+
+                return `
+                    <div class="cue-item" id="cue-${i}" onclick="jumpToCue(${i})">
+                        <div style="font-weight:bold">${cue.label}</div>
+                        <div style="font-size:0.8rem; color:#aaa">${cue.type} | ${detail}</div>
+                    </div>
+                `;
+            }).join('');
             updateSelection();
         }
 
