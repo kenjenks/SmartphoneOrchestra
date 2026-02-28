@@ -4,8 +4,13 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="2a49255b-03b5-4ec9-ac94-23daadf8b64a" name="Changes" comment="Updated admin.html clarify comments and force an update of the file in Firebase">
+    <list default="true" id="2a49255b-03b5-4ec9-ac94-23daadf8b64a" name="Changes" comment="seat_survey.html now checks the Firebase active_pillars/ path first before reading local copy of pillar_config.json">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/admin.html" beforeDir="false" afterPath="$PROJECT_DIR$/admin.html" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cues.json" beforeDir="false" afterPath="$PROJECT_DIR$/cues.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/devicedist.html" beforeDir="false" afterPath="$PROJECT_DIR$/devicedist.html" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/generate_stickers.py" beforeDir="false" afterPath="$PROJECT_DIR$/generate_stickers.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/laptopdist.html" beforeDir="false" afterPath="$PROJECT_DIR$/laptopdist.html" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -155,7 +160,55 @@
       <option name="project" value="LOCAL" />
       <updated>1772273999774</updated>
     </task>
-    <option name="localTasksCounter" value="13" />
+    <task id="LOCAL-00013" summary="Sending firebase.json to Github and Firebase.">
+      <option name="closed" value="true" />
+      <created>1772274496446</created>
+      <option name="number" value="00013" />
+      <option name="presentableId" value="LOCAL-00013" />
+      <option name="project" value="LOCAL" />
+      <updated>1772274496446</updated>
+    </task>
+    <task id="LOCAL-00014" summary="Modified comment in admin.html to push it to Firebase.">
+      <option name="closed" value="true" />
+      <created>1772274617438</created>
+      <option name="number" value="00014" />
+      <option name="presentableId" value="LOCAL-00014" />
+      <option name="project" value="LOCAL" />
+      <updated>1772274617438</updated>
+    </task>
+    <task id="LOCAL-00015" summary="Added databaseURL to firebaseConfig">
+      <option name="closed" value="true" />
+      <created>1772275357314</created>
+      <option name="number" value="00015" />
+      <option name="presentableId" value="LOCAL-00015" />
+      <option name="project" value="LOCAL" />
+      <updated>1772275357314</updated>
+    </task>
+    <task id="LOCAL-00016" summary="Get Pillar ID from URL">
+      <option name="closed" value="true" />
+      <created>1772276011154</created>
+      <option name="number" value="00016" />
+      <option name="presentableId" value="LOCAL-00016" />
+      <option name="project" value="LOCAL" />
+      <updated>1772276011154</updated>
+    </task>
+    <task id="LOCAL-00017" summary="Change Firebase reference in seat_survey_beacon.html to include the active_pillars/ prefix.">
+      <option name="closed" value="true" />
+      <created>1772276368368</created>
+      <option name="number" value="00017" />
+      <option name="presentableId" value="LOCAL-00017" />
+      <option name="project" value="LOCAL" />
+      <updated>1772276368368</updated>
+    </task>
+    <task id="LOCAL-00018" summary="seat_survey.html now checks the Firebase active_pillars/ path first before reading local copy of pillar_config.json">
+      <option name="closed" value="true" />
+      <created>1772277027104</created>
+      <option name="number" value="00018" />
+      <option name="presentableId" value="LOCAL-00018" />
+      <option name="project" value="LOCAL" />
+      <updated>1772277027104</updated>
+    </task>
+    <option name="localTasksCounter" value="19" />
     <servers />
   </component>
   <component name="VcsManagerConfiguration">
@@ -168,6 +221,12 @@
     <MESSAGE value="Updated admin.html to add confirmation to UI after loading config file." />
     <MESSAGE value="Updated admin.html to read the pillar values from the database" />
     <MESSAGE value="Updated admin.html clarify comments and force an update of the file in Firebase" />
-    <option name="LAST_COMMIT_MESSAGE" value="Updated admin.html clarify comments and force an update of the file in Firebase" />
+    <MESSAGE value="Sending firebase.json to Github and Firebase." />
+    <MESSAGE value="Modified comment in admin.html to push it to Firebase." />
+    <MESSAGE value="Added databaseURL to firebaseConfig" />
+    <MESSAGE value="Get Pillar ID from URL" />
+    <MESSAGE value="Change Firebase reference in seat_survey_beacon.html to include the active_pillars/ prefix." />
+    <MESSAGE value="seat_survey.html now checks the Firebase active_pillars/ path first before reading local copy of pillar_config.json" />
+    <option name="LAST_COMMIT_MESSAGE" value="seat_survey.html now checks the Firebase active_pillars/ path first before reading local copy of pillar_config.json" />
   </component>
 </project>

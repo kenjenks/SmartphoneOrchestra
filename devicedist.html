@@ -11,26 +11,39 @@ Webapp for patron devices.
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <style>
-        body { margin: 0; padding: 0; background: #000; color: #fff; font-family: sans-serif; overflow: hidden; height: 100vh; display: flex; align-items: center; justify-content: center; text-align: center; }
-        #status-display { font-size: 0.8rem; color: #444; position: absolute; bottom: 10px; width: 100%; }
-        #instruction { font-size: 1.5rem; padding: 20px; }
-        .calibration-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #000; z-index: 100; display: flex; flex-direction: column; align-items: center; justify-content: center; }
-        .btn-ready { padding: 20px 40px; font-size: 1.2rem; background: #00ff00; border: none; border-radius: 10px; cursor: pointer; }
+        body { margin: 0; background: #000; color: #fff; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; height: 100vh; display: flex; align-items: center; justify-content: center; text-align: center; overflow: hidden; transition: background-color 0.1s; }
+        #setup-screen { padding: 20px; max-width: 400px; }
+        .checklist { text-align: left; background: #111; padding: 20px; border-radius: 12px; border: 1px solid #333; margin-bottom: 25px; }
+        .checklist label { display: block; margin: 15px 0; font-size: 1.1rem; cursor: pointer; }
+        .checklist input { transform: scale(1.5); margin-right: 15px; }
+        .btn-ready { padding: 20px 40px; font-size: 1.4rem; background: #28a745; color: white; border: none; border-radius: 50px; cursor: pointer; width: 100%; transition: 0.3s; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
+        .btn-ready:disabled { background: #333; color: #777; cursor: not-allowed; box-shadow: none; }
+        #loading-msg { margin-top: 20px; color: #aaa; font-style: italic; min-height: 1.2em; }
+        #instruction { font-size: 1.4rem; line-height: 1.6; }
+        #status { position: absolute; bottom: 15px; font-size: 0.7rem; color: #333; letter-spacing: 2px; text-transform: uppercase; width: 100%; }
     </style>
 </head>
 <body>
 
-    <div id="calibration-zone" class="calibration-overlay">
-        <h2>PLACE PHONE IN SEAT BAG</h2>
-        <p>Ensure front camera can see the QR code.</p>
-        <button class="btn-ready" id="ready-btn">I AM SEATED</button>
+    <div id="setup-screen">
+        <h1 id="seat-label">Welcome</h1>
+        <div class="checklist">
+            <label><input type="checkbox" class="usher-check"> 🤫 Do Not Disturb / Silent</label>
+            <label><input type="checkbox" class="usher-check"> 🔊 Volume at Maximum</label>
+            <label><input type="checkbox" class="usher-check"> 🔆 Brightness at 100%</label>
+        </div>
+        <button class="btn-ready" id="ready-btn" disabled>PREPARE INSTRUMENT</button>
+        <p id="loading-msg">Waiting for the conductor...</p>
     </div>
 
-    <div id="instruction">WAITING FOR PERFORMANCE...</div>
-    <div id="status-display">SYNCING CLOCK...</div>
+    <div id="show-screen" style="display:none;">
+        <div id="instruction">Please silence your voice.<br>The performance is ready.</div>
+    </div>
+
+    <div id="status">OFFLINE</div>
 
     <script>
-        // --- CONFIGURATION ---
+        // --- FIREBASE CONFIGURATION ---
         const firebaseConfig = {
             apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
             authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
@@ -40,98 +53,169 @@ Webapp for patron devices.
             messagingSenderId: "722537253165",
             appId: "1:722537253165:web:8e8b6495bd508de35b2ba4"
         };
-
         firebase.initializeApp(firebaseConfig);
         const db = firebase.database();
 
-        let mySeat = { id: null, x: 0, y: 0 };
-        let clockOffset = 0;
-        let hardwareLag = 0; // Calculated during onboarding station scan
-        let audioCtx = null;
-        let currentCueId = null;
+        let audioCtx, clockOffset = 0, wakeLock = null;
+        let mySeat = { id: "Guest", x: 0, y: 0 };
+        const audioBuffers = {};
 
-        // 1. Unified Master Clock Sync
-        db.ref('laptop/clock').on('value', (snap) => {
-            const laptopTime = snap.val();
-            const now = Date.now();
-            clockOffset = laptopTime - now; 
-            document.getElementById('status-display').innerText = `SYNCED: Offset ${clockOffset}ms`;
-        });
+        // 1. Initial Load & Checklist Logic
+        function init() {
+            const params = new URLSearchParams(window.location.search);
+            mySeat.id = params.get('id') || "Guest";
+            mySeat.x = parseFloat(params.get('x')) || 0;
+            mySeat.y = parseFloat(params.get('y')) || 0;
+            document.getElementById('seat-label').innerText = `Seat ${mySeat.id}`;
 
-        // 2. Seat Activation Logic (Using Seat-Bag QR)
-        // In a real scenario, this would trigger upon scanning the bag QR code.
-        function activateSeat(seatId, x, y) {
-            mySeat = { id: seatId, x: parseFloat(x), y: parseFloat(y) };
-            db.ref(`devices/${seatId}`).set({
-                status: 'ACTIVE',
-                lastSeen: Date.now()
+            const checks = document.querySelectorAll('.usher-check');
+            const btn = document.getElementById('ready-btn');
+
+            checks.forEach(c => c.onclick = () => {
+                const allChecked = Array.from(checks).every(i => i.checked);
+                btn.disabled = !allChecked;
             });
-            document.getElementById('calibration-zone').style.display = 'none';
         }
 
-        // 3. The Cue Listener
-        db.ref('show/currentCue').on('value', (snap) => {
-            const cue = snap.val();
-            if (!cue || cue.id === currentCueId) return;
-            currentCueId = cue.id;
+        // 2. The "Tuning" Phase (Asset Preloading)
+        async function preloadAssets() {
+            const msg = document.getElementById('loading-msg');
+            msg.innerText = "Reviewing the score...";
 
-            handleCue(cue);
-        });
+            const snap = await db.ref('show/script').once('value');
+            const script = snap.val();
+            if (!script) return;
 
+            const audioCues = script.filter(c => c.type === 'AUDIO' && c.url);
+            msg.innerText = "Tuning instruments...";
+
+            let loaded = 0;
+            for (const cue of audioCues) {
+                try {
+                    const response = await fetch(cue.url);
+                    const arrayBuf = await response.arrayBuffer();
+                    audioBuffers[cue.url] = await audioCtx.decodeAudioData(arrayBuf);
+                    loaded++;
+                    msg.innerText = `Preparing section ${loaded} of ${audioCues.length}...`;
+                } catch (e) { console.error("Asset fail:", cue.url); }
+            }
+            msg.innerText = "Instruments tuned.";
+        }
+
+        // 3. Trajectory & Spatial Audio Logic
         function handleCue(cue) {
-            if (cue.type === 'SYSTEM' && cue.action === 'KILL') {
-                stopAllEffects();
+            const now = Date.now();
+            const startTime = (cue.triggerTime + clockOffset);
+            const startDelay = (startTime - now) / 1000;
+
+            // GLOBAL CUES
+            if (cue.originX === undefined || cue.originX === null) {
+                if (cue.type === 'AUDIO') playGlobalAudio(cue, startDelay);
+                if (cue.type === 'LIGHT') setGlobalLight(cue, startDelay);
                 return;
             }
 
-            // Execute based on JSON cue script logic
-            if (cue.type === 'SPATIAL_SOUND') {
-                playSpatialAudio(cue);
-            } else if (cue.type === 'LIGHT_VECTOR') {
-                triggerLightEffect(cue);
+            // SPATIAL CUES (Moving sounds/lights)
+            const buffer = audioBuffers[cue.url];
+            const activeDuration = (cue.type === 'AUDIO' && buffer) ? Math.min(buffer.duration, cue.elapsedT) : cue.elapsedT;
+
+            const steps = 60; // Sample rate for the trajectory curve
+            const intensities = new Float32Array(steps + 1);
+            const rSq = Math.pow(cue.radius, 2);
+
+            for (let i = 0; i <= steps; i++) {
+                const t = i / steps;
+                const curX = cue.originX + (cue.destX - cue.originX) * t;
+                const curY = cue.originY + (cue.destY - cue.originY) * t;
+                const distSq = Math.pow(mySeat.x - curX, 2) + Math.pow(mySeat.y - curY, 2);
+
+                // Inverse Square: 1/(1+d^2) with Hard Cutoff at Radius
+                intensities[i] = (Math.sqrt(distSq) <= cue.radius) ? (1 / (1 + distSq)) : 0;
             }
-            
-            document.getElementById('instruction').innerText = cue.label;
+
+            if (cue.type === 'AUDIO' && buffer) {
+                const source = audioCtx.createBufferSource();
+                const gain = audioCtx.createGain();
+                source.buffer = buffer;
+                gain.gain.setValueCurveAtTime(intensities, audioCtx.currentTime + Math.max(0, startDelay), cue.elapsedT);
+                source.connect(gain).connect(audioCtx.destination);
+                source.start(audioCtx.currentTime + Math.max(0, startDelay));
+                source.stop(audioCtx.currentTime + Math.max(0, startDelay) + activeDuration);
+            }
+
+            if (cue.type === 'LIGHT') {
+                renderSpatialLight(cue, intensities, startDelay);
+            }
         }
 
-        // 4. Spatial Audio Engine
-        function playSpatialAudio(cue) {
-            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            
-            // Logic: Calculate distance from 'event origin' provided in cue
-            // Example: A storm that starts at the back of the house and moves forward
-            const eventX = cue.originX || 0;
-            const eventY = cue.originY || 0;
-            const distance = Math.sqrt(Math.pow(mySeat.x - eventX, 2) + Math.pow(mySeat.y - eventY, 2));
-
-            // Determine volume or delay based on distance
-            const volume = Math.max(0, 1 - (distance / 50)); 
-            
-            // Trigger playback synced to Master Clock
-            const playbackStartTime = (cue.triggerTime - clockOffset) / 1000;
-            
-            // (Standard WebAudio Buffer Logic would follow here to play the asset)
-            console.log(`Playing ${cue.asset} at Volume ${volume.toFixed(2)}`);
+        function playGlobalAudio(cue, delay) {
+            const buffer = audioBuffers[cue.url];
+            if (!buffer) return;
+            const source = audioCtx.createBufferSource();
+            source.buffer = buffer;
+            source.connect(audioCtx.destination);
+            source.start(audioCtx.currentTime + Math.max(0, delay));
         }
 
-        function triggerLightEffect(cue) {
-            // Visual sweeps based on X/Y coordinates
-            // Example: Color phones red if their X is within a certain range
-            document.body.style.backgroundColor = cue.color || '#000';
-            setTimeout(() => { document.body.style.backgroundColor = '#000'; }, 1000);
+        function setGlobalLight(cue, delay) {
+            setTimeout(() => {
+                document.body.style.filter = "brightness(100%)";
+                document.body.style.backgroundColor = cue.color || "#fff";
+            }, Math.max(0, delay * 1000));
         }
 
-        function stopAllEffects() {
-            document.body.style.backgroundColor = '#000';
-            document.getElementById('instruction').innerText = "SYSTEM IDLE";
-            // Stop audio nodes...
+        function renderSpatialLight(cue, curve, delay) {
+            const startMs = Date.now() + (delay * 1000);
+            function frame() {
+                const elapsed = (Date.now() - startMs) / 1000;
+                if (elapsed < 0) { requestAnimationFrame(frame); return; }
+                if (elapsed > cue.elapsedT) { document.body.style.filter = "brightness(0%)"; return; }
+                const idx = Math.floor((elapsed / cue.elapsedT) * (curve.length - 1));
+                document.body.style.backgroundColor = cue.color || "#fff";
+                document.body.style.filter = `brightness(${curve[idx] * 100}%)`;
+                requestAnimationFrame(frame);
+            }
+            requestAnimationFrame(frame);
         }
 
-        document.getElementById('ready-btn').onclick = () => {
-            // Placeholder: In production, the QR scan provides these coordinates
-            activateSeat("Seat_A12", 5.5, 12.2);
-            if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+        // --- BUTTON TRIGGER ---
+        document.getElementById('ready-btn').onclick = async () => {
+            document.getElementById('ready-btn').disabled = true;
+
+            // 1. Audio Initialization
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            if (audioCtx.state === 'suspended') await audioCtx.resume();
+
+            // 2. Request Wake Lock (Keep screen on)
+            if ('wakeLock' in navigator) {
+                try { wakeLock = await navigator.wakeLock.request('screen'); } catch (err) {}
+            }
+
+            // 3. Tuning
+            await preloadAssets();
+
+            // 4. Enter the Hall
+            document.getElementById('setup-screen').style.display = 'none';
+            document.getElementById('show-screen').style.display = 'block';
+
+            // 5. Connect to Conductor
+            db.ref(`devices/${mySeat.id}`).set({ ...mySeat, online: true, ts: Date.now() });
+            document.getElementById('status').innerText = "CONNECTED";
+
+            db.ref('show/currentCue').on('value', snap => {
+                const cue = snap.val();
+                if (!cue) return;
+                if (cue.action === 'KILL') location.reload();
+                else handleCue(cue);
+            });
         };
+
+        // Sync clock with laptop
+        db.ref('laptop/clock').on('value', snap => {
+            if (snap.exists()) clockOffset = Date.now() - snap.val();
+        });
+
+        init();
     </script>
 </body>
 </html>

@@ -5,7 +5,8 @@ laptopdist.html
 Webapp for leading the Smarphone Orchestra, sending cues to patro devices over Firebase.
 
 This is run from the Stage Manager or Sound Tech laptop. The clock of the laptop provides teh timebase for all devices.
---><html lang="en">
+-->
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <title>Lighthouse Conductor</title>
@@ -16,54 +17,48 @@ This is run from the Stage Manager or Sound Tech laptop. The clock of the laptop
         .dashboard { display: grid; grid-template-columns: 350px 1fr; gap: 20px; }
         .panel { background: #1a1a1a; padding: 25px; border-radius: 12px; border: 1px solid #333; }
         .cue-list { height: 500px; overflow-y: auto; background: #111; padding: 10px; border-radius: 8px; }
-        .cue-item { 
-            padding: 15px; margin-bottom: 8px; background: #222; border-radius: 6px; 
-            cursor: pointer; border-left: 4px solid transparent; transition: 0.2s;
+        .cue-item {
+            padding: 15px; margin-bottom: 8px; background: #222; border-radius: 6px;
+            cursor: pointer; border: 2px solid transparent; transition: 0.2s;
         }
         .cue-item:hover { background: #2a2a2a; }
-        .cue-item.selected { border-left-color: #ffd700; background: #2d2d2d; }
-        .cue-item.active { border-left-color: #00ff00; background: #1a2a1a; }
-        .stats { display: flex; gap: 20px; margin-bottom: 20px; }
-        .stat-card { background: #222; padding: 15px; border-radius: 8px; flex: 1; text-align: center; }
-        button { 
-            width: 100%; padding: 20px; font-size: 1.2rem; font-weight: bold; 
-            border-radius: 8px; border: none; cursor: pointer; margin-top: 10px;
-        }
-        #go-btn { background: #28a745; color: white; }
-        #go-btn:disabled { background: #333; color: #666; cursor: not-allowed; }
-        #kill-btn { background: #dc3545; color: white; margin-top: 20px; }
+        .cue-item.selected { border-color: #007bff; background: #1e2a3a; }
+        .cue-item.active { border-color: #28a745; background: #1a3a24; }
+        .controls { display: flex; flex-direction: column; gap: 20px; }
+        .btn { padding: 20px; font-size: 1.5rem; font-weight: bold; border: none; border-radius: 8px; cursor: pointer; text-transform: uppercase; }
+        .btn-trigger { background: #28a745; color: #fff; }
+        .btn-trigger:hover { background: #218838; }
+        .btn-stop { background: #dc3545; color: #fff; }
+        .current-status { font-size: 2rem; margin-bottom: 10px; color: #aaa; }
+        #current-cue-name { color: #fff; font-weight: bold; }
     </style>
 </head>
 <body>
 
-    <h1>Lighthouse Conductor</h1>
-
-    <div class="stats">
-        <div class="stat-card">Active Nodes: <span id="node-count" style="color:#0f0">0</span></div>
-        <div class="stat-card">Master Time: <span id="clock-display">00:00:00</span></div>
-        <div class="stat-card">Current Cue: <span id="current-cue-name">NONE</span></div>
-    </div>
-
     <div class="dashboard">
         <div class="panel">
-            <h3>Show Control</h3>
-            <input type="file" id="cue-upload" accept=".json" style="display:none">
-            <button onclick="document.getElementById('cue-upload').click()" style="background:#444; color:white;">LOAD SCRIPT (.JSON)</button>
-            
-            <button id="go-btn" disabled onclick="triggerNext()">GO / NEXT CUE</button>
-            <button id="kill-btn" onclick="emergencyStop()">BLACKOUT / KILL ALL</button>
+            <h2>Cue Script (from cue.json)</h2>
+            <div id="cue-list" class="cue-list">
+                <div class="cue-item">Loading cues...</div>
+            </div>
         </div>
 
-        <div class="panel">
-            <h3>Cue Sequence</h3>
-            <div id="cue-list" class="cue-list">
-                <p style="color:#666; text-align:center; margin-top:100px;">Load a script to see cues...</p>
+        <div class="panel controls">
+            <div class="current-status">
+                Next: <span id="current-cue-name">READY</span>
+            </div>
+            <button class="btn btn-trigger" onclick="triggerNext()">Trigger Next [Space]</button>
+            <button class="btn btn-stop" onclick="emergencyStop()">Emergency Kill [K]</button>
+            <hr style="width:100%; border:0; border-top:1px solid #333;">
+            <div id="stats">
+                <p>Connected Patrons: <span id="patron-count">0</span></p>
+                <p>Master Clock: <span id="clock-display">00:00:00</span></p>
             </div>
         </div>
     </div>
 
     <script>
-        // --- FIREBASE INITIALIZATION ---
+        // --- FIREBASE CONFIGURATION ---
         const firebaseConfig = {
             apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
             authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
@@ -76,48 +71,35 @@ This is run from the Stage Manager or Sound Tech laptop. The clock of the laptop
         firebase.initializeApp(firebaseConfig);
         const db = firebase.database();
 
+        // --- CUE SYSTEM ---
         let cueScript = [];
         let nextIndex = 0;
         let activeCueId = null;
 
-        // 1. Unified Master Clock
-        // All devices calculate their drift based on this laptop timestamp.
-        setInterval(() => {
-            const now = Date.now();
-            db.ref('laptop/clock').set(now);
-            document.getElementById('clock-display').innerText = new Date(now).toLocaleTimeString();
-        }, 1000);
+        // 1. Fetch data from the external JSON file
+        async function loadCues() {
+            try {
+                const response = await fetch('cue.json');
+                if (!response.ok) throw new Error("Could not find cue.json");
+                cueScript = await response.json();
+                renderCueList();
+            } catch (err) {
+                console.error(err);
+                document.getElementById('cue-list').innerHTML = `<div class='cue-item' style='color:red'>Error: ${err.message}</div>`;
+            }
+        }
 
-        // 2. Monitor Device Population
-        db.ref('devices').on('value', (snap) => {
-            const devices = snap.val() || {};
-            document.getElementById('node-count').innerText = Object.keys(devices).length;
-        });
-
-        // 3. Load Cue Script
-        document.getElementById('cue-upload').onchange = (e) => {
-            const reader = new FileReader();
-            reader.onload = (event) => {
-                cueScript = JSON.parse(event.target.result);
-                renderCues();
-                document.getElementById('go-btn').disabled = false;
-            };
-            reader.readAsText(e.target.files[0]);
-        };
-
-        function renderCues() {
-            const list = document.getElementById('cue-list');
-            list.innerHTML = cueScript.map((cue, i) => {
-                // This line checks for 'action', then 'asset', then 'movement'
-                const detail = cue.action || cue.asset || cue.movement || "No details";
-
-                return `
-                    <div class="cue-item" id="cue-${i}" onclick="jumpToCue(${i})">
-                        <div style="font-weight:bold">${cue.label}</div>
-                        <div style="font-size:0.8rem; color:#aaa">${cue.type} | ${detail}</div>
-                    </div>
-                `;
-            }).join('');
+        // 2. Build the UI list from the JSON data
+        function renderCueList() {
+            const cueListEl = document.getElementById('cue-list');
+            cueListEl.innerHTML = '';
+            cueScript.forEach((cue, i) => {
+                const div = document.createElement('div');
+                div.className = 'cue-item';
+                div.innerHTML = `<strong>${cue.label}</strong><br><small>${cue.type}</small>`;
+                div.onclick = () => jumpToCue(i);
+                cueListEl.appendChild(div);
+            });
             updateSelection();
         }
 
@@ -134,13 +116,12 @@ This is run from the Stage Manager or Sound Tech laptop. The clock of the laptop
         }
 
         function triggerNext() {
-            if (nextIndex >= cueScript.length) return;
+            if (cueScript.length === 0 || nextIndex >= cueScript.length) return;
 
             const cue = cueScript[nextIndex];
             const triggerTime = Date.now();
 
-            // Broadcast the cue command
-            // Patron devices "listen" to 'show/currentCue' and execute immediately
+            // Broadcast to the cloud
             db.ref('show/currentCue').set({
                 ...cue,
                 triggerTime: triggerTime,
@@ -154,11 +135,34 @@ This is run from the Stage Manager or Sound Tech laptop. The clock of the laptop
         }
 
         function emergencyStop() {
-            db.ref('show/currentCue').set({ type: 'SYSTEM', action: 'KILL', triggerTime: Date.now() });
+            db.ref('show/currentCue').set({
+                type: 'SYSTEM',
+                action: 'KILL',
+                triggerTime: Date.now()
+            });
             document.getElementById('current-cue-name').innerText = "KILLED";
             activeCueId = null;
             updateSelection();
         }
+
+        // --- MONITORING & CLOCK ---
+        db.ref('devices').on('value', snap => {
+            document.getElementById('patron-count').innerText = snap.numChildren();
+        });
+
+        window.onkeydown = (e) => {
+            if (e.code === "Space") { e.preventDefault(); triggerNext(); }
+            if (e.key === "k" || e.key === "K") { emergencyStop(); }
+        };
+
+        setInterval(() => {
+            const now = new Date();
+            document.getElementById('clock-display').innerText = now.toTimeString().split(' ')[0];
+            db.ref('laptop/clock').set(Date.now());
+        }, 1000);
+
+        // Start the load sequence
+        loadCues();
     </script>
 </body>
 </html>
