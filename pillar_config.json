@@ -1,33 +1,27 @@
 {
-  "pillars": [
-    {
-      "id": "PILLAR_FL",
-      "label": "Front Left",
-      "x": 0.0,
-      "y": 0.0,
-      "preferred_freq": 1000
-    },
-    {
-      "id": "PILLAR_FR",
-      "label": "Front Right",
-      "x": 15.5,
-      "y": 0.0,
-      "preferred_freq": 2000
-    },
-    {
-      "id": "PILLAR_BL",
-      "label": "Back Left",
-      "x": 0.0,
-      "y": 25.0,
-      "preferred_freq": 3000
-    },
-    {
-      "id": "PILLAR_BR",
-      "label": "Back Right",
-      "x": 15.5,
-      "y": 25.0,
-      "preferred_freq": 4000
-    }
-  ],
+  "PILLAR_FL": {
+    "label": "Front Left",
+    "x": 0.0,
+    "y": 0.0,
+    "freq": 1000
+  },
+  "PILLAR_FR": {
+    "label": "Front Right",
+    "x": 15.5,
+    "y": 0.0,
+    "freq": 2000
+  },
+  "PILLAR_BL": {
+    "label": "Back Left",
+    "x": 0.0,
+    "y": 25.0,
+    "freq": 3000
+  },
+  "PILLAR_BR": {
+    "label": "Back Right",
+    "x": 15.5,
+    "y": 25.0,
+    "freq": 4000
+  },
   "speed_of_sound": 344.0
 }
