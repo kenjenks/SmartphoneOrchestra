@@ -13,7 +13,7 @@ Instead of traditional surround sound coming *at* an audience, this system allow
 ## 🛠 Hardware & Software Stack
 * **Frontend:** HTML5, CSS3, JavaScript (ES6+)
 * **Audio:** Web Audio API (Spatial Panning, Oscillators, AnalyserNode)
-* **Backend:** Firebase Realtime Database & Hosting
+* **Backend:** Firebase Realtime Database & Hosting, console: https://console.firebase.google.com/project/smartphoneorchestra-dwt/overview
 * **Tools:** PyCharm, Git, GitHub Actions (CI/CD)
 
 ## 📂 Project Structure

@@ -6,15 +6,8 @@
   <component name="ChangeListManager">
     <list default="true" id="2a49255b-03b5-4ec9-ac94-23daadf8b64a" name="Changes" comment="Initial Commit of distributed Smartphone Orchestra, an ad-hoc supercomputer for theatrical sound and light shows.">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/cues.json" beforeDir="false" afterPath="$PROJECT_DIR$/cues.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/devicedist.html" beforeDir="false" afterPath="$PROJECT_DIR$/devicedist.html" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/generate_stickers.py" beforeDir="false" afterPath="$PROJECT_DIR$/generate_stickers.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/laptopdist.html" beforeDir="false" afterPath="$PROJECT_DIR$/laptopdist.html" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/pillar_config.json" beforeDir="false" afterPath="$PROJECT_DIR$/pillar_config.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/seat_config.tsv" beforeDir="false" afterPath="$PROJECT_DIR$/seat_config.tsv" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/seat_survey.html" beforeDir="false" afterPath="$PROJECT_DIR$/seat_survey.html" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/seat_survey_beacon.html" beforeDir="false" afterPath="$PROJECT_DIR$/seat_survey_beacon.html" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/smartphonedist.html" beforeDir="false" afterPath="$PROJECT_DIR$/smartphonedist.html" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -92,7 +85,15 @@
       <option name="project" value="LOCAL" />
       <updated>1772257500446</updated>
     </task>
-    <option name="localTasksCounter" value="4" />
+    <task id="LOCAL-00004" summary="Initial Commit of distributed Smartphone Orchestra, an ad-hoc supercomputer for theatrical sound and light shows.">
+      <option name="closed" value="true" />
+      <created>1772258151808</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1772258151808</updated>
+    </task>
+    <option name="localTasksCounter" value="5" />
     <servers />
   </component>
   <component name="VcsManagerConfiguration">
