@@ -3,8 +3,8 @@
     {
       "id": "PILLAR_FL",
       "label": "Front Left",
-      "x": 0.5,
-      "y": 0.5,
+      "x": 0,
+      "y": 0,
       "preferred_freq": 1000
     },
     {
