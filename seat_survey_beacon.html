@@ -51,17 +51,22 @@ Webapp for "beacons" at the four corners of the theater. Allows crew to scan the
         if (pillarId) {
             document.getElementById('pillar-id').innerText = pillarId;
 
-            // Listen for this specific pillar's data
+            // UPDATED: Added 'active_pillars/' to the reference path
             db.ref('active_pillars/' + pillarId).on('value', (snapshot) => {
                 const pillarData = snapshot.val();
                 if (pillarData) {
-                    // Check for preferred_freq first, then freq
+                    // Read the values
                     beaconFreq = pillarData.preferred_freq || pillarData.freq || 1000;
 
+                    // Update the UI
                     document.getElementById('status').innerText = beaconFreq + " Hz";
+                    document.getElementById('coords').innerText = `X: ${pillarData.x}, Y: ${pillarData.y}`;
+                    document.getElementById('log').innerText = "Config loaded.";
+
                     console.log(`Pillar ${pillarId} synced: ${beaconFreq}Hz`);
                 } else {
                     document.getElementById('status').innerText = "Not Configured";
+                    document.getElementById('log').innerText = "Waiting for Admin to upload pillar_config.json...";
                 }
             });
         }
