@@ -41,6 +41,16 @@ leaves to reset for the next performance.
         .danger { border: 2px solid #ff4444; }
         .setup { border: 2px solid #007bff; }
         .status-val { font-size: 2rem; font-weight: bold; color: #00ff00; }
+
+        /* New Pillar Registry Styling */
+        .pillar-registry {
+            background: #000; padding: 15px; border-radius: 8px; margin-bottom: 20px;
+            font-family: monospace; font-size: 0.9rem; line-height: 1.6; border: 1px dashed #444;
+        }
+        .reg-line { display: flex; justify-content: space-around; }
+        .pillar-item { color: #00d4ff; }
+        .pillar-val { color: #fff; }
+
         button {
             width: 100%; padding: 15px; margin: 10px 0; border-radius: 8px; border: none;
             font-weight: bold; cursor: pointer; transition: 0.2s; font-size: 1rem;
@@ -54,10 +64,8 @@ leaves to reset for the next performance.
         .btn-warning { background: #ffc107; color: #000; }
         #log { text-align: left; background: #000; padding: 10px; height: 150px; overflow-y: auto; font-family: monospace; font-size: 0.8rem; margin-top: 20px; border-radius: 5px; }
 
-        /* Success Message Styling */
-        #setup-status { margin-top: 10px; font-size: 0.9rem; min-height: 1.2rem; transition: color 0.3s; }
+        #setup-status { margin-top: 10px; font-size: 0.8rem; min-height: 1.2rem; }
         .success-text { color: #00ff00; font-weight: bold; }
-        .default-text { color: #888; }
     </style>
 </head>
 <body>
@@ -79,37 +87,44 @@ leaves to reset for the next performance.
         </div>
     </div>
 
-    <div class="dashboard-grid">
+    <div class="dashboard-grid" style="grid-template-columns: 1fr;">
         <div class="panel setup">
-            <h3>Production Setup</h3>
-            <input type="file" id="configPicker" accept=".json" style="display:none" onchange="handleFileSelect(event)">
+            <h3>Theater Configuration</h3>
 
+            <div class="pillar-registry" id="pillar-registry">
+                <div class="reg-line">
+                    <span>FL <span class="pillar-val" id="val-FL">(--,--) -- Hz</span></span>
+                    <span>FR <span class="pillar-val" id="val-FR">(--,--) -- Hz</span></span>
+                </div>
+                <div class="reg-line">
+                    <span>BL <span class="pillar-val" id="val-BL">(--,--) -- Hz</span></span>
+                    <span>BR <span class="pillar-val" id="val-BR">(--,--) -- Hz</span></span>
+                </div>
+            </div>
+
+            <input type="file" id="configPicker" accept=".json" style="display:none" onchange="handleFileSelect(event)">
             <button class="btn-primary" onclick="document.getElementById('configPicker').click()">
                 LOAD PILLAR_CONFIG.JSON
             </button>
-
-            <div id="setup-status" class="default-text">Select local JSON to initialize theater coordinates.</div>
+            <div id="setup-status" style="color: #888;">Select local JSON to update theater coordinates.</div>
         </div>
+    </div>
 
+    <div class="dashboard-grid">
         <div class="panel">
             <h3>Show Management</h3>
             <button class="btn-soft" onclick="sendKillSignal()">GLOBAL BLACKOUT (SILENCE)</button>
             <button class="btn-soft" onclick="resetClock()">RESYNC MASTER CLOCK</button>
         </div>
-    </div>
 
-    <div class="dashboard-grid">
         <div class="panel danger">
-            <h3>System Reset (Danger)</h3>
-            <button class="btn-danger" onclick="purgeDevices()">PURGE DEVICE REGISTRY</button>
-            <p><small>Removes all patron phones from the database.</small></p>
-
-            <button class="btn-warning" onclick="purgeSurveyData()">CLEAR SURVEY RESULTS</button>
-            <p><small>Wipes pillar heartbeats and calculated coordinates.</small></p>
+            <h3>System Reset</h3>
+            <button class="btn-danger" onclick="purgeDevices()">PURGE DEVICES</button>
+            <button class="btn-warning" onclick="purgeSurveyData()">CLEAR PILLARS</button>
         </div>
     </div>
 
-    <div id="log">System initialized. Waiting for commands...</div>
+    <div id="log">System initialized.</div>
 </div>
 
 <script>
@@ -125,11 +140,29 @@ leaves to reset for the next performance.
     firebase.initializeApp(firebaseConfig);
     const db = firebase.database();
 
-    // Monitoring
+    // 1. Live Monitoring & UI Refresh
     db.ref('devices').on('value', (snap) => document.getElementById('node-count').innerText = snap.numChildren());
-    db.ref('active_pillars').on('value', (snap) => document.getElementById('pillar-count').innerText = snap.numChildren());
 
-    // File Handling
+    // Listen to pillar data and update the registry display
+    db.ref('active_pillars').on('value', (snap) => {
+        const data = snap.val() || {};
+        document.getElementById('pillar-count').innerText = Object.keys(data).filter(k => k.startsWith('PILLAR')).length;
+
+        const ids = ['FL', 'FR', 'BL', 'BR'];
+        ids.forEach(suffix => {
+            const p = data['PILLAR_' + suffix];
+            const el = document.getElementById('val-' + suffix);
+            if (p) {
+                el.innerText = `(${p.x}, ${p.y}) ${p.freq} Hz`;
+                el.style.color = "#00ff00";
+            } else {
+                el.innerText = "(--,--) -- Hz";
+                el.style.color = "#444";
+            }
+        });
+    });
+
+    // 2. File Handling
     function handleFileSelect(event) {
         const file = event.target.files[0];
         if (!file) return;
@@ -138,8 +171,6 @@ leaves to reset for the next performance.
         reader.onload = function(e) {
             try {
                 const rawData = JSON.parse(e.target.result);
-
-                // Reformat Array to Map and preferred_freq to freq
                 const formattedConfig = {};
                 if (rawData.pillars && Array.isArray(rawData.pillars)) {
                     rawData.pillars.forEach(p => {
@@ -148,6 +179,7 @@ leaves to reset for the next performance.
                             freq: p.preferred_freq
                         };
                     });
+                    if (rawData.speed_of_sound) formattedConfig.speed_of_sound = rawData.speed_of_sound;
                 }
                 uploadPillarConfig(formattedConfig, file.name);
             } catch (err) {
@@ -159,31 +191,24 @@ leaves to reset for the next performance.
 
     function uploadPillarConfig(config, fileName) {
         db.ref('active_pillars').set(config).then(() => {
-            // UI SUCCESS CONFIRMATION
             const statusDisplay = document.getElementById('setup-status');
             statusDisplay.className = "success-text";
-            statusDisplay.innerText = `✓ ${fileName} Loaded Successfully!`;
+            statusDisplay.innerText = `✓ ${fileName} Synced to Cloud!`;
 
-            log(`Database updated with ${Object.keys(config).length} pillars from ${fileName}.`);
-
-            // Revert UI after 5 seconds
+            log(`Theater layout updated from ${fileName}.`);
             setTimeout(() => {
-                statusDisplay.className = "default-text";
-                statusDisplay.innerText = "Select local JSON to initialize theater coordinates.";
+                statusDisplay.className = "";
+                statusDisplay.innerText = "Select local JSON to update theater coordinates.";
             }, 5000);
-
             document.getElementById('configPicker').value = "";
-        }).catch(err => {
-            alert("Upload failed. Check console.");
         });
     }
 
-    // Management Functions
+    // 3. Management Functions
     function sendKillSignal() {
         const now = Date.now();
-        db.ref('show/currentCue').set({
-            type: 'SYSTEM', action: 'KILL', triggerTime: now, id: 'STOP_' + now
-        }).then(() => log("Sent Global Kill Signal."));
+        db.ref('show/currentCue').set({ type: 'SYSTEM', action: 'KILL', triggerTime: now, id: 'STOP_' + now })
+            .then(() => log("Sent Global Kill Signal."));
     }
 
     function resetClock() {
@@ -192,17 +217,13 @@ leaves to reset for the next performance.
     }
 
     async function purgeDevices() {
-        if (confirm("Purge all patron devices?")) {
-            await db.ref('devices').remove();
-            log("Device registry purged.");
-        }
+        if (confirm("Purge all devices?")) { await db.ref('devices').remove(); log("Registry purged."); }
     }
 
     async function purgeSurveyData() {
-        if (confirm("Clear all pillar data?")) {
+        if (confirm("Clear all pillars?")) {
             await db.ref('active_pillars').remove();
-            await db.ref('survey_results').remove();
-            log("Survey data purged.");
+            log("Pillars wiped from database.");
         }
     }
 
