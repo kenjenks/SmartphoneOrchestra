@@ -1,9 +1,9 @@
 [
     { "label": "0.0 SILENCE", "type": "SYSTEM", "action": "KILL" },
-    { "label": "1.0 Ambient Wash", "type": "AUDIO", "url": "https://your-wix-site.com/audio/wash.mp3"},
+    { "label": "1.0 Ambient Wash", "type": "AUDIO", "url": "https://static.wixstatic.com/mp3/9178d1_c64e342ad14242659d886799c6ed7b4c.mp3"},
     { "label": "2.0 Front Pulse",
         "type": "AUDIO",
-        "url": "https://your-wix-site.com/audio/pulse.mp3",
+        "url": "https://static.wixstatic.com/mp3/9178d1_a5cb96dce682491ea42e418161799bbf.mp3",
         "originX": 7.5,
         "originY": 0,
         "destX": 15,
@@ -19,5 +19,5 @@
         "radius": 5,
         "elapsedT": 10
     },
-    { "label": "4.0 Final Build", "type": "AUDIO", "url": "https://your-wix-site.com/audio/build.mp3"}
+    { "label": "4.0 Final Build", "type": "AUDIO", "url": "https://static.wixstatic.com/mp3/9178d1_94e834e9df8040959ba9c0cc1644eebc.mp3"}
 ]
