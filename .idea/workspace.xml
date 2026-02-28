@@ -4,13 +4,9 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="2a49255b-03b5-4ec9-ac94-23daadf8b64a" name="Changes" comment="Add a better topline comment for laptopdist.html">
+    <list default="true" id="2a49255b-03b5-4ec9-ac94-23daadf8b64a" name="Changes" comment="Added Firebase config. Deleted prototype relic smartphonedist.html.">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/admin.html" beforeDir="false" afterPath="$PROJECT_DIR$/admin.html" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/laptopdist.html" beforeDir="false" afterPath="$PROJECT_DIR$/laptopdist.html" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/seat_survey.html" beforeDir="false" afterPath="$PROJECT_DIR$/seat_survey.html" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/seat_survey_beacon.html" beforeDir="false" afterPath="$PROJECT_DIR$/seat_survey_beacon.html" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/smartphonedist.html" beforeDir="false" afterPath="$PROJECT_DIR$/smartphonedist.html" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -104,12 +100,21 @@
       <option name="project" value="LOCAL" />
       <updated>1772260910133</updated>
     </task>
-    <option name="localTasksCounter" value="6" />
+    <task id="LOCAL-00006" summary="Added Firebase config. Deleted prototype relic smartphonedist.html.">
+      <option name="closed" value="true" />
+      <created>1772262513574</created>
+      <option name="number" value="00006" />
+      <option name="presentableId" value="LOCAL-00006" />
+      <option name="project" value="LOCAL" />
+      <updated>1772262513574</updated>
+    </task>
+    <option name="localTasksCounter" value="7" />
     <servers />
   </component>
   <component name="VcsManagerConfiguration">
     <MESSAGE value="Initial Commit of distributed Smartphone Orchestra, an ad-hoc supercomputer for theatrical sound and light shows." />
     <MESSAGE value="Add a better topline comment for laptopdist.html" />
-    <option name="LAST_COMMIT_MESSAGE" value="Add a better topline comment for laptopdist.html" />
+    <MESSAGE value="Added Firebase config. Deleted prototype relic smartphonedist.html." />
+    <option name="LAST_COMMIT_MESSAGE" value="Added Firebase config. Deleted prototype relic smartphonedist.html." />
   </component>
 </project>
