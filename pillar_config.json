@@ -1,8 +1,8 @@
 {
   "PILLAR_FL": {
     "label": "Front Left",
-    "x": 0.0,
-    "y": 0.0,
+    "x": 0.5,
+    "y": 0.5,
     "freq": 1000
   },
   "PILLAR_FR": {

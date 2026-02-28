@@ -149,13 +149,14 @@ leaves to reset for the next performance.
     }
 
     function uploadPillarConfig(config) {
-        log("Uploading custom configuration...");
+        log("Uploading pillar configuration...");
 
+        // Since the JSON is now a Map, we can push it directly
         db.ref('active_pillars').set(config).then(() => {
-            alert("Theater Layout Initialized from File!");
-            log("Success: " + Object.keys(config).length + " pillars mapped to database.");
-
-            // Reset the picker so the same file can be re-uploaded if edited
+            alert("Theater Layout Initialized!");
+            // We count keys, excluding 'speed_of_sound'
+            const count = Object.keys(config).filter(k => k.startsWith('PILLAR')).length;
+            log("Success: " + count + " pillars mapped to database.");
             document.getElementById('configPicker').value = "";
         }).catch(err => {
             log("Upload Failed: " + err.message);
