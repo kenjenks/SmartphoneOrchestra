@@ -4,7 +4,7 @@
     "type": "SPATIAL_SOUND",
     "asset": "storm_layer_01",
     "pattern": "circle_expand",
-    "duration": 45
+    "duration": 46
   },
   {
     "label": "Ariel's Appearance",

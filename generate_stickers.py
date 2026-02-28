@@ -1,3 +1,5 @@
+# generate_stickers.py - Helps crew generate stickers containing QR codes for each seat in the orchestra section.
+
 import qrcode
 import csv
 import os
