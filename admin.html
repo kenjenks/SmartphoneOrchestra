@@ -34,58 +34,80 @@ leaves to reset for the next performance.
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <style>
-        body { font-family: sans-serif; background: #111; color: #eee; padding: 20px; line-height: 1.6; }
-        .container { max-width: 800px; margin: 0 auto; }
+        body { font-family: 'Segoe UI', sans-serif; background: #111; color: #eee; padding: 20px; margin: 0; }
+        .container { max-width: 1000px; margin: 0 auto; display: grid; grid-template-columns: 1fr 350px; gap: 20px; }
         .section { background: #222; padding: 20px; border-radius: 10px; margin-bottom: 20px; border: 1px solid #333; }
-        h2 { margin-top: 0; color: #00ff00; border-bottom: 1px solid #333; padding-bottom: 10px; }
-        .control-group { margin: 15px 0; }
-        button { padding: 10px 20px; cursor: pointer; background: #444; color: white; border: none; border-radius: 5px; font-weight: bold; }
-        button:hover { background: #555; }
+        h2 { margin-top: 0; color: #00ff00; font-size: 1.2rem; border-bottom: 1px solid #333; padding-bottom: 10px; }
+
+        /* Map & Table Styling */
+        #map-container { width: 100%; height: 300px; background: #000; position: relative; border: 1px solid #444; margin-top: 15px; overflow: hidden; }
+        .beacon-dot { position: absolute; width: 12px; height: 12px; background: #00ff00; border-radius: 50%; transform: translate(-50%, -50%); box-shadow: 0 0 10px #00ff00; }
+        .beacon-label { position: absolute; font-size: 10px; color: #fff; margin-top: 15px; transform: translateX(-50%); white-space: nowrap; }
+
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.85rem; }
+        th, td { padding: 8px; text-align: left; border-bottom: 1px solid #333; }
+        th { color: #888; }
+
+        /* Controls */
+        .status-box { margin-top: 10px; padding: 10px; border-radius: 5px; background: #1a1a1a; font-size: 0.9rem; border-left: 4px solid #444; }
+        .status-success { border-left-color: #00ff00; color: #00ff00; background: #1a2a1a; }
+
+        button { padding: 10px 15px; cursor: pointer; background: #444; color: white; border: none; border-radius: 5px; font-weight: bold; margin-right: 5px; }
         .btn-danger { background: #822; }
-        .btn-danger:hover { background: #a33; }
-        .success-text { color: #00ff00; font-weight: bold; }
-        #log { background: #000; color: #0f0; padding: 15px; height: 200px; overflow-y: scroll; font-family: monospace; font-size: 0.9rem; border-radius: 5px; border: 1px solid #333; }
-        input[type="file"] { background: #333; padding: 10px; border-radius: 5px; width: 100%; box-sizing: border-box; }
+        #log { background: #000; color: #0f0; padding: 10px; height: 150px; overflow-y: scroll; font-family: monospace; font-size: 0.8rem; border: 1px solid #333; }
+        input[type="file"] { margin-bottom: 10px; color: #ccc; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h1>Orchestra Control Center</h1>
+    <div class="main-controls">
+        <h1>Orchestra Control Center</h1>
 
-    <div class="section">
-        <h2>1. Theater Configuration</h2>
-        <p>Upload <strong>pillar_config.json</strong> to set beacon coordinates.</p>
-        <div class="control-group">
+        <div class="section">
+            <h2>1. Theater Configuration</h2>
             <input type="file" id="pillarPicker" accept=".json">
-        </div>
-        <div id="pillar-status">Select file to sync pillars.</div>
-    </div>
+            <div id="pillar-status" class="status-box">No pillar_config.json uploaded.</div>
 
-    <div class="section">
-        <h2>2. Show Script</h2>
-        <p>Upload <strong>cues.json</strong> to update the performance sequence.</p>
-        <div class="control-group">
+            <div id="map-container">
+                </div>
+        </div>
+
+        <div class="section">
+            <h2>2. Performance Script</h2>
             <input type="file" id="cuePicker" accept=".json">
+            <div id="cue-status" class="status-box">No cues.json uploaded.</div>
         </div>
-        <div id="cue-status">Select file to sync show cues.</div>
+
+        <div class="section">
+            <h2>3. System Commands</h2>
+            <button onclick="sendKillSignal()" class="btn-danger">EMERGENCY STOP</button>
+            <button onclick="purgeDevices()">Clear Patron Registry</button>
+            <button onclick="purgeCues()" class="btn-danger">Wipe Cloud Cues</button>
+        </div>
     </div>
 
-    <div class="section">
-        <h2>3. System Commands</h2>
-        <button onclick="sendKillSignal()" class="btn-danger">Global Emergency Stop</button>
-        <button onclick="purgeDevices()">Clear Patron Registry</button>
-        <button onclick="purgeCues()" class="btn-danger">Wipe Cloud Cues</button>
-    </div>
+    <div class="sidebar">
+        <div class="section">
+            <h2>Beacon Registry</h2>
+            <table id="pillar-table">
+                <thead>
+                    <tr><th>ID</th><th>X,Y (m)</th><th>Freq</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td colspan="3" style="text-align:center">Waiting for config...</td></tr>
+                </tbody>
+            </table>
+        </div>
 
-    <div class="section">
-        <h2>System Log</h2>
-        <div id="log"></div>
+        <div class="section">
+            <h2>Event Log</h2>
+            <div id="log"></div>
+        </div>
     </div>
 </div>
 
 <script>
-    // --- FIREBASE CONFIG ---
     const firebaseConfig = {
         apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
         authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
@@ -98,59 +120,76 @@ leaves to reset for the next performance.
     firebase.initializeApp(firebaseConfig);
     const db = firebase.database();
 
-    // Initialize Listeners
+    // Listen for Pillar updates to draw the map
+    db.ref('active_pillars').on('value', (snap) => {
+        const data = snap.val();
+        renderMapAndTable(data);
+    });
+
     document.getElementById('pillarPicker').addEventListener('change', (e) => handleFileUpload(e, 'pillars'));
     document.getElementById('cuePicker').addEventListener('change', (e) => handleFileUpload(e, 'cues'));
 
-    // Universal File Handler
     function handleFileUpload(event, type) {
         const file = event.target.files[0];
         if (!file) return;
 
-        log(`Reading ${file.name}...`);
         const reader = new FileReader();
-
         reader.onload = function(e) {
             try {
                 const data = JSON.parse(e.target.result);
+                const path = type === 'pillars' ? 'active_pillars' : 'show/script';
+                const statusId = type === 'pillars' ? 'pillar-status' : 'cue-status';
 
-                if (type === 'pillars') {
-                    // Handle the mapping of the pillar array/object
-                    const formatted = {};
-                    const items = Array.isArray(data.pillars) ? data.pillars : data;
-
-                    if (Array.isArray(items)) {
-                        items.forEach(p => { formatted[p.id] = { ...p, freq: p.preferred_freq || p.freq }; });
-                    } else {
-                        Object.assign(formatted, items);
-                    }
-                    syncToFirebase('active_pillars', formatted, 'pillar-status', file.name);
-                }
-                else if (type === 'cues') {
-                    // Cues are usually a simple array
-                    syncToFirebase('show/script', data, 'cue-status', file.name);
-                }
-
+                db.ref(path).set(data).then(() => {
+                    const el = document.getElementById(statusId);
+                    el.className = "status-box status-success";
+                    el.innerText = `✓ Successfully synced: ${file.name}`;
+                    log(`UPLOAD: ${file.name} sent to ${path}`);
+                });
             } catch (err) {
-                log(`ERROR: Invalid JSON format in ${file.name}`);
+                log(`ERROR: Invalid JSON in ${file.name}`);
                 alert("Invalid JSON file.");
             }
         };
         reader.readAsText(file);
     }
 
-    function syncToFirebase(path, data, statusId, fileName) {
-        db.ref(path).set(data).then(() => {
-            const el = document.getElementById(statusId);
-            el.className = "success-text";
-            el.innerText = `✓ ${fileName} successfully synced to ${path}`;
-            log(`SUCCESS: Cloud ${path} updated.`);
-        }).catch(err => {
-            log(`FIREBASE ERROR: ${err.message}`);
+    function renderMapAndTable(data) {
+        const map = document.getElementById('map-container');
+        const tableBody = document.querySelector('#pillar-table tbody');
+        map.innerHTML = '';
+        tableBody.innerHTML = '';
+
+        if (!data) {
+            tableBody.innerHTML = '<tr><td colspan="3" style="text-align:center">No data</td></tr>';
+            return;
+        }
+
+        // Handle both Array and Object formats
+        const pillars = Array.isArray(data) ? data : (data.pillars || Object.values(data));
+
+        pillars.forEach(p => {
+            // Update Table
+            const row = `<tr><td>${p.id}</td><td>${p.x}, ${p.y}</td><td>${p.freq || p.preferred_freq}Hz</td></tr>`;
+            tableBody.innerHTML += row;
+
+            // Update Map (Assume 20m x 20m house for scaling)
+            const dot = document.createElement('div');
+            dot.className = 'beacon-dot';
+            dot.style.left = `${(p.x / 20) * 100}%`;
+            dot.style.top = `${(p.y / 20) * 100}%`;
+
+            const label = document.createElement('div');
+            label.className = 'beacon-label';
+            label.style.left = dot.style.left;
+            label.style.top = dot.style.top;
+            label.innerText = `${p.id} (${p.freq || p.preferred_freq}Hz)`;
+
+            map.appendChild(dot);
+            map.appendChild(label);
         });
     }
 
-    // System Functions
     function sendKillSignal() {
         const now = Date.now();
         db.ref('show/currentCue').set({ type: 'SYSTEM', action: 'KILL', triggerTime: now, id: 'STOP_' + now })
@@ -158,27 +197,24 @@ leaves to reset for the next performance.
     }
 
     async function purgeDevices() {
-        if (confirm("Purge all connected devices?")) {
+        if (confirm("Clear all patron devices?")) {
             await db.ref('devices').remove();
-            log("ACTION: Device registry purged.");
+            log("ACTION: Device registry cleared.");
         }
     }
 
     async function purgeCues() {
-        if (confirm("Clear show script from cloud?")) {
+        if (confirm("Clear cloud script?")) {
             await db.ref('show/script').remove();
-            log("ACTION: Show cues wiped.");
+            log("ACTION: Script wiped.");
         }
     }
 
     function log(msg) {
         const logBox = document.getElementById('log');
-        const time = new Date().toLocaleTimeString();
-        logBox.innerHTML += `<div>[${time}] ${msg}</div>`;
+        logBox.innerHTML += `<div>[${new Date().toLocaleTimeString()}] ${msg}</div>`;
         logBox.scrollTop = logBox.scrollHeight;
     }
-
-    log("System initialized. Ready for sync.");
 </script>
 </body>
 </html>
