@@ -53,6 +53,11 @@ leaves to reset for the next performance.
         .btn-danger:hover { background: #bd2130; }
         .btn-warning { background: #ffc107; color: #000; }
         #log { text-align: left; background: #000; padding: 10px; height: 150px; overflow-y: auto; font-family: monospace; font-size: 0.8rem; margin-top: 20px; border-radius: 5px; }
+
+        /* Success Message Styling */
+        #setup-status { margin-top: 10px; font-size: 0.9rem; min-height: 1.2rem; transition: color 0.3s; }
+        .success-text { color: #00ff00; font-weight: bold; }
+        .default-text { color: #888; }
     </style>
 </head>
 <body>
@@ -82,7 +87,8 @@ leaves to reset for the next performance.
             <button class="btn-primary" onclick="document.getElementById('configPicker').click()">
                 LOAD PILLAR_CONFIG.JSON
             </button>
-            <p><small>Upload your local JSON to initialize the theater coordinates.</small></p>
+
+            <div id="setup-status" class="default-text">Select local JSON to initialize theater coordinates.</div>
         </div>
 
         <div class="panel">
@@ -96,10 +102,10 @@ leaves to reset for the next performance.
         <div class="panel danger">
             <h3>System Reset (Danger)</h3>
             <button class="btn-danger" onclick="purgeDevices()">PURGE DEVICE REGISTRY</button>
-            <p><small>Removes all patron phones from the database. Use after every show.</small></p>
+            <p><small>Removes all patron phones from the database.</small></p>
 
             <button class="btn-warning" onclick="purgeSurveyData()">CLEAR SURVEY RESULTS</button>
-            <p><small>Wipes pillar heartbeats and calculated seat coordinates.</small></p>
+            <p><small>Wipes pillar heartbeats and calculated coordinates.</small></p>
         </div>
     </div>
 
@@ -109,28 +115,21 @@ leaves to reset for the next performance.
 <script>
     // --- FIREBASE CONFIG ---
     const firebaseConfig = {
-            apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
-            authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
-            projectId: "smartphoneorchestra-dwt",
-            storageBucket: "smartphoneorchestra-dwt.firebasestorage.app",
-            messagingSenderId: "722537253165",
-            appId: "1:722537253165:web:8e8b6495bd508de35b2ba4"
-        };
+        apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
+        authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
+        projectId: "smartphoneorchestra-dwt",
+        storageBucket: "smartphoneorchestra-dwt.firebasestorage.app",
+        messagingSenderId: "722537253165",
+        appId: "1:722537253165:web:8e8b6495bd508de35b2ba4"
+    };
     firebase.initializeApp(firebaseConfig);
     const db = firebase.database();
 
-    // 1. Live Monitoring
-    db.ref('devices').on('value', (snap) => {
-        const count = snap.numChildren();
-        document.getElementById('node-count').innerText = count;
-    });
+    // Monitoring
+    db.ref('devices').on('value', (snap) => document.getElementById('node-count').innerText = snap.numChildren());
+    db.ref('active_pillars').on('value', (snap) => document.getElementById('pillar-count').innerText = snap.numChildren());
 
-    db.ref('active_pillars').on('value', (snap) => {
-        const count = snap.numChildren();
-        document.getElementById('pillar-count').innerText = count;
-    });
-
-    // 2. Initialize Theater Layout from Local File
+    // File Handling
     function handleFileSelect(event) {
         const file = event.target.files[0];
         if (!file) return;
@@ -138,59 +137,69 @@ leaves to reset for the next performance.
         const reader = new FileReader();
         reader.onload = function(e) {
             try {
-                const config = JSON.parse(e.target.result);
-                uploadPillarConfig(config);
+                const rawData = JSON.parse(e.target.result);
+
+                // Reformat Array to Map and preferred_freq to freq
+                const formattedConfig = {};
+                if (rawData.pillars && Array.isArray(rawData.pillars)) {
+                    rawData.pillars.forEach(p => {
+                        formattedConfig[p.id] = {
+                            x: p.x, y: p.y, label: p.label,
+                            freq: p.preferred_freq
+                        };
+                    });
+                }
+                uploadPillarConfig(formattedConfig, file.name);
             } catch (err) {
-                alert("Error parsing JSON: " + err.message);
-                log("JSON Error: " + err.message);
+                alert("Invalid JSON file.");
             }
         };
         reader.readAsText(file);
     }
 
-    function uploadPillarConfig(config) {
-        log("Uploading pillar configuration...");
-
-        // Since the JSON is now a Map, we can push it directly
+    function uploadPillarConfig(config, fileName) {
         db.ref('active_pillars').set(config).then(() => {
-            alert("Theater Layout Initialized!");
-            // We count keys, excluding 'speed_of_sound'
-            const count = Object.keys(config).filter(k => k.startsWith('PILLAR')).length;
-            log("Success: " + count + " pillars mapped to database.");
+            // UI SUCCESS CONFIRMATION
+            const statusDisplay = document.getElementById('setup-status');
+            statusDisplay.className = "success-text";
+            statusDisplay.innerText = `✓ ${fileName} Loaded Successfully!`;
+
+            log(`Database updated with ${Object.keys(config).length} pillars from ${fileName}.`);
+
+            // Revert UI after 5 seconds
+            setTimeout(() => {
+                statusDisplay.className = "default-text";
+                statusDisplay.innerText = "Select local JSON to initialize theater coordinates.";
+            }, 5000);
+
             document.getElementById('configPicker').value = "";
         }).catch(err => {
-            log("Upload Failed: " + err.message);
+            alert("Upload failed. Check console.");
         });
     }
 
-    // 3. Global Kill Signal
+    // Management Functions
     function sendKillSignal() {
         const now = Date.now();
         db.ref('show/currentCue').set({
-            type: 'SYSTEM',
-            action: 'KILL',
-            triggerTime: now,
-            id: 'STOP_' + now
+            type: 'SYSTEM', action: 'KILL', triggerTime: now, id: 'STOP_' + now
         }).then(() => log("Sent Global Kill Signal."));
     }
 
-    // 4. Reset Master Clock
     function resetClock() {
         db.ref('laptop/clock').set(Date.now());
         log("Master Clock Force-Updated.");
     }
 
-    // 5. Purge Devices (Post-Show Cleanup)
     async function purgeDevices() {
-        if (confirm("Are you sure? This will disconnect every patron device from the grid.")) {
+        if (confirm("Purge all patron devices?")) {
             await db.ref('devices').remove();
             log("Device registry purged.");
         }
     }
 
-    // 6. Purge Survey
     async function purgeSurveyData() {
-        if (confirm("This will clear all A9 pillar data and survey calculations. Proceed?")) {
+        if (confirm("Clear all pillar data?")) {
             await db.ref('active_pillars').remove();
             await db.ref('survey_results').remove();
             log("Survey data purged.");
@@ -199,8 +208,7 @@ leaves to reset for the next performance.
 
     function log(msg) {
         const logBox = document.getElementById('log');
-        const time = new Date().toLocaleTimeString();
-        logBox.innerHTML += `<div>[${time}] ${msg}</div>`;
+        logBox.innerHTML += `<div>[${new Date().toLocaleTimeString()}] ${msg}</div>`;
         logBox.scrollTop = logBox.scrollHeight;
     }
 </script>
