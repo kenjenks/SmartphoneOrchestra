@@ -4,13 +4,14 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="2a49255b-03b5-4ec9-ac94-23daadf8b64a" name="Changes" comment="seat_survey.html now checks the Firebase active_pillars/ path first before reading local copy of pillar_config.json">
+    <list default="true" id="2a49255b-03b5-4ec9-ac94-23daadf8b64a" name="Changes" comment="Updated db.ref in all scripts to use the correct prefix, and make sure cue.json is on the Firebase server. Updated devicedist.html to read x,y from QR code and animate light and sound cues along a path. Updated generate_stickers.py to print the new QR codes.">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/admin.html" beforeDir="false" afterPath="$PROJECT_DIR$/admin.html" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/cues.json" beforeDir="false" afterPath="$PROJECT_DIR$/cues.json" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/devicedist.html" beforeDir="false" afterPath="$PROJECT_DIR$/devicedist.html" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/generate_stickers.py" beforeDir="false" afterPath="$PROJECT_DIR$/generate_stickers.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/laptopdist.html" beforeDir="false" afterPath="$PROJECT_DIR$/laptopdist.html" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/seat_survey.html" beforeDir="false" afterPath="$PROJECT_DIR$/seat_survey.html" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/seat_survey_beacon.html" beforeDir="false" afterPath="$PROJECT_DIR$/seat_survey_beacon.html" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -208,7 +209,15 @@
       <option name="project" value="LOCAL" />
       <updated>1772277027104</updated>
     </task>
-    <option name="localTasksCounter" value="19" />
+    <task id="LOCAL-00019" summary="Updated db.ref in all scripts to use the correct prefix, and make sure cue.json is on the Firebase server. Updated devicedist.html to read x,y from QR code and animate light and sound cues along a path. Updated generate_stickers.py to print the new QR codes.">
+      <option name="closed" value="true" />
+      <created>1772314313243</created>
+      <option name="number" value="00019" />
+      <option name="presentableId" value="LOCAL-00019" />
+      <option name="project" value="LOCAL" />
+      <updated>1772314313243</updated>
+    </task>
+    <option name="localTasksCounter" value="20" />
     <servers />
   </component>
   <component name="VcsManagerConfiguration">
@@ -227,6 +236,7 @@
     <MESSAGE value="Get Pillar ID from URL" />
     <MESSAGE value="Change Firebase reference in seat_survey_beacon.html to include the active_pillars/ prefix." />
     <MESSAGE value="seat_survey.html now checks the Firebase active_pillars/ path first before reading local copy of pillar_config.json" />
-    <option name="LAST_COMMIT_MESSAGE" value="seat_survey.html now checks the Firebase active_pillars/ path first before reading local copy of pillar_config.json" />
+    <MESSAGE value="Updated db.ref in all scripts to use the correct prefix, and make sure cue.json is on the Firebase server. Updated devicedist.html to read x,y from QR code and animate light and sound cues along a path. Updated generate_stickers.py to print the new QR codes." />
+    <option name="LAST_COMMIT_MESSAGE" value="Updated db.ref in all scripts to use the correct prefix, and make sure cue.json is on the Firebase server. Updated devicedist.html to read x,y from QR code and animate light and sound cues along a path. Updated generate_stickers.py to print the new QR codes." />
   </component>
 </project>
