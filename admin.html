@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<html lang="en">
 <!--
 admin.html
 
@@ -27,7 +28,6 @@ Operational SOP for Admin:
 * Post-Show: Hit Purge Device Registry as the audience
 leaves to reset for the next performance.
 -->
-<html lang="en">
 <head>
     <meta charset="UTF-8">
     <title>Smartphone Orchestra: System Admin</title>
@@ -48,12 +48,11 @@ leaves to reset for the next performance.
             border: 2px solid #444;
             margin-top: 15px;
             background-image: radial-gradient(#111 1px, transparent 1px);
-            background-size: 20px 20px; /* Visual grid for scale */
+            background-size: 20px 20px;
         }
         .beacon-dot { position: absolute; width: 16px; height: 16px; background: #00ff00; border-radius: 50%; transform: translate(-50%, -50%); z-index: 5; border: 2px solid #fff; }
         .beacon-label { position: absolute; font-size: 11px; color: #fff; font-weight: bold; transform: translate(-50%, 12px); white-space: nowrap; background: rgba(0,0,0,0.7); padding: 2px 4px; border-radius: 3px; z-index: 6; }
 
-        /* UI Feedback */
         .status-box { margin-top: 10px; padding: 12px; border-radius: 5px; background: #1a1a1a; font-size: 0.9rem; border-left: 5px solid #444; transition: all 0.3s ease; }
         .status-success { border-left-color: #00ff00 !important; color: #00ff00 !important; background: #1a2a1a !important; font-weight: bold; }
 
@@ -63,7 +62,6 @@ leaves to reset for the next performance.
 
         button { padding: 10px 15px; cursor: pointer; background: #444; color: white; border: none; border-radius: 5px; font-weight: bold; margin-right: 5px; }
         .btn-danger { background: #822; }
-        .btn-danger:hover { background: #b33; }
         #log { background: #000; color: #0f0; padding: 10px; height: 180px; overflow-y: auto; font-family: monospace; font-size: 0.8rem; border: 1px solid #333; }
     </style>
 </head>
@@ -78,9 +76,7 @@ leaves to reset for the next performance.
             <p style="font-size: 0.8rem; color: #888;">Select <strong>pillar_config.json</strong> to update beacon positions.</p>
             <input type="file" id="pillarPicker" accept=".json">
             <div id="pillar-status" class="status-box">No pillar_config.json uploaded.</div>
-
-            <div id="map-container">
-                </div>
+            <div id="map-container"></div>
         </div>
 
         <div class="section">
@@ -119,7 +115,6 @@ leaves to reset for the next performance.
 </div>
 
 <script>
-    // --- FIREBASE INITIALIZATION ---
     const firebaseConfig = {
         apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
         authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
@@ -132,13 +127,11 @@ leaves to reset for the next performance.
     firebase.initializeApp(firebaseConfig);
     const db = firebase.database();
 
-    // Sync Map on Database Changes
     db.ref('active_pillars').on('value', (snap) => {
         const data = snap.val();
         if (data) renderMapAndTable(data);
     });
 
-    // File Input Listeners
     document.getElementById('pillarPicker').addEventListener('change', (e) => handleFileUpload(e, 'pillars'));
     document.getElementById('cuePicker').addEventListener('change', (e) => handleFileUpload(e, 'cues'));
 
@@ -155,7 +148,6 @@ leaves to reset for the next performance.
                 const path = (type === 'pillars') ? 'active_pillars' : 'show/script';
                 const statusId = (type === 'pillars') ? 'pillar-status' : 'cue-status';
 
-                // Direct Firebase Set
                 db.ref(path).set(data).then(() => {
                     const el = document.getElementById(statusId);
                     el.classList.add("status-success");
@@ -169,6 +161,7 @@ leaves to reset for the next performance.
                 alert("The file selected is not a valid JSON file.");
             }
         };
+        // FIXED: The file must actually be read to trigger the onload event
         reader.readAsText(file);
     }
 
@@ -179,21 +172,16 @@ leaves to reset for the next performance.
         tableBody.innerHTML = '';
 
         const pillars = Array.isArray(data) ? data : (data.pillars || Object.values(data));
-
-        // Dynamic Scaling Math
-        // We find the max X/Y to ensure the map always fits the house size
         const maxX = Math.max(...pillars.map(p => p.x), 20);
         const maxY = Math.max(...pillars.map(p => p.y), 20);
-        const margin = 0.9; // Scale to 90% of container to keep icons away from edges
+        const margin = 0.9;
 
         pillars.forEach(p => {
-            // Update Table
             tableBody.innerHTML += `<tr><td>${p.id}</td><td>${p.x}m, ${p.y}m</td><td>${p.freq || p.preferred_freq}Hz</td></tr>`;
 
-            // Update Map
             const dot = document.createElement('div');
             dot.className = 'beacon-dot';
-            dot.style.left = `${(p.x / maxX) * 100 * margin + 5}%`; // Center with 5% offset
+            dot.style.left = `${(p.x / maxX) * 100 * margin + 5}%`;
             dot.style.top = `${(p.y / maxY) * 100 * margin + 5}%`;
 
             const label = document.createElement('div');
@@ -223,8 +211,9 @@ leaves to reset for the next performance.
     async function purgeCues() {
         if (confirm("Wipe show script from cloud?")) {
             await db.ref('show/script').remove();
-            document.getElementById('cue-status').innerText = "No cues.json uploaded.";
-            document.getElementById('cue-status').classList.remove("status-success");
+            const el = document.getElementById('cue-status');
+            el.innerText = "No cues.json uploaded.";
+            el.classList.remove("status-success");
             log("ACTION: Cloud script wiped.");
         }
     }
