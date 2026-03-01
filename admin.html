@@ -95,6 +95,7 @@ leaves to reset for the next performance.
 
         <div class="section">
             <h2>Master Show Commands</h2>
+            <button onclick="downloadSeatConfig()">DOWNLOAD SEAT_CONFIG.TSV</button>
             <button onclick="sendKillSignal()" class="btn-danger">GLOBAL KILL (BLACKOUT)</button>
             <button onclick="purgeDevices()">RESET PATRON REGISTRY</button>
             <button onclick="purgeEverything()" class="btn-danger">WIPE ALL CLOUD DATA</button>
@@ -183,6 +184,53 @@ leaves to reset for the next performance.
 
             map.appendChild(dot); map.appendChild(label);
         });
+    }
+
+    async function downloadSeatConfig() {
+        log("ACTION: Generating seat_config.tsv...");
+
+        // 1. Fetch the survey results from RTDB
+        const snapshot = await db.ref('survey_results').once('value');
+        const results = snapshot.val();
+
+        if (!results) {
+            alert("No survey data found in the database.");
+            return;
+        }
+
+        let tsvContent = "id\tx\ty\n"; // Header row for TSV
+        let hasBlankValues = false;
+
+        // 2. Iterate through all recorded seats
+        Object.keys(results).forEach(seatId => {
+            const data = results[seatId];
+            const x = data.x !== undefined && data.x !== null ? data.x : "";
+            const y = data.y !== undefined && data.y !== null ? data.y : "";
+
+            // Check if this specific seat is incomplete
+            if (x === "" || y === "") {
+                hasBlankValues = true;
+            }
+
+            tsvContent += `${seatId}\t${x}\t${y}\n`;
+        });
+
+        // 3. Alert the operator if data is incomplete
+        if (hasBlankValues) {
+            alert("⚠️ Warning: Some seats in this export have blank X or Y values. The survey may be incomplete.");
+        }
+
+        // 4. Trigger the download
+        const blob = new Blob([tsvContent], { type: 'text/tab-separated-values' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `seat_config_${new Date().toISOString().split('T')[0]}.tsv`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+
+        log(`SUCCESS: Downloaded config for ${Object.keys(results).length} seats.`);
     }
 
     function sendKillSignal() {
