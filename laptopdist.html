@@ -32,15 +32,17 @@ This is run from the Stage Manager or Sound Tech laptop. The clock of the laptop
         .btn-stop { background: #dc3545; color: #fff; }
         .current-status { font-size: 2rem; margin-bottom: 10px; color: #aaa; }
         #current-cue-name { color: #fff; font-weight: bold; }
+        #stats { color: #888; font-size: 0.9rem; }
+        #stats span { color: #00ff00; font-weight: bold; }
     </style>
 </head>
 <body>
 
     <div class="dashboard">
         <div class="panel">
-            <h2>Cue Script (from cue.json)</h2>
+            <h2>Cue Script (Cloud Sync)</h2>
             <div id="cue-list" class="cue-list">
-                <div class="cue-item">Loading cues...</div>
+                <div class="cue-item">Waiting for Admin to upload script...</div>
             </div>
         </div>
 
@@ -77,20 +79,17 @@ This is run from the Stage Manager or Sound Tech laptop. The clock of the laptop
         let nextIndex = 0;
         let activeCueId = null;
 
-        // 1. Fetch data from the external JSON file
-        async function loadCues() {
-            try {
-                const response = await fetch('cue.json');
-                if (!response.ok) throw new Error("Could not find cue.json");
-                cueScript = await response.json();
+        // FIXED: Instead of fetching a local file, we listen to the Firebase node
+        // updated by admin.html. This ensures the conductor is always in sync.
+        db.ref('show/script').on('value', (snap) => {
+            const data = snap.val();
+            if (data) {
+                cueScript = data;
                 renderCueList();
-            } catch (err) {
-                console.error(err);
-                document.getElementById('cue-list').innerHTML = `<div class='cue-item' style='color:red'>Error: ${err.message}</div>`;
+                console.log("New script version received from cloud.");
             }
-        }
+        });
 
-        // 2. Build the UI list from the JSON data
         function renderCueList() {
             const cueListEl = document.getElementById('cue-list');
             cueListEl.innerHTML = '';
@@ -107,7 +106,7 @@ This is run from the Stage Manager or Sound Tech laptop. The clock of the laptop
         function updateSelection() {
             document.querySelectorAll('.cue-item').forEach((item, i) => {
                 item.classList.toggle('selected', i === nextIndex);
-                item.classList.toggle('active', i === nextIndex - 1 && activeCueId !== null);
+                item.classList.toggle('active', i === (nextIndex - 1) && activeCueId !== null);
             });
         }
 
@@ -122,7 +121,7 @@ This is run from the Stage Manager or Sound Tech laptop. The clock of the laptop
             const cue = cueScript[nextIndex];
             const triggerTime = Date.now();
 
-            // Broadcast to the cloud
+            // Broadcast the cue to the 'currentCue' node for all patron devices
             db.ref('show/currentCue').set({
                 ...cue,
                 triggerTime: triggerTime,
@@ -139,7 +138,8 @@ This is run from the Stage Manager or Sound Tech laptop. The clock of the laptop
             db.ref('show/currentCue').set({
                 type: 'SYSTEM',
                 action: 'KILL',
-                triggerTime: Date.now()
+                triggerTime: Date.now(),
+                id: 'KILL_' + Date.now()
             });
             document.getElementById('current-cue-name').innerText = "KILLED";
             activeCueId = null;
@@ -147,23 +147,24 @@ This is run from the Stage Manager or Sound Tech laptop. The clock of the laptop
         }
 
         // --- MONITORING & CLOCK ---
+        // Watch the patron count in real-time
         db.ref('devices').on('value', snap => {
             document.getElementById('patron-count').innerText = snap.numChildren();
         });
 
+        // Physical keyboard shortcuts for the Stage Manager
         window.onkeydown = (e) => {
             if (e.code === "Space") { e.preventDefault(); triggerNext(); }
             if (e.key === "k" || e.key === "K") { emergencyStop(); }
         };
 
+        // Heartbeat: Set the master time every second
         setInterval(() => {
             const now = new Date();
             document.getElementById('clock-display').innerText = now.toTimeString().split(' ')[0];
             db.ref('laptop/clock').set(Date.now());
         }, 1000);
 
-        // Start the load sequence
-        loadCues();
     </script>
 </body>
 </html>
