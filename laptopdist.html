@@ -10,161 +10,188 @@ This is run from the Stage Manager or Sound Tech laptop. The clock of the laptop
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Lighthouse Conductor</title>
+    <title>SM Conductor: Scheduled Trigger</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <style>
-        body { font-family: 'Segoe UI', sans-serif; background: #0b0b0b; color: #fff; padding: 40px; }
-        .dashboard { display: grid; grid-template-columns: 350px 1fr; gap: 20px; }
-        .panel { background: #1a1a1a; padding: 25px; border-radius: 12px; border: 1px solid #333; }
-        .cue-list { height: 500px; overflow-y: auto; background: #111; padding: 10px; border-radius: 8px; }
-        .cue-item {
-            padding: 15px; margin-bottom: 8px; background: #222; border-radius: 6px;
-            cursor: pointer; border: 2px solid transparent; transition: 0.2s;
+        body { font-family: 'Segoe UI', sans-serif; background: #050505; color: #eee; padding: 20px; overflow: hidden; }
+        .grid { display: grid; grid-template-columns: 1fr 450px; gap: 20px; height: 90vh; }
+
+        .timeline-panel { background: #111; border: 1px solid #333; padding: 20px; overflow-y: auto; border-radius: 8px; }
+        .timeline-item {
+            display: flex; gap: 20px; padding: 15px; border-bottom: 1px solid #222; color: #666;
         }
-        .cue-item:hover { background: #2a2a2a; }
-        .cue-item.selected { border-color: #007bff; background: #1e2a3a; }
-        .cue-item.active { border-color: #28a745; background: #1a3a24; }
-        .controls { display: flex; flex-direction: column; gap: 20px; }
-        .btn { padding: 20px; font-size: 1.5rem; font-weight: bold; border: none; border-radius: 8px; cursor: pointer; text-transform: uppercase; }
-        .btn-trigger { background: #28a745; color: #fff; }
-        .btn-trigger:hover { background: #218838; }
-        .btn-stop { background: #dc3545; color: #fff; }
-        .current-status { font-size: 2rem; margin-bottom: 10px; color: #aaa; }
-        #current-cue-name { color: #fff; font-weight: bold; }
-        #stats { color: #888; font-size: 0.9rem; }
-        #stats span { color: #00ff00; font-weight: bold; }
+        .timeline-item.next { color: #fff; background: #1a1a00; border-left: 5px solid #ffcc00; }
+        .timeline-item.active { background: #002200; color: #00ff00; }
+
+        .sm-controls { background: #1a1a1a; padding: 30px; border-radius: 8px; border: 2px solid #444; display: flex; flex-direction: column; justify-content: space-between; }
+        .master-clock { font-family: monospace; font-size: 5rem; text-align: center; color: #00ff00; background: #000; padding: 10px; border-radius: 5px; margin-bottom: 10px; }
+
+        .cue-card { background: #000; padding: 20px; border: 1px solid #ffcc00; border-radius: 8px; margin-bottom: 20px; }
+        .cue-card h3 { margin: 0; color: #ffcc00; text-transform: uppercase; letter-spacing: 2px; }
+
+        .btn-go {
+            width: 100%; padding: 40px; font-size: 3rem; font-weight: 900;
+            background: #28a745; color: white; border: none; border-radius: 12px;
+            cursor: pointer; box-shadow: 0 0 20px rgba(40, 167, 69, 0.4);
+        }
+        .btn-go:active { background: #218838; transform: scale(0.98); }
+        .btn-go:disabled { background: #333; color: #666; cursor: not-allowed; box-shadow: none; }
+
+        #countdown-overlay { font-size: 2rem; color: #ffcc00; text-align: center; font-weight: bold; margin-top: 10px; min-height: 1.2em; }
     </style>
 </head>
 <body>
 
-    <div class="dashboard">
-        <div class="panel">
-            <h2>Cue Script (Cloud Sync)</h2>
-            <div id="cue-list" class="cue-list">
-                <div class="cue-item">Waiting for Admin to upload script...</div>
+<div class="grid">
+    <div class="timeline-panel">
+        <h2 style="color: #888;">THEATER TIMELINE</h2>
+        <div id="timeline-list"></div>
+    </div>
+
+    <div class="sm-controls">
+        <div>
+            <div class="master-clock" id="master-clock">00:00:00</div>
+
+            <div class="cue-card">
+                <small>PENDING CUE</small>
+                <h3 id="next-label">--</h3>
+                <div id="next-details" style="font-size: 0.9rem; color: #888; margin-top:5px;">Waiting for timeline...</div>
             </div>
+
+            <div id="countdown-overlay">READY</div>
         </div>
 
-        <div class="panel controls">
-            <div class="current-status">
-                Next: <span id="current-cue-name">READY</span>
-            </div>
-            <button class="btn btn-trigger" onclick="triggerNext()">Trigger Next [Space]</button>
-            <button class="btn btn-stop" onclick="emergencyStop()">Emergency Kill [K]</button>
-            <hr style="width:100%; border:0; border-top:1px solid #333;">
-            <div id="stats">
-                <p>Connected Patrons: <span id="patron-count">0</span></p>
-                <p>Master Clock: <span id="clock-display">00:00:00</span></p>
+        <button id="go-button" class="btn-go" onclick="confirmTrigger()">GO</button>
+
+        <div style="display:flex; gap:10px; margin-top:20px;">
+            <button style="background:#444; padding:10px; font-size: 0.8rem;" onclick="emergencyStop()">KILL [K]</button>
+            <div id="status-bar" style="font-size: 0.7rem; color: #555; align-self: center;">
+                SYNC: <span id="sync-val">--</span> | PATRONS: <span id="patron-val">0</span>
             </div>
         </div>
     </div>
+</div>
 
-    <script>
-        // --- FIREBASE CONFIGURATION ---
-        const firebaseConfig = {
-            apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
-            authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
-            databaseURL: "https://smartphoneorchestra-dwt-default-rtdb.firebaseio.com/",
-            projectId: "smartphoneorchestra-dwt",
-            storageBucket: "smartphoneorchestra-dwt.firebasestorage.app",
-            messagingSenderId: "722537253165",
-            appId: "1:722537253165:web:8e8b6495bd508de35b2ba4"
-        };
-        firebase.initializeApp(firebaseConfig);
-        const db = firebase.database();
+<script>
+    const firebaseConfig = {
+        apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
+        authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
+        databaseURL: "https://smartphoneorchestra-dwt-default-rtdb.firebaseio.com/",
+        projectId: "smartphoneorchestra-dwt",
+        storageBucket: "smartphoneorchestra-dwt.firebasestorage.app",
+        messagingSenderId: "722537253165",
+        appId: "1:722537253165:web:8e8b6495bd508de35b2ba4"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
 
-        // --- CUE SYSTEM ---
-        let cueScript = [];
-        let nextIndex = 0;
-        let activeCueId = null;
+    let cueLibrary = {};
+    let timeline = [];
+    let nextIndex = 0;
+    let isCountingDown = false;
 
-        // FIXED: Instead of fetching a local file, we listen to the Firebase node
-        // updated by admin.html. This ensures the conductor is always in sync.
-        db.ref('show/script').on('value', (snap) => {
-            const data = snap.val();
-            if (data) {
-                cueScript = data;
-                renderCueList();
-                console.log("New script version received from cloud.");
+    // 1. Load Cue Library (the 'what')
+    db.ref('show/script').on('value', snap => {
+        const data = snap.val() || [];
+        cueLibrary = {};
+        data.forEach(c => cueLibrary[c.label] = c);
+    });
+
+    // 2. Load Timeline (the 'when')
+    db.ref('show/timeline').on('value', snap => {
+        timeline = snap.val() || [];
+        renderTimeline();
+    });
+
+    function renderTimeline() {
+        const list = document.getElementById('timeline-list');
+        list.innerHTML = '';
+        timeline.forEach((item, i) => {
+            const div = document.createElement('div');
+            div.className = `timeline-item ${i === nextIndex ? 'next' : ''}`;
+            div.innerHTML = `<b>${item.time}</b> <span>${item.label}</span> <small>(${item.cueLabel})</small>`;
+            list.appendChild(div);
+        });
+
+        const active = timeline[nextIndex];
+        if (active) {
+            document.getElementById('next-label').innerText = active.label;
+            document.getElementById('next-details').innerText = `Target: ${active.time} | Sync Buffer: ${active.buffer || 1.0}s`;
+            document.getElementById('go-button').disabled = false;
+        } else {
+            document.getElementById('next-label').innerText = "END OF SHOW";
+            document.getElementById('go-button').disabled = true;
+        }
+    }
+
+    function confirmTrigger() {
+        if (isCountingDown || !timeline[nextIndex]) return;
+
+        const timelineEvent = timeline[nextIndex];
+        const cueData = cueLibrary[timelineEvent.cueLabel];
+
+        if (!cueData) {
+            alert("Error: Cue '" + timelineEvent.cueLabel + "' not found in cues.json library.");
+            return;
+        }
+
+        const bufferSeconds = timelineEvent.buffer || 1.0;
+        const now = Date.now();
+        const executionTime = now + (bufferSeconds * 1000);
+
+        // BROADCAST TO CLOUD
+        // Every device receives this immediately, but waits until executionTime to play.
+        db.ref('show/currentCue').set({
+            ...cueData,
+            triggerTime: now,
+            scheduledTime: executionTime,
+            id: 'cue_' + now
+        });
+
+        visualCountdown(bufferSeconds);
+        nextIndex++;
+        renderTimeline();
+    }
+
+    function visualCountdown(seconds) {
+        isCountingDown = true;
+        const overlay = document.getElementById('countdown-overlay');
+        let remaining = seconds;
+
+        const timer = setInterval(() => {
+            remaining -= 0.1;
+            overlay.innerText = `FIRE IN: ${remaining.toFixed(1)}s`;
+            if (remaining <= 0) {
+                clearInterval(timer);
+                overlay.innerText = "EXECUTED";
+                isCountingDown = false;
+                setTimeout(() => { if(!isCountingDown) overlay.innerText = "READY"; }, 2000);
             }
-        });
+        }, 100);
+    }
 
-        function renderCueList() {
-            const cueListEl = document.getElementById('cue-list');
-            cueListEl.innerHTML = '';
-            cueScript.forEach((cue, i) => {
-                const div = document.createElement('div');
-                div.className = 'cue-item';
-                div.innerHTML = `<strong>${cue.label}</strong><br><small>${cue.type}</small>`;
-                div.onclick = () => jumpToCue(i);
-                cueListEl.appendChild(div);
-            });
-            updateSelection();
-        }
+    function emergencyStop() {
+        db.ref('show/currentCue').set({ type: 'SYSTEM', action: 'KILL', triggerTime: Date.now() });
+        document.getElementById('countdown-overlay').innerText = "KILLED";
+    }
 
-        function updateSelection() {
-            document.querySelectorAll('.cue-item').forEach((item, i) => {
-                item.classList.toggle('selected', i === nextIndex);
-                item.classList.toggle('active', i === (nextIndex - 1) && activeCueId !== null);
-            });
-        }
+    // CLOCK & SYNC
+    setInterval(() => {
+        const now = new Date();
+        document.getElementById('master-clock').innerText = now.toTimeString().split(' ')[0];
+        db.ref('laptop/clock').set(Date.now());
+        document.getElementById('sync-val').innerText = db.ref(".info/connected") ? "OK" : "LOST";
+    }, 1000);
 
-        function jumpToCue(index) {
-            nextIndex = index;
-            updateSelection();
-        }
+    db.ref('devices').on('value', snap => {
+        document.getElementById('patron-val').innerText = snap.numChildren();
+    });
 
-        function triggerNext() {
-            if (cueScript.length === 0 || nextIndex >= cueScript.length) return;
-
-            const cue = cueScript[nextIndex];
-            const triggerTime = Date.now();
-
-            // Broadcast the cue to the 'currentCue' node for all patron devices
-            db.ref('show/currentCue').set({
-                ...cue,
-                triggerTime: triggerTime,
-                id: `cue_${triggerTime}`
-            });
-
-            document.getElementById('current-cue-name').innerText = cue.label;
-            activeCueId = nextIndex;
-            nextIndex++;
-            updateSelection();
-        }
-
-        function emergencyStop() {
-            db.ref('show/currentCue').set({
-                type: 'SYSTEM',
-                action: 'KILL',
-                triggerTime: Date.now(),
-                id: 'KILL_' + Date.now()
-            });
-            document.getElementById('current-cue-name').innerText = "KILLED";
-            activeCueId = null;
-            updateSelection();
-        }
-
-        // --- MONITORING & CLOCK ---
-        // Watch the patron count in real-time
-        db.ref('devices').on('value', snap => {
-            document.getElementById('patron-count').innerText = snap.numChildren();
-        });
-
-        // Physical keyboard shortcuts for the Stage Manager
-        window.onkeydown = (e) => {
-            if (e.code === "Space") { e.preventDefault(); triggerNext(); }
-            if (e.key === "k" || e.key === "K") { emergencyStop(); }
-        };
-
-        // Heartbeat: Set the master time every second
-        setInterval(() => {
-            const now = new Date();
-            document.getElementById('clock-display').innerText = now.toTimeString().split(' ')[0];
-            db.ref('laptop/clock').set(Date.now());
-        }, 1000);
-
-    </script>
+    window.onkeydown = (e) => {
+        if (e.code === "Space") { e.preventDefault(); confirmTrigger(); }
+        if (e.key === "k" || e.key === "K") { emergencyStop(); }
+    };
+</script>
 </body>
 </html>
