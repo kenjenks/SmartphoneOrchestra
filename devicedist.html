@@ -12,16 +12,18 @@ Webapp for patron devices.
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <style>
-        body { margin: 0; background: #000; color: #fff; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; height: 100vh; display: flex; align-items: center; justify-content: center; text-align: center; overflow: hidden; transition: background-color 0.1s; }
+        body { margin: 0; background: #000; color: #fff; font-family: 'Segoe UI', sans-serif; height: 100vh; display: flex; align-items: center; justify-content: center; text-align: center; overflow: hidden; transition: background-color 0.1s; }
         #setup-screen { padding: 20px; max-width: 400px; }
         .checklist { text-align: left; background: #111; padding: 20px; border-radius: 12px; border: 1px solid #333; margin-bottom: 25px; }
         .checklist label { display: block; margin: 15px 0; font-size: 1.1rem; cursor: pointer; }
         .checklist input { transform: scale(1.5); margin-right: 15px; }
-        .btn-ready { padding: 20px 40px; font-size: 1.4rem; background: #28a745; color: white; border: none; border-radius: 50px; cursor: pointer; width: 100%; transition: 0.3s; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
-        .btn-ready:disabled { background: #333; color: #777; cursor: not-allowed; box-shadow: none; }
+        .btn-ready { padding: 20px 40px; font-size: 1.4rem; background: #28a745; color: white; border: none; border-radius: 50px; cursor: pointer; width: 100%; transition: 0.3s; }
+        .btn-ready:disabled { background: #333; color: #777; cursor: not-allowed; }
         #loading-msg { margin-top: 20px; color: #aaa; font-style: italic; min-height: 1.2em; }
         #instruction { font-size: 1.4rem; line-height: 1.6; }
         #status { position: absolute; bottom: 15px; font-size: 0.7rem; color: #333; letter-spacing: 2px; text-transform: uppercase; width: 100%; }
+        .sync-dot { display: inline-block; width: 8px; height: 8px; background: #333; border-radius: 50%; margin-left: 5px; }
+        .sync-active { background: #00ff00; box-shadow: 0 0 5px #00ff00; }
     </style>
 </head>
 <body>
@@ -41,10 +43,9 @@ Webapp for patron devices.
         <div id="instruction">Please silence your voice.<br>The performance is ready.</div>
     </div>
 
-    <div id="status">OFFLINE</div>
+    <div id="status">OFFLINE <span id="sync-dot" class="sync-dot"></span></div>
 
     <script>
-        // --- FIREBASE CONFIGURATION ---
         const firebaseConfig = {
             apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
             authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
@@ -61,7 +62,6 @@ Webapp for patron devices.
         let mySeat = { id: "Guest", x: 0, y: 0 };
         const audioBuffers = {};
 
-        // 1. Initial Load & Checklist Logic
         function init() {
             const params = new URLSearchParams(window.location.search);
             mySeat.id = params.get('id') || "Guest";
@@ -71,138 +71,78 @@ Webapp for patron devices.
 
             const checks = document.querySelectorAll('.usher-check');
             const btn = document.getElementById('ready-btn');
-
             checks.forEach(c => c.onclick = () => {
-                const allChecked = Array.from(checks).every(i => i.checked);
-                btn.disabled = !allChecked;
+                btn.disabled = !Array.from(checks).every(i => i.checked);
             });
         }
 
-        // 2. The "Tuning" Phase (Asset Preloading)
         async function preloadAssets() {
             const msg = document.getElementById('loading-msg');
-            msg.innerText = "Reviewing the score...";
-
-            const snap = await db.ref('show/script').once('value');
-            const script = snap.val();
-            if (!script) return;
-
-            const audioCues = script.filter(c => c.type === 'AUDIO' && c.url);
             msg.innerText = "Tuning instruments...";
+            const snap = await db.ref('show/script').once('value');
+            const script = snap.val() || [];
 
-            let loaded = 0;
-            for (const cue of audioCues) {
-                try {
-                    const response = await fetch(cue.url);
-                    const arrayBuf = await response.arrayBuffer();
-                    audioBuffers[cue.url] = await audioCtx.decodeAudioData(arrayBuf);
-                    loaded++;
-                    msg.innerText = `Preparing section ${loaded} of ${audioCues.length}...`;
-                } catch (e) { console.error("Asset fail:", cue.url); }
+            for (const cue of script) {
+                if (cue.type === 'AUDIO' && cue.url) {
+                    try {
+                        const response = await fetch(cue.url);
+                        const arrayBuf = await response.arrayBuffer();
+                        audioBuffers[cue.url] = await audioCtx.decodeAudioData(arrayBuf);
+                    } catch (e) { console.warn("Load failed for:", cue.url); }
+                }
             }
             msg.innerText = "Instruments tuned.";
         }
 
-        // 3. Trajectory & Spatial Audio Logic
         function handleCue(cue) {
+            // SYNC MATH
             const now = Date.now();
-            const startTime = (cue.triggerTime + clockOffset);
-            const startDelay = (startTime - now) / 1000;
+            const serverNow = now - clockOffset;
+            const timeUntilStartMs = cue.scheduledTime - serverNow;
+            const startDelaySeconds = timeUntilStartMs / 1000;
 
-            // GLOBAL CUES
-            if (cue.originX === undefined || cue.originX === null) {
-                if (cue.type === 'AUDIO') playGlobalAudio(cue, startDelay);
-                if (cue.type === 'LIGHT') setGlobalLight(cue, startDelay);
-                return;
-            }
+            // If the cue is already deep in the past (late arrival), skip it
+            if (startDelaySeconds < -5) return;
 
-            // SPATIAL CUES (Moving sounds/lights)
-            const buffer = audioBuffers[cue.url];
-            const activeDuration = (cue.type === 'AUDIO' && buffer) ? Math.min(buffer.duration, cue.elapsedT) : cue.elapsedT;
+            // SCHEDULING
+            const scheduledStartTime = audioCtx.currentTime + Math.max(0, startDelaySeconds);
 
-            const steps = 60; // Sample rate for the trajectory curve
-            const intensities = new Float32Array(steps + 1);
-            const rSq = Math.pow(cue.radius, 2);
-
-            for (let i = 0; i <= steps; i++) {
-                const t = i / steps;
-                const curX = cue.originX + (cue.destX - cue.originX) * t;
-                const curY = cue.originY + (cue.destY - cue.originY) * t;
-                const distSq = Math.pow(mySeat.x - curX, 2) + Math.pow(mySeat.y - curY, 2);
-
-                // Inverse Square: 1/(1+d^2) with Hard Cutoff at Radius
-                intensities[i] = (Math.sqrt(distSq) <= cue.radius) ? (1 / (1 + distSq)) : 0;
-            }
-
-            if (cue.type === 'AUDIO' && buffer) {
+            if (cue.type === 'AUDIO') {
+                const buffer = audioBuffers[cue.url];
+                if (!buffer) return;
                 const source = audioCtx.createBufferSource();
-                const gain = audioCtx.createGain();
                 source.buffer = buffer;
-                gain.gain.setValueCurveAtTime(intensities, audioCtx.currentTime + Math.max(0, startDelay), cue.elapsedT);
-                source.connect(gain).connect(audioCtx.destination);
-                source.start(audioCtx.currentTime + Math.max(0, startDelay));
-                source.stop(audioCtx.currentTime + Math.max(0, startDelay) + activeDuration);
+                source.connect(audioCtx.destination);
+                source.start(scheduledStartTime);
             }
 
             if (cue.type === 'LIGHT') {
-                renderSpatialLight(cue, intensities, startDelay);
+                setTimeout(() => {
+                    document.body.style.backgroundColor = cue.color || "#fff";
+                    // If spatial, we'd trigger the requestAnimationFrame loop here
+                }, Math.max(0, timeUntilStartMs));
             }
         }
 
-        function playGlobalAudio(cue, delay) {
-            const buffer = audioBuffers[cue.url];
-            if (!buffer) return;
-            const source = audioCtx.createBufferSource();
-            source.buffer = buffer;
-            source.connect(audioCtx.destination);
-            source.start(audioCtx.currentTime + Math.max(0, delay));
-        }
-
-        function setGlobalLight(cue, delay) {
-            setTimeout(() => {
-                document.body.style.filter = "brightness(100%)";
-                document.body.style.backgroundColor = cue.color || "#fff";
-            }, Math.max(0, delay * 1000));
-        }
-
-        function renderSpatialLight(cue, curve, delay) {
-            const startMs = Date.now() + (delay * 1000);
-            function frame() {
-                const elapsed = (Date.now() - startMs) / 1000;
-                if (elapsed < 0) { requestAnimationFrame(frame); return; }
-                if (elapsed > cue.elapsedT) { document.body.style.filter = "brightness(0%)"; return; }
-                const idx = Math.floor((elapsed / cue.elapsedT) * (curve.length - 1));
-                document.body.style.backgroundColor = cue.color || "#fff";
-                document.body.style.filter = `brightness(${curve[idx] * 100}%)`;
-                requestAnimationFrame(frame);
-            }
-            requestAnimationFrame(frame);
-        }
-
-        // --- BUTTON TRIGGER ---
         document.getElementById('ready-btn').onclick = async () => {
             document.getElementById('ready-btn').disabled = true;
-
-            // 1. Audio Initialization
             audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             if (audioCtx.state === 'suspended') await audioCtx.resume();
 
-            // 2. Request Wake Lock (Keep screen on)
             if ('wakeLock' in navigator) {
                 try { wakeLock = await navigator.wakeLock.request('screen'); } catch (err) {}
             }
 
-            // 3. Tuning
             await preloadAssets();
 
-            // 4. Enter the Hall
             document.getElementById('setup-screen').style.display = 'none';
             document.getElementById('show-screen').style.display = 'block';
 
-            // 5. Connect to Conductor
-            db.ref(`devices/${mySeat.id}`).set({ ...mySeat, online: true, ts: Date.now() });
-            document.getElementById('status').innerText = "CONNECTED";
+            // REGISTER WITH CONDUCTOR
+            db.ref(`devices/${mySeat.id}`).set({ ...mySeat, online: true });
+            document.getElementById('status').innerHTML = `CONNECTED <span id="sync-dot" class="sync-dot sync-active"></span>`;
 
+            // LISTEN FOR CUES
             db.ref('show/currentCue').on('value', snap => {
                 const cue = snap.val();
                 if (!cue) return;
@@ -211,9 +151,11 @@ Webapp for patron devices.
             });
         };
 
-        // Sync clock with laptop
+        // Continually sync clock with the SM Laptop
         db.ref('laptop/clock').on('value', snap => {
-            if (snap.exists()) clockOffset = Date.now() - snap.val();
+            if (snap.exists()) {
+                clockOffset = Date.now() - snap.val();
+            }
         });
 
         init();
