@@ -35,7 +35,7 @@ leaves to reset for the next performance.
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Smartphone Orchestra: System Admin</title>
+    <title>Orchestra Control: System Admin</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <style>
@@ -44,24 +44,34 @@ leaves to reset for the next performance.
         .section { background: #222; padding: 20px; border-radius: 10px; margin-bottom: 20px; border: 1px solid #333; }
         h2 { margin-top: 0; color: #00ff00; font-size: 1rem; border-bottom: 1px solid #333; padding-bottom: 10px; text-transform: uppercase; }
 
+        /* Beacon Map Styles */
         #map-container {
-            width: 100%; height: 450px; background: #000; position: relative;
+            width: 100%; height: 300px; background: #000; position: relative;
             border: 2px solid #444; margin-top: 15px; overflow: hidden;
             background-image: radial-gradient(#222 1px, transparent 1px);
-            background-size: 30px 30px;
+            background-size: 20px 20px; border-radius: 8px;
         }
-        .beacon-dot { position: absolute; width: 18px; height: 18px; background: #00ff00; border-radius: 50%; transform: translate(-50%, -50%); z-index: 5; border: 2px solid #fff; box-shadow: 0 0 10px #00ff00; }
-        .beacon-label { position: absolute; font-size: 11px; color: #fff; font-weight: bold; transform: translate(-50%, 15px); white-space: nowrap; background: rgba(0,0,0,0.8); padding: 2px 5px; border-radius: 3px; z-index: 6; }
+        .beacon-dot { position: absolute; width: 14px; height: 14px; border-radius: 50%; transform: translate(-50%, -50%); z-index: 5; border: 2px solid #fff; transition: background 0.3s; }
+        .beacon-online { background: #00ff00; box-shadow: 0 0 10px #00ff00; }
+        .beacon-offline { background: #ff0000; box-shadow: 0 0 10px #ff0000; }
+        .beacon-label { position: absolute; font-size: 10px; color: #fff; font-weight: bold; transform: translate(-50%, 12px); white-space: nowrap; background: rgba(0,0,0,0.8); padding: 1px 4px; border-radius: 3px; z-index: 6; }
 
-        .upload-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px; margin-bottom: 10px; }
-        .status-box { padding: 10px; border-radius: 5px; background: #1a1a1a; font-size: 0.8rem; border-left: 4px solid #444; min-height: 40px; }
-        .status-success { border-left-color: #00ff00 !important; color: #00ff00 !important; font-weight: bold; }
+        .upload-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px; margin-bottom: 15px; }
+        .status-box { padding: 8px; border-radius: 4px; background: #1a1a1a; font-size: 0.75rem; border-left: 4px solid #444; margin-top: 5px; }
+        .status-success { border-left-color: #00ff00 !important; color: #00ff00 !important; }
+
+        .survey-workflow { display: flex; align-items: center; justify-content: space-between; gap: 10px; background: #1a1a1a; padding: 15px; border-radius: 8px; margin-bottom: 15px; border: 1px solid #333; }
+        .step { flex: 1; text-align: center; }
+        .step-label { font-size: 0.7rem; color: #888; margin-bottom: 5px; display: block; }
 
         table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
         th, td { padding: 10px; text-align: left; border-bottom: 1px solid #333; }
 
-        #log { background: #000; color: #0f0; padding: 10px; height: 250px; overflow-y: auto; font-family: 'Courier New', monospace; font-size: 0.8rem; border: 1px solid #333; }
-        button { padding: 12px 18px; cursor: pointer; background: #444; color: white; border: none; border-radius: 5px; font-weight: bold; }
+        #log { background: #000; color: #0f0; padding: 10px; height: 350px; overflow-y: auto; font-family: 'Courier New', monospace; font-size: 0.8rem; border: 1px solid #333; border-radius: 5px; }
+        button { padding: 10px 15px; cursor: pointer; background: #444; color: white; border: none; border-radius: 5px; font-weight: bold; transition: opacity 0.2s; }
+        button:hover { opacity: 0.8; }
+        .btn-start { background: #007bff; }
+        .btn-stop { background: #666; }
         .btn-danger { background: #822; }
     </style>
 </head>
@@ -72,35 +82,55 @@ leaves to reset for the next performance.
         <h1 style="color:#00ff00;">Orchestra Control Center</h1>
 
         <div class="section">
-            <h2>Theater Asset Configuration</h2>
+            <h2>1. Theater Asset Configuration</h2>
             <div class="upload-grid">
                 <div>
-                    <label>1. Pillars (.json)</label>
-                    <input type="file" id="pPicker" accept=".json" onchange="handleFile(this, 'active_pillars', 'pStatus')">
+                    <label>Pillar Layout (.json)</label>
+                    <input type="file" onchange="handleFile(this, 'active_pillars', 'pStatus')">
                     <div id="pStatus" class="status-box">Ready</div>
                 </div>
                 <div>
-                    <label>2. Upload Seat List (.json)</label>
-                    <input type="file" id="sPicker" accept=".tsv" onchange="handleTSVUpload(this)">
-                    <div id="sStatus" class="status-box">Ready</div>
-                </div>
-                <div>
-                    <label>3. Cues (.json)</label>
-                    <input type="file" id="cPicker" accept=".json" onchange="handleFile(this, 'show/script', 'cStatus')">
+                    <label>Cue Script (.json)</label>
+                    <input type="file" onchange="handleFile(this, 'show/script', 'cStatus')">
                     <div id="cStatus" class="status-box">Ready</div>
                 </div>
                 <div>
-                    <label>4. Timeline (.json)</label>
-                    <input type="file" id="tPicker" accept=".json" onchange="handleFile(this, 'show/timeline', 'tStatus')">
+                    <label>Show Timeline (.json)</label>
+                    <input type="file" onchange="handleFile(this, 'show/timeline', 'tStatus')">
                     <div id="tStatus" class="status-box">Ready</div>
                 </div>
             </div>
+        </div>
+
+        <div class="section">
+            <h2>2. Survey Control UI</h2>
+
+            <div class="survey-workflow">
+                <div class="step">
+                    <span class="step-label">STEP 1: INITIALIZE</span>
+                    <input type="file" id="sPicker" accept=".tsv" style="display:none" onchange="handleTSVUpload(this)">
+                    <button onclick="document.getElementById('sPicker').click()">UPLOAD SEAT TSV</button>
+                    <div id="sStatus" class="status-box">Ready</div>
+                </div>
+                <div class="step">
+                    <span class="step-label">STEP 2: ACTIVATE</span>
+                    <button class="btn-start" onclick="broadcastSurveyCommand('START')">START SURVEY</button>
+                </div>
+                <div class="step">
+                    <span class="step-label">STEP 3: DEACTIVATE</span>
+                    <button class="btn-stop" onclick="broadcastSurveyCommand('STOP')">STOP SURVEY</button>
+                </div>
+                <div class="step">
+                    <span class="step-label">STEP 4: EXPORT</span>
+                    <button onclick="downloadSeatConfig()">DOWNLOAD TSV</button>
+                </div>
+            </div>
+
             <div id="map-container"></div>
         </div>
 
         <div class="section">
             <h2>Master Show Commands</h2>
-            <button onclick="downloadSeatConfig()">DOWNLOAD SEAT_CONFIG.TSV</button>
             <button onclick="sendKillSignal()" class="btn-danger">GLOBAL KILL (BLACKOUT)</button>
             <button onclick="purgeDevices()">RESET PATRON REGISTRY</button>
             <button onclick="purgeEverything()" class="btn-danger">WIPE ALL CLOUD DATA</button>
@@ -111,8 +141,8 @@ leaves to reset for the next performance.
         <div class="section">
             <h2>Live Beacon Data</h2>
             <table id="pillar-table">
-                <thead><tr><th>ID</th><th>X,Y (meters)</th></tr></thead>
-                <tbody><tr><td colspan="2" style="text-align:center;color:#555;">No pillars checking in.</td></tr></tbody>
+                <thead><tr><th>ID</th><th>Status</th><th>Freq</th></tr></thead>
+                <tbody><tr><td colspan="3" style="text-align:center;color:#555;">Waiting for beacons...</td></tr></tbody>
             </table>
         </div>
         <div class="section">
@@ -135,178 +165,145 @@ leaves to reset for the next performance.
     firebase.initializeApp(firebaseConfig);
     const db = firebase.database();
 
-    // Monitor pillar status in real-time
-    db.ref('active_pillars').on('value', (snap) => {
-        const data = snap.val();
-        if (data) renderMapAndTable(data);
-    });
-
-    function handleFile(input, path, statusId) {
-        const file = input.files[0];
-        if (!file) return;
-
-        log(`Reading: ${file.name}`);
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            try {
-                const data = JSON.parse(e.target.result);
-                db.ref(path).set(data).then(() => {
-                    const el = document.getElementById(statusId);
-                    el.className = "status-box status-success";
-                    el.innerText = `✓ ${file.name} Uploaded`;
-                    log(`SUCCESS: ${file.name} pushed to path: ${path}`);
-                });
-            } catch (err) {
-                log(`ERROR: ${file.name} is malformed JSON.`);
-            }
-        };
-        reader.readAsText(file);
-    }
-
-    function renderMapAndTable(data) {
+    // 1. MONITOR BEACONS & UPDATE GRAPHIC DISPLAY
+    db.ref('active_pillars').on('value', snap => {
+        const pillars = snap.val();
         const map = document.getElementById('map-container');
-        const tableBody = document.querySelector('#pillar-table tbody');
-        map.innerHTML = ''; tableBody.innerHTML = '';
+        const table = document.querySelector('#pillar-table tbody');
 
-        const pillars = Array.isArray(data) ? data : (data.pillars || Object.values(data));
+        map.innerHTML = ''; // Clear map
+        table.innerHTML = ''; // Clear table
 
-        // Dynamic Scaling: ensures map fills container regardless of room size
-        const maxX = Math.max(...pillars.map(p => p.x), 10);
-        const maxY = Math.max(...pillars.map(p => p.y), 10);
+        if (!pillars) {
+            table.innerHTML = '<tr><td colspan="3" style="text-align:center;">No pillars online.</td></tr>';
+            return;
+        }
 
-        pillars.forEach(p => {
-            tableBody.innerHTML += `<tr><td>${p.id}</td><td>${p.x}, ${p.y}</td></tr>`;
+        const pillarArray = Object.values(pillars);
+        const maxX = Math.max(...pillarArray.map(p => p.x), 1);
+        const maxY = Math.max(...pillarArray.map(p => p.y), 1);
 
+        pillarArray.forEach(p => {
+            const isOnline = (Date.now() - p.lastPing) < 5000;
+
+            // Update Table
+            table.innerHTML += `<tr>
+                <td>${p.id}</td>
+                <td style="color:${isOnline ? '#0f0' : '#f00'}">${isOnline ? 'ONLINE' : 'LOST'}</td>
+                <td>${p.freq || p.preferred_freq}Hz</td>
+            </tr>`;
+
+            // Update Map Graphics
             const dot = document.createElement('div');
-            dot.className = 'beacon-dot';
+            dot.className = `beacon-dot ${isOnline ? 'beacon-online' : 'beacon-offline'}`;
             dot.style.left = `${(p.x / maxX) * 85 + 7.5}%`;
             dot.style.top = `${(p.y / maxY) * 85 + 7.5}%`;
 
             const label = document.createElement('div');
             label.className = 'beacon-label';
-            label.style.left = dot.style.left; label.style.top = dot.style.top;
+            label.style.left = dot.style.left;
+            label.style.top = dot.style.top;
             label.innerText = p.id;
 
-            map.appendChild(dot); map.appendChild(label);
+            map.appendChild(dot);
+            map.appendChild(label);
         });
+    });
+
+    // 2. SURVEY CONTROL FUNCTIONS
+    function broadcastSurveyCommand(action) {
+        db.ref('survey_control').set({
+            command: action,
+            serverTime: Date.now()
+        }).then(() => log(`COMMAND: Survey ${action} sent.`));
     }
 
     function handleTSVUpload(input) {
         const file = input.files[0];
         if (!file) return;
-
-        log(`Processing Seat List: ${file.name}`);
+        log(`ACTION: Initializing seat list from ${file.name}`);
         const reader = new FileReader();
-
         reader.onload = (e) => {
-            try {
-                const lines = e.target.result.split('\n');
-                const surveyData = {};
-
-                // Assume first line is header: id	x	y
-                // Start loop at 1 to skip header
-                for (let i = 1; i < lines.length; i++) {
-                    const line = lines[i].trim();
-                    if (!line) continue;
-
-                    const [id, x, y] = line.split('\t');
-                    if (id) {
-                        surveyData[id] = {
-                            x: x || "", // Keep blank if not provided
-                            y: y || "",
-                            status: (x && y) ? "PRE-CONFIGURED" : "PENDING_SURVEY"
-                        };
-                    }
-                }
-
-                // Push to the survey_results node
-                db.ref('survey_results').update(surveyData).then(() => {
-                    const el = document.getElementById('sStatus');
-                    el.className = "status-box status-success";
-                    el.innerText = `✓ ${Object.keys(surveyData).length} Seats Initialized`;
-                    log(`SUCCESS: Initialized ${Object.keys(surveyData).length} seats in RTDBMS.`);
-                });
-
-            } catch (err) {
-                log(`ERROR: Failed to parse TSV. Ensure it is tab-separated.`);
-                console.error(err);
+            const lines = e.target.result.split('\n');
+            const surveyData = {};
+            for (let i = 1; i < lines.length; i++) {
+                const [id, x, y] = lines[i].trim().split('\t');
+                if (id) surveyData[id] = { x: x || "", y: y || "", status: "INITIALIZED" };
             }
+            db.ref('survey_results').update(surveyData).then(() => {
+                const el = document.getElementById('sStatus');
+                el.className = "status-box status-success";
+                el.innerText = `✓ ${Object.keys(surveyData).length} Seats Ready`;
+            });
         };
         reader.readAsText(file);
     }
 
     async function downloadSeatConfig() {
-        log("ACTION: Generating seat_config.tsv...");
-
-        // 1. Fetch the survey results from RTDB
         const snapshot = await db.ref('survey_results').once('value');
         const results = snapshot.val();
+        if (!results) return alert("No survey data to download.");
 
-        if (!results) {
-            alert("No survey data found in the database.");
-            return;
-        }
-
-        let tsvContent = "id\tx\ty\n"; // Header row for TSV
-        let hasBlankValues = false;
-
-        // 2. Iterate through all recorded seats
-        Object.keys(results).forEach(seatId => {
-            const data = results[seatId];
-            const x = data.x !== undefined && data.x !== null ? data.x : "";
-            const y = data.y !== undefined && data.y !== null ? data.y : "";
-
-            // Check if this specific seat is incomplete
-            if (x === "" || y === "") {
-                hasBlankValues = true;
-            }
-
-            tsvContent += `${seatId}\t${x}\t${y}\n`;
+        let tsvContent = "id\tx\ty\n";
+        let hasBlank = false;
+        Object.keys(results).forEach(id => {
+            const r = results[id];
+            if (r.x === "" || r.y === "") hasBlank = true;
+            tsvContent += `${id}\t${r.x}\t${r.y}\n`;
         });
 
-        // 3. Alert the operator if data is incomplete
-        if (hasBlankValues) {
-            alert("⚠️ Warning: Some seats in this export have blank X or Y values. The survey may be incomplete.");
-        }
+        if (hasBlank) alert("Warning: Some seats have no XY data. Survey incomplete.");
 
-        // 4. Trigger the download
         const blob = new Blob([tsvContent], { type: 'text/tab-separated-values' });
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = url;
-        link.download = `seat_config_${new Date().toISOString().split('T')[0]}.tsv`;
-        document.body.appendChild(link);
+        link.download = `seat_config_${Date.now()}.tsv`;
         link.click();
-        document.body.removeChild(link);
+    }
 
-        log(`SUCCESS: Downloaded config for ${Object.keys(results).length} seats.`);
+    // 3. CORE SYSTEM FUNCTIONS
+    function handleFile(input, path, statusId) {
+        const file = input.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const data = JSON.parse(e.target.result);
+            db.ref(path).set(data).then(() => {
+                const el = document.getElementById(statusId);
+                el.className = "status-box status-success";
+                el.innerText = `✓ ${file.name} Uploaded`;
+                log(`UPLOAD: ${path} updated.`);
+            });
+        };
+        reader.readAsText(file);
     }
 
     function sendKillSignal() {
-        db.ref('show/currentCue').set({ type: 'SYSTEM', action: 'KILL', triggerTime: Date.now() })
-            .then(() => log("COMMAND: Sent Global Kill Signal."));
+        db.ref('show/currentCue').set({ type: 'SYSTEM', action: 'KILL', triggerTime: Date.now() });
+        log("COMMAND: Global Kill Signal sent.");
     }
 
     async function purgeDevices() {
         if (confirm("Reset patron device registry?")) {
             await db.ref('devices').remove();
-            log("ACTION: Patron registry cleared.");
+            log("ACTION: Devices cleared.");
         }
     }
 
     async function purgeEverything() {
-        if (confirm("WARNING: This will wipe ALL show data from the cloud. Proceed?")) {
+        if (confirm("Wipe all cloud data? This cannot be undone.")) {
             await db.ref('/').remove();
-            log("ACTION: DATABASE FULL PURGE COMPLETE.");
             location.reload();
         }
     }
 
     function log(msg) {
-        const logBox = document.getElementById('log');
-        logBox.innerHTML += `<div>[${new Date().toLocaleTimeString()}] ${msg}</div>`;
-        logBox.scrollTop = logBox.scrollHeight;
+        const box = document.getElementById('log');
+        box.innerHTML += `<div>[${new Date().toLocaleTimeString()}] ${msg}</div>`;
+        box.scrollTop = box.scrollHeight;
     }
 </script>
+
 </body>
 </html>
