@@ -80,12 +80,17 @@ leaves to reset for the next performance.
                     <div id="pStatus" class="status-box">Ready</div>
                 </div>
                 <div>
-                    <label>2. Cues (.json)</label>
+                    <label>2. Upload Seat List (.json)</label>
+                    <input type="file" id="sPicker" accept=".tsv" onchange="handleTSVUpload(this)">
+                    <div id="sStatus" class="status-box">Ready</div>
+                </div>
+                <div>
+                    <label>3. Cues (.json)</label>
                     <input type="file" id="cPicker" accept=".json" onchange="handleFile(this, 'show/script', 'cStatus')">
                     <div id="cStatus" class="status-box">Ready</div>
                 </div>
                 <div>
-                    <label>3. Timeline (.json)</label>
+                    <label>4. Timeline (.json)</label>
                     <input type="file" id="tPicker" accept=".json" onchange="handleFile(this, 'show/timeline', 'tStatus')">
                     <div id="tStatus" class="status-box">Ready</div>
                 </div>
@@ -184,6 +189,50 @@ leaves to reset for the next performance.
 
             map.appendChild(dot); map.appendChild(label);
         });
+    }
+
+    function handleTSVUpload(input) {
+        const file = input.files[0];
+        if (!file) return;
+
+        log(`Processing Seat List: ${file.name}`);
+        const reader = new FileReader();
+
+        reader.onload = (e) => {
+            try {
+                const lines = e.target.result.split('\n');
+                const surveyData = {};
+
+                // Assume first line is header: id	x	y
+                // Start loop at 1 to skip header
+                for (let i = 1; i < lines.length; i++) {
+                    const line = lines[i].trim();
+                    if (!line) continue;
+
+                    const [id, x, y] = line.split('\t');
+                    if (id) {
+                        surveyData[id] = {
+                            x: x || "", // Keep blank if not provided
+                            y: y || "",
+                            status: (x && y) ? "PRE-CONFIGURED" : "PENDING_SURVEY"
+                        };
+                    }
+                }
+
+                // Push to the survey_results node
+                db.ref('survey_results').update(surveyData).then(() => {
+                    const el = document.getElementById('sStatus');
+                    el.className = "status-box status-success";
+                    el.innerText = `✓ ${Object.keys(surveyData).length} Seats Initialized`;
+                    log(`SUCCESS: Initialized ${Object.keys(surveyData).length} seats in RTDBMS.`);
+                });
+
+            } catch (err) {
+                log(`ERROR: Failed to parse TSV. Ensure it is tab-separated.`);
+                console.error(err);
+            }
+        };
+        reader.readAsText(file);
     }
 
     async function downloadSeatConfig() {
