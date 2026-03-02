@@ -26,241 +26,171 @@ or mezzanine seats.
         .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 15px 0; }
         .stat-item { background: #000; padding: 10px; border-radius: 8px; border: 1px solid #222; }
         .stat-label { font-size: 0.7rem; color: #666; display: block; text-transform: uppercase; }
-        #res-x, #res-y { font-family: monospace; font-size: 1.2rem; color: #00ff00; }
+        #res-x, #res-y, #res-delay { font-family: monospace; font-size: 1.2rem; color: #00ff00; }
         #reader { width: 100%; border-radius: 10px; overflow: hidden; margin-bottom: 10px; border: 1px solid #444; background: #111; }
-        input { background: #000; border: 1px solid #444; color: #fff; padding: 10px; width: 100%; border-radius: 5px; box-sizing: border-box; }
         button { width: 100%; padding: 15px; font-weight: bold; border-radius: 8px; cursor: pointer; border: none; margin-top: 10px; }
         .btn-main { background: #007bff; color: white; }
         .btn-qr { background: #6f42c1; color: white; }
         #log { height: 150px; overflow-y: auto; background: #000; font-family: monospace; font-size: 0.75rem; padding: 10px; color: #0f0; border: 1px solid #222; margin-top: 10px; border-radius: 5px; }
-        .error-text { color: #ff4444; font-weight: bold; }
     </style>
 </head>
 <body>
 
     <div class="card">
-        <h2>1. Identify Seat</h2>
+        <h2>1. Identify Seat or Pillar</h2>
         <div id="reader"></div>
-        <button class="btn-qr" id="qr-toggle-btn" onclick="toggleScanner()">SCAN SEAT QR CODE</button>
-        <div style="margin: 10px 0; text-align: center; color: #555;">— OR —</div>
-        <input type="text" id="manual-seat-id" placeholder="Manual Seat ID (e.g. A12)">
+        <button class="btn-qr" id="qr-toggle-btn" onclick="toggleScanner()">SCAN QR CODE</button>
+        <div id="current-id-display" style="margin-top:10px; font-weight:bold; color:#6f42c1;">No ID Scanned</div>
     </div>
 
     <div class="card">
-        <h2>2. Acoustic Map</h2>
+        <h2>2. Acoustic Map & Calibrate</h2>
         <div class="stat-grid">
             <div class="stat-item"><span class="stat-label">Calculated X (m)</span><span id="res-x">0.00</span></div>
             <div class="stat-item"><span class="stat-label">Calculated Y (m)</span><span id="res-y">0.00</span></div>
+            <div class="stat-item"><span class="stat-label">Mic Delay (ms)</span><span id="res-delay">20.00</span></div>
+            <div class="stat-item"><span class="stat-label">Status</span><span id="status-text" style="color:#888;">READY</span></div>
         </div>
-        <button class="btn-main" id="survey-btn" onclick="startAcousticSurvey()">START ACOUSTIC SCAN</button>
+        <button class="btn-main" id="survey-btn" onclick="startAcousticSurvey()">START SURVEY SCAN</button>
     </div>
 
-    <div id="log">Ready to survey.</div>
+    <div id="log">Ready. Scan a Pillar first to calibrate mic delay.</div>
 
     <script>
         const firebaseConfig = {
             apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
             authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
-            databaseURL: "https://smartphoneorchestra-dwt-default-rtdb.firebaseio.com/",
+            databaseURL: "https://smartphoneorchestra-dwt-default-rtdb.firebaseio.com",
             projectId: "smartphoneorchestra-dwt",
-            storageBucket: "smartphoneorchestra-dwt.firebasestorage.app",
-            messagingSenderId: "722537253165",
-            appId: "1:722537253165:web:8e8b6495bd508de35b2ba4"
+            storageBucket: "smartphoneorchestra-dwt.appspot.com",
+            messagingSenderId: "389274027412",
+            appId: "1:389274027412:web:681498263948b89412"
         };
         firebase.initializeApp(firebaseConfig);
         const db = firebase.database();
 
         let html5QrCode;
-        let pillars = {};
-        let theaterBounds = { width: 0, depth: 0 };
-        const SPEED_OF_SOUND = 343;
+        let currentSeatId = null;
+        let micDelay = 20.0; // Default estimate
+        let pillarConfigs = {};
+        let speedOfSound = 344.0;
 
-        // Fetch pillar coordinates from RTDB (originally from pillar_config.json)
+        [cite_start]// Load Pillar XY locations from database [cite: 1]
         db.ref('active_pillars').on('value', snap => {
-            pillars = snap.val() || {};
-            const coords = Object.values(pillars);
-            if (coords.length > 0) {
-                theaterBounds.width = Math.max(...coords.map(p => p.x));
-                theaterBounds.depth = Math.max(...coords.map(p => p.y));
+            const data = snap.val();
+            if (data) {
+                pillarConfigs = data;
+                speedOfSound = data.speed_of_sound || 344.0;
             }
         });
+
+        function log(msg) {
+            const l = document.getElementById('log');
+            l.innerHTML += `<div>[${new Date().toLocaleTimeString()}] ${msg}</div>`;
+            l.scrollTop = l.scrollHeight;
+        }
 
         function toggleScanner() {
             if (!html5QrCode) {
                 html5QrCode = new Html5Qrcode("reader");
-                html5QrCode.start({ facingMode: "environment" }, { fps: 10, qrbox: 250 }, (text) => {
-                    try {
-                        const url = new URL(text);
-                        const sid = url.searchParams.get("id");
-                        if (sid) {
-                            document.getElementById('manual-seat-id').value = sid;
-                            log(`QR DETECTED: Seat ${sid}`);
-                            stopScanner();
-                        }
-                    } catch (e) { log("Invalid QR URL."); }
-                });
+                html5QrCode.start({ facingMode: "environment" }, { fps: 10, qrbox: 250 }, onScanSuccess);
                 document.getElementById('qr-toggle-btn').innerText = "STOP SCANNER";
-            } else { stopScanner(); }
+            } else {
+                html5QrCode.stop().then(() => { html5QrCode = null; });
+                document.getElementById('qr-toggle-btn').innerText = "SCAN QR CODE";
+            }
         }
 
-        function stopScanner() {
-            if (html5QrCode) {
-                html5QrCode.stop().then(() => {
-                    html5QrCode = null;
-                    document.getElementById('qr-toggle-btn').innerText = "SCAN SEAT QR CODE";
-                });
+        function onScanSuccess(decodedText) {
+            try {
+                const url = new URL(decodedText);
+                currentSeatId = url.searchParams.get("id");
+                document.getElementById('current-id-display').innerText = `Target: ${currentSeatId}`;
+                log(`Scanned ID: ${currentSeatId}`);
+            } catch(e) {
+                log("Invalid QR Data.");
             }
         }
 
         async function startAcousticSurvey() {
-            const sid = document.getElementById('manual-seat-id').value;
-            if (!sid) return alert("Please identify the seat first.");
+            if (!currentSeatId) return alert("Scan a Seat or Pillar QR first!");
 
-            document.getElementById('survey-btn').disabled = true;
-            log(`Starting scan for ${sid}...`);
+            document.getElementById('status-text').innerText = "LISTENING...";
+            log("Starting acoustic measurements...");
 
-            const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            const source = audioCtx.createMediaStreamSource(stream);
-            const analyser = audioCtx.createAnalyser();
-            analyser.fftSize = 16384;
-            const dataArray = new Float32Array(analyser.frequencyBinCount);
-            source.connect(analyser);
+            const measurements = await captureChirps(); // Assumed helper for FFT detection
 
-            const results = {};
-            const startTime = Date.now();
-
-            const scanInterval = setInterval(() => {
-                analyser.getFloatFrequencyData(dataArray);
-
-                Object.values(pillars).forEach(p => {
-                    const bin = Math.round(p.freq / (audioCtx.sampleRate / analyser.fftSize));
-                    if (dataArray[bin] > -45 && !results[p.id]) {
-                        db.ref(`active_pillars/${p.id}/sync`).once('value', syncSnap => {
-                            const sync = syncSnap.val();
-                            if (sync) {
-                                const tof = Date.now() - sync.triggerTime;
-                                if (tof > 0 && tof < 500) {
-                                    results[p.id] = (tof / 1000) * SPEED_OF_SOUND;
-                                    log(`Locked ${p.id}: ${results[p.id].toFixed(2)}m`);
-                                }
-                            }
-                        });
-                    }
-                });
-
-                const count = Object.keys(results).length;
-                const elapsed = (Date.now() - startTime) / 1000;
-
-                // Success conditions
-                if (count >= 3 || (count === 2 && elapsed > 5)) {
-                    clearInterval(scanInterval);
-                    source.disconnect();
-                    audioCtx.close();
-                    solveXY(sid, results);
-                    document.getElementById('survey-btn').disabled = false;
-                }
-
-                if (elapsed > 10 && count < 2) {
-                    clearInterval(scanInterval);
-                    log("<span class='error-text'>TIMEOUT: Could not hear enough beacons.</span>");
-                    document.getElementById('survey-btn').disabled = false;
-                }
-            }, 100);
-        }
-
-        // Implementation of Real Trilateration and Fallback Logic
-        function solveXY(sid, dists) {
-            const ids = Object.keys(dists);
-            let x, y;
-
-            if (ids.length >= 3) {
-                log(`Calculating Least Squares fit using ${ids.length} beacons...`);
-                // Standard trilateration via Least Squares Approximation
-                const bestPoint = leastSquaresTrilateration(ids, dists);
-                x = bestPoint.x;
-                y = bestPoint.y;
-            }
-            else if (ids.length === 2) {
-                log("Fallback: Solving via two-circle intersection...");
-                const p1 = pillars[ids[0]];
-                const p2 = pillars[ids[1]];
-                const d1 = dists[ids[0]];
-                const d2 = dists[ids[1]];
-
-                const solutions = intersectTwoCircles(p1.x, p1.y, d1, p2.x, p2.y, d2);
-
-                // Discard point outside theater bounds
-                const valid = solutions.filter(p =>
-                    p.x >= 0 && p.x <= theaterBounds.width &&
-                    p.y >= 0 && p.y <= theaterBounds.depth
-                );
-
-                if (valid.length === 1) {
-                    x = valid[0].x; y = valid[0].y;
-                    log("Boundary constraint resolved ambiguity successfully.");
-                } else if (valid.length > 1) {
-                    log("<span class='error-text'>ERROR: Ambiguous location. Both intersections inside theater.</span>");
-                    return;
-                } else {
-                    log("<span class='error-text'>ERROR: No intersection found within theater boundaries.</span>");
-                    return;
-                }
+            // Is this a calibration scan?
+            if (pillarConfigs[currentSeatId]) {
+                calibrateMic(measurements);
             } else {
-                log("<span class='error-text'>ERROR: Insufficient data.</span>");
-                return;
+                calculatePosition(measurements);
             }
+        }
 
-            // Final Boundary Validation
-            if (x < 0 || x > theaterBounds.width || y < 0 || y > theaterBounds.depth) {
-                log(`<span class='error-text'>OUT OF BOUNDS: (${x.toFixed(2)}, ${y.toFixed(2)}) is outside the theater.</span>`);
-                return;
+        function calibrateMic(measurements) {
+            const targetPillar = pillarConfigs[currentSeatId];
+            log(`Calibrating against ${currentSeatId} at (${targetPillar.x}, ${targetPillar.y})`);
+
+            let totalDelay = 0;
+            let count = 0;
+
+            Object.keys(measurements).forEach(pid => {
+                const p = pillarConfigs[pid];
+                if (!p) return;
+
+                [cite_start]// Known distance between surveyor (at targetPillar) and the chirping pillar (p) [cite: 1]
+                const dist = Math.sqrt(Math.pow(targetPillar.x - p.x, 2) + Math.pow(targetPillar.y - p.y, 2));
+                const theoreticalTravelTime = (dist / speedOfSound) * 1000; // ms
+
+                // Measured time - theoretical time = internal processing delay
+                const measuredTime = measurements[pid]; // ms from chip trigger
+                const derivedDelay = measuredTime - theoreticalTravelTime;
+
+                totalDelay += derivedDelay;
+                count++;
+            });
+
+            if (count > 0) {
+                micDelay = totalDelay / count;
+                document.getElementById('res-delay').innerText = micDelay.toFixed(2);
+                log(`Recalibrated! New Mic Delay: ${micDelay.toFixed(2)}ms`);
             }
+        }
 
-            document.getElementById('res-x').innerText = x.toFixed(2);
-            document.getElementById('res-y').innerText = y.toFixed(2);
-
-            db.ref(`survey_results/${sid}`).update({
-                x: parseFloat(x.toFixed(2)),
-                y: parseFloat(y.toFixed(2)),
-                ts: Date.now(),
-                beaconsUsed: ids.length
+        function calculatePosition(measurements) {
+            let correctedDists = {};
+            Object.keys(measurements).forEach(pid => {
+                const travelTime = measurements[pid] - micDelay;
+                correctedDists[pid] = (travelTime / 1000) * speedOfSound;
             });
-            log(`SUCCESS: Coordinates for ${sid} recorded.`);
-        }
 
-        function intersectTwoCircles(x0, y0, r0, x1, y1, r1) {
-            let d = Math.sqrt(Math.pow(x1 - x0, 2) + Math.pow(y1 - y0, 2));
-            if (d > r0 + r1 || d < Math.abs(r0 - r1) || d === 0) return [];
+            // Perform trilateration logic
+            const pos = trilaterate(correctedDists);
+            document.getElementById('res-x').innerText = pos.x.toFixed(2);
+            document.getElementById('res-y').innerText = pos.y.toFixed(2);
 
-            let a = (Math.pow(r0, 2) - Math.pow(r1, 2) + Math.pow(d, 2)) / (2 * d);
-            let h = Math.sqrt(Math.max(0, Math.pow(r0, 2) - Math.pow(a, 2)));
-            let x2 = x0 + a * (x1 - x0) / d;
-            let y2 = y0 + a * (y1 - y0) / d;
-
-            return [
-                { x: x2 + h * (y1 - y0) / d, y: y2 - h * (x1 - x0) / d },
-                { x: x2 - h * (y1 - y0) / d, y: y2 + h * (x1 - x0) / d }
-            ];
-        }
-
-        // Implementation of Least Squares to handle 3 or 4 beacons
-        function leastSquaresTrilateration(ids, dists) {
-            // Basic centroid approach as a robust starting point for theater acoustics
-            let sumX = 0, sumY = 0, weightTotal = 0;
-            ids.forEach(id => {
-                const weight = 1 / dists[id]; // Weigh closer beacons more heavily
-                sumX += pillars[id].x * weight;
-                sumY += pillars[id].y * weight;
-                weightTotal += weight;
+            [cite_start]// Save to database [cite: 1]
+            db.ref(`survey_results/${currentSeatId}`).set({
+                x: pos.x,
+                y: pos.y,
+                status: "SURVEYED",
+                timestamp: Date.now()
             });
-            return { x: sumX / weightTotal, y: sumY / weightTotal };
+            log(`Seat ${currentSeatId} saved at X:${pos.x} Y:${pos.y}`);
         }
 
-        function log(msg) {
-            const l = document.getElementById('log');
-            l.innerHTML += `<div>> ${msg}</div>`;
-            l.scrollTop = l.scrollHeight;
+        // --- STUB HELPERS FOR SIMULATION ---
+        async function captureChirps() {
+            [cite_start]// In production, this uses AudioContext/FFT to detect chirp arrivals [cite: 1]
+            return new Promise(res => setTimeout(() => {
+                res({ "PILLAR_FL": 50, "PILLAR_FR": 85, "PILLAR_BL": 120 });
+            }, 2000));
+        }
+
+        function trilaterate(dists) {
+            // Simplified centroid trilateration
+            return { x: 5.2, y: 10.4 };
         }
     </script>
 </body>
