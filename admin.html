@@ -127,6 +127,16 @@ leaves to reset for the next performance.
             </div>
 
             <div id="map-container"></div>
+
+            <div class="card">
+                <h3>3. System Maintenance</h3>
+                <button class="btn btn-secondary" onclick="downloadDatabaseBackup()" style="width: 100%; margin-bottom: 10px;">
+                    DOWNLOAD FULL DB DUMP (.JSON)
+                </button>
+                <button class="btn btn-danger" onclick="purgeEverything()" style="width: 100%;">
+                    WIPE CLOUD DATABASE
+                </button>
+            </div>
         </div>
 
         <div class="section">
@@ -277,6 +287,35 @@ leaves to reset for the next performance.
             });
         };
         reader.readAsText(file);
+    }
+
+    async function downloadDatabaseBackup() {
+        log("MAINTENANCE: Requesting full database dump...");
+        try {
+            const snapshot = await db.ref('/').once('value');
+            const data = snapshot.val();
+
+            if (!data) {
+                log("ERROR: Database is empty.");
+                return;
+            }
+
+            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            a.href = url;
+            a.download = `orchestra_dump_${timestamp}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+
+            log("SUCCESS: Database dump downloaded.");
+        } catch (error) {
+            log(`ERROR: Dump failed - ${error.message}`);
+        }
     }
 
     function sendKillSignal() {
