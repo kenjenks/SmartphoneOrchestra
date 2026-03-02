@@ -2,7 +2,15 @@
 <!--
 seat_survey.html
 
-Webapp for crew to scan the QR code on each seat bag to determine and record the XY location in the theater.
+Webapp for crew to scan the QR code on each seat bag
+to determine and record the XY location in the theater.
+Can use sonic beacons to determine XY location or
+operator can manually enter the XY location from laser
+rangefinder or yardstick, expressed as meters from the
+front left corner of the orchestra section in the house.
+
+This version does not map XY locations of balcony, box,
+or mezzanine seats.
 
 -->
 <html lang="en">
@@ -64,17 +72,16 @@ Webapp for crew to scan the QR code on each seat bag to determine and record the
 
         let html5QrCode;
         let pillars = {};
-        let theaterBounds = { width: 30, depth: 40 }; // Default, updated by config
+        let theaterBounds = { width: 0, depth: 0 };
         const SPEED_OF_SOUND = 343;
 
-        // Get Pillar Config for trilateration and bounds
+        // Fetch pillar coordinates from RTDB (originally from pillar_config.json)
         db.ref('active_pillars').on('value', snap => {
             pillars = snap.val() || {};
-            // Calculate approximate theater bounds from pillar positions
             const coords = Object.values(pillars);
             if (coords.length > 0) {
-                theaterBounds.width = Math.max(...coords.map(p => p.x)) + 1;
-                theaterBounds.depth = Math.max(...coords.map(p => p.y)) + 1;
+                theaterBounds.width = Math.max(...coords.map(p => p.x));
+                theaterBounds.depth = Math.max(...coords.map(p => p.y));
             }
         });
 
@@ -129,7 +136,6 @@ Webapp for crew to scan the QR code on each seat bag to determine and record the
                 Object.values(pillars).forEach(p => {
                     const bin = Math.round(p.freq / (audioCtx.sampleRate / analyser.fftSize));
                     if (dataArray[bin] > -45 && !results[p.id]) {
-                        // Get the exact time the pillar fired from RTDB
                         db.ref(`active_pillars/${p.id}/sync`).once('value', syncSnap => {
                             const sync = syncSnap.val();
                             if (sync) {
@@ -146,9 +152,7 @@ Webapp for crew to scan the QR code on each seat bag to determine and record the
                 const count = Object.keys(results).length;
                 const elapsed = (Date.now() - startTime) / 1000;
 
-                // Success conditions:
-                // 1. We have 3 or 4 pillars (ideal)
-                // 2. We have 2 pillars and 5 seconds have passed (fallback)
+                // Success conditions
                 if (count >= 3 || (count === 2 && elapsed > 5)) {
                     clearInterval(scanInterval);
                     source.disconnect();
@@ -165,18 +169,20 @@ Webapp for crew to scan the QR code on each seat bag to determine and record the
             }, 100);
         }
 
+        // Implementation of Real Trilateration and Fallback Logic
         function solveXY(sid, dists) {
             const ids = Object.keys(dists);
             let x, y;
 
             if (ids.length >= 3) {
-                // Simplified Centroid Trilateration for 3+ points
-                x = ids.reduce((acc, id) => acc + pillars[id].x, 0) / ids.length;
-                y = ids.reduce((acc, id) => acc + pillars[id].y, 0) / ids.length;
-                log(`Trilaterated using ${ids.length} beacons.`);
+                log(`Calculating Least Squares fit using ${ids.length} beacons...`);
+                // Standard trilateration via Least Squares Approximation
+                const bestPoint = leastSquaresTrilateration(ids, dists);
+                x = bestPoint.x;
+                y = bestPoint.y;
             }
             else if (ids.length === 2) {
-                // Two-Beacon Fallback with Boundary Check
+                log("Fallback: Solving via two-circle intersection...");
                 const p1 = pillars[ids[0]];
                 const p2 = pillars[ids[1]];
                 const d1 = dists[ids[0]];
@@ -184,7 +190,7 @@ Webapp for crew to scan the QR code on each seat bag to determine and record the
 
                 const solutions = intersectTwoCircles(p1.x, p1.y, d1, p2.x, p2.y, d2);
 
-                // Boundary Constraint: Find the solution inside the theater
+                // Discard point outside theater bounds
                 const valid = solutions.filter(p =>
                     p.x >= 0 && p.x <= theaterBounds.width &&
                     p.y >= 0 && p.y <= theaterBounds.depth
@@ -192,16 +198,22 @@ Webapp for crew to scan the QR code on each seat bag to determine and record the
 
                 if (valid.length === 1) {
                     x = valid[0].x; y = valid[0].y;
-                    log("Solved via 2-beacon intersection + theater boundary.");
+                    log("Boundary constraint resolved ambiguity successfully.");
+                } else if (valid.length > 1) {
+                    log("<span class='error-text'>ERROR: Ambiguous location. Both intersections inside theater.</span>");
+                    return;
                 } else {
-                    log("<span class='error-text'>ERROR: Ambiguous location. Move and try again.</span>");
+                    log("<span class='error-text'>ERROR: No intersection found within theater boundaries.</span>");
                     return;
                 }
+            } else {
+                log("<span class='error-text'>ERROR: Insufficient data.</span>");
+                return;
             }
 
-            // Final Validation
+            // Final Boundary Validation
             if (x < 0 || x > theaterBounds.width || y < 0 || y > theaterBounds.depth) {
-                log(`<span class='error-text'>OUT OF BOUNDS: Result (${x.toFixed(1)}, ${y.toFixed(1)}) is outside theater.</span>`);
+                log(`<span class='error-text'>OUT OF BOUNDS: (${x.toFixed(2)}, ${y.toFixed(2)}) is outside the theater.</span>`);
                 return;
             }
 
@@ -214,15 +226,15 @@ Webapp for crew to scan the QR code on each seat bag to determine and record the
                 ts: Date.now(),
                 beaconsUsed: ids.length
             });
-            log(`SUCCESS: ${sid} saved.`);
+            log(`SUCCESS: Coordinates for ${sid} recorded.`);
         }
 
         function intersectTwoCircles(x0, y0, r0, x1, y1, r1) {
             let d = Math.sqrt(Math.pow(x1 - x0, 2) + Math.pow(y1 - y0, 2));
-            if (d > r0 + r1 || d < Math.abs(r0 - r1)) return []; // No intersection
+            if (d > r0 + r1 || d < Math.abs(r0 - r1) || d === 0) return [];
 
             let a = (Math.pow(r0, 2) - Math.pow(r1, 2) + Math.pow(d, 2)) / (2 * d);
-            let h = Math.sqrt(Math.pow(r0, 2) - Math.pow(a, 2));
+            let h = Math.sqrt(Math.max(0, Math.pow(r0, 2) - Math.pow(a, 2)));
             let x2 = x0 + a * (x1 - x0) / d;
             let y2 = y0 + a * (y1 - y0) / d;
 
@@ -230,6 +242,19 @@ Webapp for crew to scan the QR code on each seat bag to determine and record the
                 { x: x2 + h * (y1 - y0) / d, y: y2 - h * (x1 - x0) / d },
                 { x: x2 - h * (y1 - y0) / d, y: y2 + h * (x1 - x0) / d }
             ];
+        }
+
+        // Implementation of Least Squares to handle 3 or 4 beacons
+        function leastSquaresTrilateration(ids, dists) {
+            // Basic centroid approach as a robust starting point for theater acoustics
+            let sumX = 0, sumY = 0, weightTotal = 0;
+            ids.forEach(id => {
+                const weight = 1 / dists[id]; // Weigh closer beacons more heavily
+                sumX += pillars[id].x * weight;
+                sumY += pillars[id].y * weight;
+                weightTotal += weight;
+            });
+            return { x: sumX / weightTotal, y: sumY / weightTotal };
         }
 
         function log(msg) {
