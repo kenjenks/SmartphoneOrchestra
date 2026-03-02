@@ -16,47 +16,67 @@ or mezzanine seats.
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Orchestra Surveyor: Production</title>
+    <title>SmartphoneOrchestra Surveyor</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <script src="https://unpkg.com/html5-qrcode"></script>
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #000; color: #fff; padding: 20px; margin: 0; }
         .card { background: #1a1a1a; border-radius: 15px; padding: 20px; border: 1px solid #333; margin-bottom: 15px; }
+
+        /* Pillar Status Lights */
+        .pillar-monitor { display: flex; justify-content: space-between; margin-bottom: 15px; background: #000; padding: 10px; border-radius: 8px; border: 1px solid #444; }
+        .pillar-led { text-align: center; flex: 1; }
+        .led-dot { width: 12px; height: 12px; background: #400; border-radius: 50%; display: inline-block; margin-bottom: 5px; box-shadow: 0 0 5px rgba(0,0,0,1); transition: background 0.2s, box-shadow 0.2s; }
+        .led-dot.active { background: #0f0; box-shadow: 0 0 10px #0f0; }
+        .led-dot.inactive { background: #f00; box-shadow: 0 0 10px #f00; }
+        .pillar-label { font-size: 0.6rem; color: #888; display: block; }
+
         .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 15px 0; }
         .stat-item { background: #000; padding: 10px; border-radius: 8px; border: 1px solid #222; }
         .stat-label { font-size: 0.7rem; color: #666; display: block; text-transform: uppercase; }
-        #res-x, #res-y, #res-delay { font-family: monospace; font-size: 1.2rem; color: #00ff00; }
+        #res-x, #res-y, #res-delay, #cur-x, #cur-y { font-family: monospace; font-size: 1.2rem; color: #00ff00; }
+
         #reader { width: 100%; border-radius: 10px; overflow: hidden; margin-bottom: 10px; border: 1px solid #444; background: #111; }
         button { width: 100%; padding: 15px; font-weight: bold; border-radius: 8px; cursor: pointer; border: none; margin-top: 10px; }
         .btn-main { background: #007bff; color: white; }
         .btn-qr { background: #6f42c1; color: white; }
-        #log { height: 150px; overflow-y: auto; background: #000; font-family: monospace; font-size: 0.75rem; padding: 10px; color: #0f0; border: 1px solid #222; margin-top: 10px; border-radius: 5px; }
+        #log { height: 120px; overflow-y: auto; background: #000; font-family: monospace; font-size: 0.75rem; padding: 10px; color: #0f0; border: 1px solid #222; margin-top: 10px; border-radius: 5px; }
     </style>
 </head>
 <body>
 
     <div class="card">
-        <h2>1. Identify Seat or Pillar</h2>
+        <h2>1. Identify Target (Seat/Pillar)</h2>
         <div id="reader"></div>
         <button class="btn-qr" id="qr-toggle-btn" onclick="toggleScanner()">SCAN QR CODE</button>
-        <div id="current-id-display" style="margin-top:10px; font-weight:bold; color:#6f42c1;">No ID Scanned</div>
+        <div id="current-id-display" style="margin-top:10px; font-weight:bold; color:#6f42c1; text-align:center;">No ID Scanned</div>
     </div>
 
     <div class="card">
-        <h2>2. Acoustic Map & Calibrate</h2>
-        <div class="stat-grid">
-            <div class="stat-item"><span class="stat-label">Calculated X (m)</span><span id="res-x">0.00</span></div>
-            <div class="stat-item"><span class="stat-label">Calculated Y (m)</span><span id="res-y">0.00</span></div>
-            <div class="stat-item"><span class="stat-label">Mic Delay (ms)</span><span id="res-delay">20.00</span></div>
-            <div class="stat-item"><span class="stat-label">Status</span><span id="status-text" style="color:#888;">READY</span></div>
+        <h2>2. Acoustic Environment & XY</h2>
+
+        <div class="pillar-monitor">
+            <div class="pillar-led"><div id="led-PILLAR_FL" class="led-dot"></div><span class="pillar-label">FL</span></div>
+            <div class="pillar-led"><div id="led-PILLAR_FR" class="led-dot"></div><span class="pillar-label">FR</span></div>
+            <div class="pillar-led"><div id="led-PILLAR_BL" class="led-dot"></div><span class="pillar-label">BL</span></div>
+            <div class="pillar-led"><div id="led-PILLAR_BR" class="led-dot"></div><span class="pillar-label">BR</span></div>
         </div>
+
+        <div class="stat-grid">
+            <div class="stat-item"><span class="stat-label">Device X (m)</span><span id="cur-x">?</span></div>
+            <div class="stat-item"><span class="stat-label">Device Y (m)</span><span id="cur-y">?</span></div>
+            <div class="stat-item"><span class="stat-label">Mic Delay (ms)</span><span id="res-delay">20.00</span></div>
+            <div class="stat-item"><span class="stat-label">Status</span><span id="status-text" style="color:#888;">IDLE</span></div>
+        </div>
+
         <button class="btn-main" id="survey-btn" onclick="startAcousticSurvey()">START SURVEY SCAN</button>
     </div>
 
-    <div id="log">Ready. Scan a Pillar first to calibrate mic delay.</div>
+    <div id="log">Ready. Scan a Pillar first to calibrate.</div>
 
     <script>
+        // Firebase Config (Replace with your actual keys)
         const firebaseConfig = {
             apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
             authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
@@ -71,11 +91,12 @@ or mezzanine seats.
 
         let html5QrCode;
         let currentSeatId = null;
-        let micDelay = 20.0; // Default estimate
+        let micDelay = 20.0;
         let pillarConfigs = {};
         let speedOfSound = 344.0;
+        let deviceXY = { x: null, y: null };
 
-        [cite_start]// Load Pillar XY locations from database [cite: 1]
+        // Real-time listener for Pillar positions
         db.ref('active_pillars').on('value', snap => {
             const data = snap.val();
             if (data) {
@@ -88,6 +109,19 @@ or mezzanine seats.
             const l = document.getElementById('log');
             l.innerHTML += `<div>[${new Date().toLocaleTimeString()}] ${msg}</div>`;
             l.scrollTop = l.scrollHeight;
+        }
+
+        function updatePillarLights(measurements) {
+            // Set all to inactive first
+            ["PILLAR_FL", "PILLAR_FR", "PILLAR_BL", "PILLAR_BR"].forEach(id => {
+                document.getElementById(`led-${id}`).className = "led-dot inactive";
+            });
+
+            // Light up those we actually heard
+            Object.keys(measurements).forEach(id => {
+                const led = document.getElementById(`led-${id}`);
+                if (led) led.className = "led-dot active";
+            });
         }
 
         function toggleScanner() {
@@ -105,92 +139,82 @@ or mezzanine seats.
             try {
                 const url = new URL(decodedText);
                 currentSeatId = url.searchParams.get("id");
-                document.getElementById('current-id-display').innerText = `Target: ${currentSeatId}`;
-                log(`Scanned ID: ${currentSeatId}`);
-            } catch(e) {
-                log("Invalid QR Data.");
-            }
+                document.getElementById('current-id-display').innerText = `TARGET: ${currentSeatId}`;
+                log(`Locked Target: ${currentSeatId}`);
+            } catch(e) { log("Invalid QR."); }
         }
 
         async function startAcousticSurvey() {
             if (!currentSeatId) return alert("Scan a Seat or Pillar QR first!");
 
-            document.getElementById('status-text').innerText = "LISTENING...";
-            log("Starting acoustic measurements...");
+            document.getElementById('status-text').innerText = "LISTENING";
+            log("Opening microphone...");
 
-            const measurements = await captureChirps(); // Assumed helper for FFT detection
+            // captureChirps returns an object: { pillarId: arrivalTimeMs }
+            const measurements = await captureChirps();
+            updatePillarLights(measurements);
 
-            // Is this a calibration scan?
             if (pillarConfigs[currentSeatId]) {
-                calibrateMic(measurements);
+                calibrateDevice(measurements);
             } else {
-                calculatePosition(measurements);
+                surveySeat(measurements);
             }
+            document.getElementById('status-text').innerText = "DONE";
         }
 
-        function calibrateMic(measurements) {
-            const targetPillar = pillarConfigs[currentSeatId];
-            log(`Calibrating against ${currentSeatId} at (${targetPillar.x}, ${targetPillar.y})`);
+        function calibrateDevice(measurements) {
+            const pLoc = pillarConfigs[currentSeatId];
+            deviceXY = { x: pLoc.x, y: pLoc.y }; // Device is physically at this pillar
 
-            let totalDelay = 0;
-            let count = 0;
+            document.getElementById('cur-x').innerText = deviceXY.x.toFixed(2);
+            document.getElementById('cur-y').innerText = deviceXY.y.toFixed(2);
 
+            let delays = [];
             Object.keys(measurements).forEach(pid => {
+                if (pid === currentSeatId) return; // Don't calibrate against yourself
                 const p = pillarConfigs[pid];
                 if (!p) return;
 
-                [cite_start]// Known distance between surveyor (at targetPillar) and the chirping pillar (p) [cite: 1]
-                const dist = Math.sqrt(Math.pow(targetPillar.x - p.x, 2) + Math.pow(targetPillar.y - p.y, 2));
-                const theoreticalTravelTime = (dist / speedOfSound) * 1000; // ms
-
-                // Measured time - theoretical time = internal processing delay
-                const measuredTime = measurements[pid]; // ms from chip trigger
-                const derivedDelay = measuredTime - theoreticalTravelTime;
-
-                totalDelay += derivedDelay;
-                count++;
+                const dist = Math.sqrt(Math.pow(deviceXY.x - p.x, 2) + Math.pow(deviceXY.y - p.y, 2));
+                const theoreticalTime = (dist / speedOfSound) * 1000;
+                delays.push(measurements[pid] - theoreticalTime);
             });
 
-            if (count > 0) {
-                micDelay = totalDelay / count;
+            if (delays.length > 0) {
+                micDelay = delays.reduce((a, b) => a + b) / delays.length;
                 document.getElementById('res-delay').innerText = micDelay.toFixed(2);
-                log(`Recalibrated! New Mic Delay: ${micDelay.toFixed(2)}ms`);
+                log(`RECALIBRATED: Mic delay is ${micDelay.toFixed(2)}ms`);
             }
         }
 
-        function calculatePosition(measurements) {
-            let correctedDists = {};
+        function surveySeat(measurements) {
+            let dists = {};
             Object.keys(measurements).forEach(pid => {
                 const travelTime = measurements[pid] - micDelay;
-                correctedDists[pid] = (travelTime / 1000) * speedOfSound;
+                dists[pid] = (travelTime / 1000) * speedOfSound;
             });
 
-            // Perform trilateration logic
-            const pos = trilaterate(correctedDists);
-            document.getElementById('res-x').innerText = pos.x.toFixed(2);
-            document.getElementById('res-y').innerText = pos.y.toFixed(2);
+            const pos = trilaterate(dists);
 
-            [cite_start]// Save to database [cite: 1]
             db.ref(`survey_results/${currentSeatId}`).set({
-                x: pos.x,
-                y: pos.y,
-                status: "SURVEYED",
-                timestamp: Date.now()
+                x: pos.x, y: pos.y, status: "SURVEYED", timestamp: Date.now()
             });
-            log(`Seat ${currentSeatId} saved at X:${pos.x} Y:${pos.y}`);
+
+            log(`SAVED: Seat ${currentSeatId} at (${pos.x}, ${pos.y})`);
         }
 
-        // --- STUB HELPERS FOR SIMULATION ---
+        // --- MOCK ACOUSTIC LOGIC (Integrate your real FFT here) ---
         async function captureChirps() {
-            [cite_start]// In production, this uses AudioContext/FFT to detect chirp arrivals [cite: 1]
-            return new Promise(res => setTimeout(() => {
-                res({ "PILLAR_FL": 50, "PILLAR_FR": 85, "PILLAR_BL": 120 });
-            }, 2000));
+            return new Promise(res => {
+                setTimeout(() => {
+                    res({ "PILLAR_FL": 45, "PILLAR_FR": 78, "PILLAR_BL": 110 });
+                }, 1500);
+            });
         }
 
         function trilaterate(dists) {
-            // Simplified centroid trilateration
-            return { x: 5.2, y: 10.4 };
+            // Simplified return for prototype UI
+            return { x: 4.5, y: 12.2 };
         }
     </script>
 </body>
