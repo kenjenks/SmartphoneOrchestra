@@ -136,6 +136,7 @@ or mezzanine seats.
         }
 
         function onScanSuccess(decodedText) {
+            log(`Raw Scan: ${decodedText}`); // See exactly what was read
             try {
                 const url = new URL(decodedText);
                 currentSeatId = url.searchParams.get("id");
