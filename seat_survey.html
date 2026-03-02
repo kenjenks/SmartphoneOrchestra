@@ -11,6 +11,7 @@ Webapp for crew to scan the QR code on each seat bag to determine and record the
     <title>Orchestra Surveyor: Production</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
+    <script src="https://unpkg.com/html5-qrcode"></script>
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #000; color: #fff; padding: 20px; margin: 0; }
         .card { background: #1a1a1a; border-radius: 15px; padding: 20px; border: 1px solid #333; margin-bottom: 15px; }
@@ -18,46 +19,35 @@ Webapp for crew to scan the QR code on each seat bag to determine and record the
         .stat-item { background: #000; padding: 10px; border-radius: 8px; border: 1px solid #222; }
         .stat-label { font-size: 0.7rem; color: #666; display: block; text-transform: uppercase; }
         #res-x, #res-y { font-family: monospace; font-size: 1.2rem; color: #00ff00; }
-
-        input { background: #000; border: 1px solid #444; color: #fff; padding: 10px; width: 80%; border-radius: 5px; margin-top: 5px; }
-        .manual-ui { margin-top: 15px; padding-top: 15px; border-top: 1px dashed #333; display: none; }
-
+        #reader { width: 100%; border-radius: 10px; overflow: hidden; margin-bottom: 10px; border: 1px solid #444; background: #111; }
+        input { background: #000; border: 1px solid #444; color: #fff; padding: 10px; width: 100%; border-radius: 5px; box-sizing: border-box; }
         button { width: 100%; padding: 15px; font-weight: bold; border-radius: 8px; cursor: pointer; border: none; margin-top: 10px; }
         .btn-main { background: #007bff; color: white; }
-        .btn-alt { background: #333; color: #aaa; font-size: 0.8rem; }
-        .btn-save { background: #28a745; color: white; margin-top: 20px; }
-
-        #log { height: 100px; overflow-y: auto; background: #000; font-family: monospace; font-size: 0.75rem; padding: 10px; color: #0f0; border: 1px solid #222; margin-top: 10px; }
+        .btn-qr { background: #6f42c1; color: white; }
+        #log { height: 150px; overflow-y: auto; background: #000; font-family: monospace; font-size: 0.75rem; padding: 10px; color: #0f0; border: 1px solid #222; margin-top: 10px; border-radius: 5px; }
+        .error-text { color: #ff4444; font-weight: bold; }
     </style>
 </head>
 <body>
 
     <div class="card">
-        <h2 id="display-id">Identify Seat</h2>
-        <input type="text" id="manual-seat-id" placeholder="Enter Seat ID (e.g. A12)">
-        <button class="btn-alt" onclick="toggleManualXY()">QR/Beacons Failed?</button>
-
-        <div id="manual-xy-ui" class="manual-ui">
-            <p style="font-size: 0.8rem; color: #888;">Manual Entry (Laser Rangefinder mode)</p>
-            <div class="stat-grid">
-                <input type="number" id="manual-x" placeholder="X (meters)" step="0.01">
-                <input type="number" id="manual-y" placeholder="Y (meters)" step="0.01">
-            </div>
-            <button class="btn-save" onclick="saveManualData()">Save Manual XY</button>
-        </div>
+        <h2>1. Identify Seat</h2>
+        <div id="reader"></div>
+        <button class="btn-qr" id="qr-toggle-btn" onclick="toggleScanner()">SCAN SEAT QR CODE</button>
+        <div style="margin: 10px 0; text-align: center; color: #555;">— OR —</div>
+        <input type="text" id="manual-seat-id" placeholder="Manual Seat ID (e.g. A12)">
     </div>
 
-    <div id="acoustic-ui">
-        <div class="card">
-            <div class="stat-grid">
-                <div class="stat-item"><span class="stat-label">Calculated X</span><span id="res-x">0.00</span></div>
-                <div class="stat-item"><span class="stat-label">Calculated Y</span><span id="res-y">0.00</span></div>
-            </div>
-            <button class="btn-main" id="survey-btn" onclick="startAcousticSurvey()">Start Acoustic Scan</button>
+    <div class="card">
+        <h2>2. Acoustic Map</h2>
+        <div class="stat-grid">
+            <div class="stat-item"><span class="stat-label">Calculated X (m)</span><span id="res-x">0.00</span></div>
+            <div class="stat-item"><span class="stat-label">Calculated Y (m)</span><span id="res-y">0.00</span></div>
         </div>
+        <button class="btn-main" id="survey-btn" onclick="startAcousticSurvey()">START ACOUSTIC SCAN</button>
     </div>
 
-    <div id="log">Waiting for Seat ID...</div>
+    <div id="log">Ready to survey.</div>
 
     <script>
         const firebaseConfig = {
@@ -72,95 +62,174 @@ Webapp for crew to scan the QR code on each seat bag to determine and record the
         firebase.initializeApp(firebaseConfig);
         const db = firebase.database();
 
-        let audioCtx, analyser, dataArray;
-        let activeBeacons = [];
+        let html5QrCode;
+        let pillars = {};
+        let theaterBounds = { width: 30, depth: 40 }; // Default, updated by config
         const SPEED_OF_SOUND = 343;
 
-        // 1. Load active pillars from DB
+        // Get Pillar Config for trilateration and bounds
         db.ref('active_pillars').on('value', snap => {
-            const data = snap.val();
-            if (data) activeBeacons = Object.values(data);
+            pillars = snap.val() || {};
+            // Calculate approximate theater bounds from pillar positions
+            const coords = Object.values(pillars);
+            if (coords.length > 0) {
+                theaterBounds.width = Math.max(...coords.map(p => p.x)) + 1;
+                theaterBounds.depth = Math.max(...coords.map(p => p.y)) + 1;
+            }
         });
 
-        // 2. UI Toggles for Failed Hardware
-        function toggleManualXY() {
-            const ui = document.getElementById('manual-xy-ui');
-            ui.style.display = ui.style.display === 'block' ? 'none' : 'block';
-            document.getElementById('acoustic-ui').style.display = ui.style.display === 'block' ? 'none' : 'block';
+        function toggleScanner() {
+            if (!html5QrCode) {
+                html5QrCode = new Html5Qrcode("reader");
+                html5QrCode.start({ facingMode: "environment" }, { fps: 10, qrbox: 250 }, (text) => {
+                    try {
+                        const url = new URL(text);
+                        const sid = url.searchParams.get("id");
+                        if (sid) {
+                            document.getElementById('manual-seat-id').value = sid;
+                            log(`QR DETECTED: Seat ${sid}`);
+                            stopScanner();
+                        }
+                    } catch (e) { log("Invalid QR URL."); }
+                });
+                document.getElementById('qr-toggle-btn').innerText = "STOP SCANNER";
+            } else { stopScanner(); }
         }
 
-        function getSeatID() {
-            const urlParams = new URLSearchParams(window.location.search);
-            return document.getElementById('manual-seat-id').value || urlParams.get('id');
+        function stopScanner() {
+            if (html5QrCode) {
+                html5QrCode.stop().then(() => {
+                    html5QrCode = null;
+                    document.getElementById('qr-toggle-btn').innerText = "SCAN SEAT QR CODE";
+                });
+            }
         }
 
-        // 3. Manual Override Save
-        function saveManualData() {
-            const sid = getSeatID();
-            const mx = document.getElementById('manual-x').value;
-            const my = document.getElementById('manual-y').value;
-            if (!sid || !mx || !my) return alert("Fill all fields");
-
-            db.ref(`survey_results/${sid}`).set({ x: parseFloat(mx), y: parseFloat(my), method: 'manual', ts: Date.now() });
-            log(`MANUAL SAVE: ${sid} at ${mx}, ${my}`);
-        }
-
-        // 4. Production DSP Logic
         async function startAcousticSurvey() {
-            const sid = getSeatID();
-            if (!sid) return alert("Scan QR or enter Seat ID first");
+            const sid = document.getElementById('manual-seat-id').value;
+            if (!sid) return alert("Please identify the seat first.");
 
-            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            document.getElementById('survey-btn').disabled = true;
+            log(`Starting scan for ${sid}...`);
+
+            const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             const source = audioCtx.createMediaStreamSource(stream);
-
-            analyser = audioCtx.createAnalyser();
-            analyser.fftSize = 16384; // High resolution for precise frequency detection
-            dataArray = new Float32Array(analyser.frequencyBinCount);
+            const analyser = audioCtx.createAnalyser();
+            analyser.fftSize = 16384;
+            const dataArray = new Float32Array(analyser.frequencyBinCount);
             source.connect(analyser);
 
-            log(`Scanning for ${activeBeacons.length} beacons...`);
-            processAcousticData(sid);
-        }
-
-        function processAcousticData(sid) {
-            const distances = {};
+            const results = {};
+            const startTime = Date.now();
 
             const scanInterval = setInterval(() => {
                 analyser.getFloatFrequencyData(dataArray);
 
-                activeBeacons.forEach(beacon => {
-                    const bin = Math.round(beacon.freq / (audioCtx.sampleRate / analyser.fftSize));
-                    const magnitude = dataArray[bin];
-
-                    // Peak Detection: If the magnitude spikes above -50dB, we found a chirp
-                    if (magnitude > -50) {
-                        if (!distances[beacon.id]) {
-                            // Calculate distance based on peak arrival time relative to server clock
-                            // Note: Production TOF requires a sync-pulse, simplified here for XY solve
-                            distances[beacon.id] = true;
-                            log(`Detected Beacon: ${beacon.id}`);
-                        }
+                Object.values(pillars).forEach(p => {
+                    const bin = Math.round(p.freq / (audioCtx.sampleRate / analyser.fftSize));
+                    if (dataArray[bin] > -45 && !results[p.id]) {
+                        // Get the exact time the pillar fired from RTDB
+                        db.ref(`active_pillars/${p.id}/sync`).once('value', syncSnap => {
+                            const sync = syncSnap.val();
+                            if (sync) {
+                                const tof = Date.now() - sync.triggerTime;
+                                if (tof > 0 && tof < 500) {
+                                    results[p.id] = (tof / 1000) * SPEED_OF_SOUND;
+                                    log(`Locked ${p.id}: ${results[p.id].toFixed(2)}m`);
+                                }
+                            }
+                        });
                     }
                 });
 
-                if (Object.keys(distances).length >= 3) {
+                const count = Object.keys(results).length;
+                const elapsed = (Date.now() - startTime) / 1000;
+
+                // Success conditions:
+                // 1. We have 3 or 4 pillars (ideal)
+                // 2. We have 2 pillars and 5 seconds have passed (fallback)
+                if (count >= 3 || (count === 2 && elapsed > 5)) {
                     clearInterval(scanInterval);
-                    solveXY(sid);
+                    source.disconnect();
+                    audioCtx.close();
+                    solveXY(sid, results);
+                    document.getElementById('survey-btn').disabled = false;
                 }
-            }, 50);
+
+                if (elapsed > 10 && count < 2) {
+                    clearInterval(scanInterval);
+                    log("<span class='error-text'>TIMEOUT: Could not hear enough beacons.</span>");
+                    document.getElementById('survey-btn').disabled = false;
+                }
+            }, 100);
         }
 
-        function solveXY(sid) {
-            // Simplified trilateration solve
-            const x = (Math.random() * 10).toFixed(2);
-            const y = (Math.random() * 10).toFixed(2);
+        function solveXY(sid, dists) {
+            const ids = Object.keys(dists);
+            let x, y;
 
-            document.getElementById('res-x').innerText = x;
-            document.getElementById('res-y').innerText = y;
+            if (ids.length >= 3) {
+                // Simplified Centroid Trilateration for 3+ points
+                x = ids.reduce((acc, id) => acc + pillars[id].x, 0) / ids.length;
+                y = ids.reduce((acc, id) => acc + pillars[id].y, 0) / ids.length;
+                log(`Trilaterated using ${ids.length} beacons.`);
+            }
+            else if (ids.length === 2) {
+                // Two-Beacon Fallback with Boundary Check
+                const p1 = pillars[ids[0]];
+                const p2 = pillars[ids[1]];
+                const d1 = dists[ids[0]];
+                const d2 = dists[ids[1]];
 
-            db.ref(`survey_results/${sid}`).set({ x: parseFloat(x), y: parseFloat(y), method: 'acoustic', ts: Date.now() });
-            log(`SUCCESS: ${sid} solved via acoustics.`);
+                const solutions = intersectTwoCircles(p1.x, p1.y, d1, p2.x, p2.y, d2);
+
+                // Boundary Constraint: Find the solution inside the theater
+                const valid = solutions.filter(p =>
+                    p.x >= 0 && p.x <= theaterBounds.width &&
+                    p.y >= 0 && p.y <= theaterBounds.depth
+                );
+
+                if (valid.length === 1) {
+                    x = valid[0].x; y = valid[0].y;
+                    log("Solved via 2-beacon intersection + theater boundary.");
+                } else {
+                    log("<span class='error-text'>ERROR: Ambiguous location. Move and try again.</span>");
+                    return;
+                }
+            }
+
+            // Final Validation
+            if (x < 0 || x > theaterBounds.width || y < 0 || y > theaterBounds.depth) {
+                log(`<span class='error-text'>OUT OF BOUNDS: Result (${x.toFixed(1)}, ${y.toFixed(1)}) is outside theater.</span>`);
+                return;
+            }
+
+            document.getElementById('res-x').innerText = x.toFixed(2);
+            document.getElementById('res-y').innerText = y.toFixed(2);
+
+            db.ref(`survey_results/${sid}`).update({
+                x: parseFloat(x.toFixed(2)),
+                y: parseFloat(y.toFixed(2)),
+                ts: Date.now(),
+                beaconsUsed: ids.length
+            });
+            log(`SUCCESS: ${sid} saved.`);
+        }
+
+        function intersectTwoCircles(x0, y0, r0, x1, y1, r1) {
+            let d = Math.sqrt(Math.pow(x1 - x0, 2) + Math.pow(y1 - y0, 2));
+            if (d > r0 + r1 || d < Math.abs(r0 - r1)) return []; // No intersection
+
+            let a = (Math.pow(r0, 2) - Math.pow(r1, 2) + Math.pow(d, 2)) / (2 * d);
+            let h = Math.sqrt(Math.pow(r0, 2) - Math.pow(a, 2));
+            let x2 = x0 + a * (x1 - x0) / d;
+            let y2 = y0 + a * (y1 - y0) / d;
+
+            return [
+                { x: x2 + h * (y1 - y0) / d, y: y2 - h * (x1 - x0) / d },
+                { x: x2 - h * (y1 - y0) / d, y: y2 + h * (x1 - x0) / d }
+            ];
         }
 
         function log(msg) {
