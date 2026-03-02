@@ -2,12 +2,14 @@
 <!--
 devicedist.html
 
-Webapp for patron devices.
+Webapp for patron devices. Plays sounds and lightshow
+in cues.json (as represented by the RTDBMS)
+as commanded by timeline.json (as represented by the RTDBMS).
 
 -->
+<!DOCTYPE html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
+<head>    <meta charset="UTF-8">
     <title>Smartphone Orchestra: Performer Node</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
@@ -51,58 +53,99 @@ Webapp for patron devices.
         let audioCtx, masterGain, highPassFilter;
         let mySeat = { id: 'UNKNOWN', x: 0, y: 0 };
         let clockOffset = 0;
+        const bufferCache = {};
 
-        // 1. IDENTITY & COORDINATE RESOLUTION
         async function resolveIdentity() {
             const params = new URLSearchParams(window.location.search);
             const id = params.get('id') || 'GUEST_' + Math.floor(Math.random()*1000);
             const urlX = params.get('x');
             const urlY = params.get('y');
-
             mySeat.id = id;
 
-            // If X and Y are in the URL, use them immediately
             if (urlX !== null && urlY !== null) {
                 mySeat.x = parseFloat(urlX);
                 mySeat.y = parseFloat(urlY);
-                document.getElementById('status').innerText = `ID: ${id} (Pre-Mapped)`;
-            }
-            // Otherwise, ask the RTDBMS for the survey results
-            else {
-                document.getElementById('status').innerText = "FETCHING COORDINATES...";
+            } else {
                 const snap = await db.ref(`survey_results/${id}`).once('value');
                 if (snap.exists()) {
-                    const data = snap.val();
-                    mySeat.x = data.x;
-                    mySeat.y = data.y;
-                    document.getElementById('status').innerText = `ID: ${id} (Live-Mapped)`;
-                } else {
-                    document.getElementById('status').innerText = `ID: ${id} (UNMAPPED)`;
+                    mySeat.x = snap.val().x;
+                    mySeat.y = snap.val().y;
                 }
             }
+            document.getElementById('status').innerText = `ID: ${mySeat.id} (Ready)`;
         }
 
-        // 2. AUDIO ENGINE INITIALIZATION
         function initAudio() {
             audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             masterGain = audioCtx.createGain();
 
-            // Check if this device is a PILLAR/A9 Tablet
             if (mySeat.id.includes('PILLAR')) {
-                // Bypass filter: Route directly to destination for full frequency range
                 masterGain.connect(audioCtx.destination);
-                console.log("PILLAR MODE: High-pass filter bypassed.");
             } else {
-                // Patron Phone: Apply 350Hz high-pass filter to protect tiny speakers
                 highPassFilter = audioCtx.createBiquadFilter();
                 highPassFilter.type = "highpass";
                 highPassFilter.frequency.setValueAtTime(350, audioCtx.currentTime);
                 masterGain.connect(highPassFilter).connect(audioCtx.destination);
-                console.log("PHONE MODE: 350Hz high-pass enabled.");
             }
         }
 
-        // 3. SHOWTIME LOGIC
+        function playSpatialAudio(cue) {
+            if (!audioCtx) return;
+
+            let volume = 1.0;
+
+            // Spatial Calculation
+            if (cue.originX !== undefined && cue.radius !== undefined) {
+                const dist = Math.sqrt(Math.pow(mySeat.x - cue.originX, 2) + Math.pow(mySeat.y - cue.originY, 2));
+
+                if (dist > cue.radius) return; // Silent if outside radius
+
+                const rolloff = cue.rolloff || "linear";
+
+                if (rolloff === "linear") {
+                    volume = 1 - (dist / cue.radius);
+                } else if (rolloff === "inverse-square") {
+                    // Inverse Square: Volume drops sharply. (dist+1) prevents division by zero at origin.
+                    // Normalized so it reaches ~0 at the radius edge.
+                    const intensity = 1 / Math.pow(dist + 1, 2);
+                    const edgeIntensity = 1 / Math.pow(cue.radius + 1, 2);
+                    volume = (intensity - edgeIntensity) / (1 - edgeIntensity);
+                } else if (rolloff === "none") {
+                    volume = 1.0;
+                }
+            }
+
+            const scheduledStartTime = (cue.triggerTime + clockOffset) / 1000;
+            const currentTime = audioCtx.currentTime;
+
+            if (scheduledStartTime < currentTime - 0.5) return;
+
+            const gainNode = audioCtx.createGain();
+            gainNode.gain.setValueAtTime(volume, audioCtx.currentTime);
+            gainNode.connect(masterGain);
+
+            if (cue.type === 'AUDIO' && bufferCache[cue.url]) {
+                const source = audioCtx.createBufferSource();
+                source.buffer = bufferCache[cue.url];
+                source.connect(gainNode);
+                source.start(Math.max(currentTime, scheduledStartTime));
+            } else if (cue.type === 'OSCILLATOR') {
+                const osc = audioCtx.createOscillator();
+                osc.type = cue.waveform || 'sine';
+                osc.frequency.setValueAtTime(cue.frequency || 440, audioCtx.currentTime);
+                osc.connect(gainNode);
+                osc.start(Math.max(currentTime, scheduledStartTime));
+                osc.stop(Math.max(currentTime, scheduledStartTime) + (cue.duration || 1));
+            }
+        }
+
+        function handleCue(cue) {
+            if (cue.action === 'KILL') location.reload();
+            if (cue.type === 'AUDIO' || cue.type === 'OSCILLATOR') {
+                playSpatialAudio(cue);
+            }
+        }
+
         document.getElementById('ready-btn').onclick = async () => {
             const c1 = document.getElementById('chk-audio').checked;
             const c2 = document.getElementById('chk-wifi').checked;
@@ -114,31 +157,14 @@ Webapp for patron devices.
             document.getElementById('setup-screen').style.display = 'none';
             document.getElementById('show-screen').style.display = 'block';
 
-            // Register as online
             db.ref(`devices/${mySeat.id}`).set({ ...mySeat, online: true, lastSeen: Date.now() });
 
-            // Listen for global Cues
             db.ref('show/currentCue').on('value', snap => {
                 const cue = snap.val();
                 if (cue) handleCue(cue);
             });
         };
 
-        function handleCue(cue) {
-            if (cue.action === 'KILL') location.reload();
-
-            // Spatial logic: Determine if this device is within the cue radius
-            const dist = Math.sqrt(Math.pow(mySeat.x - cue.originX, 2) + Math.pow(mySeat.y - cue.originY, 2));
-            if (dist <= cue.radius) {
-                playSpatialAudio(cue);
-            }
-        }
-
-        function playSpatialAudio(cue) {
-            // Implementation of cue playback...
-        }
-
-        // Sync clock with Conductor
         db.ref('laptop/clock').on('value', snap => {
             if (snap.exists()) clockOffset = Date.now() - snap.val();
         });

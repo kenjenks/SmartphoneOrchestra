@@ -9,6 +9,7 @@
         "destX": 15,
         "destY": 0,
         "radius": 5,
+	"rolloff": "linear",
         "elapsedT": 10
     },
     { "label": "3.0 Blue Sweep", "type": "LIGHT", "color": "#0000ff",
@@ -17,6 +18,7 @@
         "destX": 15,
         "destY": 0,
         "radius": 5,
+	"rolloff": "none",
         "elapsedT": 10
     },
     { "label": "4.0 Final Build", "type": "AUDIO", "url": "https://static.wixstatic.com/mp3/9178d1_94e834e9df8040959ba9c0cc1644eebc.mp3"}
