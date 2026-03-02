@@ -8,43 +8,32 @@ Webapp for patron devices.
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Smartphone Orchestra: Patron Node</title>
+    <title>Smartphone Orchestra: Performer Node</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <style>
-        body { margin: 0; background: #000; color: #fff; font-family: 'Segoe UI', sans-serif; height: 100vh; display: flex; align-items: center; justify-content: center; text-align: center; overflow: hidden; transition: background-color 0.1s; }
+        body { margin: 0; background: #000; color: #fff; font-family: 'Segoe UI', sans-serif; height: 100vh; display: flex; align-items: center; justify-content: center; text-align: center; overflow: hidden; }
         #setup-screen { padding: 20px; max-width: 400px; }
         .checklist { text-align: left; background: #111; padding: 20px; border-radius: 12px; border: 1px solid #333; margin-bottom: 25px; }
-        .checklist label { display: block; margin: 15px 0; font-size: 1.1rem; cursor: pointer; }
-        .checklist input { transform: scale(1.5); margin-right: 15px; }
-        .btn-ready { padding: 20px 40px; font-size: 1.4rem; background: #28a745; color: white; border: none; border-radius: 50px; cursor: pointer; width: 100%; transition: 0.3s; }
-        .btn-ready:disabled { background: #333; color: #777; cursor: not-allowed; }
-        #loading-msg { margin-top: 20px; color: #aaa; font-style: italic; min-height: 1.2em; }
-        #instruction { font-size: 1.4rem; line-height: 1.6; }
-        #status { position: absolute; bottom: 15px; font-size: 0.7rem; color: #333; letter-spacing: 2px; text-transform: uppercase; width: 100%; }
-        .sync-dot { display: inline-block; width: 8px; height: 8px; background: #333; border-radius: 50%; margin-left: 5px; }
-        .sync-active { background: #00ff00; box-shadow: 0 0 5px #00ff00; }
+        .btn-ready { padding: 20px 40px; font-size: 1.5rem; background: #007bff; color: #fff; border: none; border-radius: 50px; cursor: pointer; }
+        #status { margin-top: 20px; font-family: monospace; color: #666; }
     </style>
 </head>
 <body>
 
     <div id="setup-screen">
-        <h1 id="seat-label">Welcome</h1>
+        <h1>Welcome to the Orchestra</h1>
         <div class="checklist">
-            <label><input type="checkbox" class="usher-check"> 📶 Use theater WiFi</label>
-            <label><input type="checkbox" class="usher-check"> 🤫 Do Not Disturb / Silent</label>
-            <label><input type="checkbox" class="usher-check"> 🔊 Volume at Maximum</label>
-            <label><input type="checkbox" class="usher-check"> 🔆 Brightness at 100%</label>
+            <label><input type="checkbox" id="chk-audio"> Silence Ringer / Max Volume</label>
+            <label><input type="checkbox" id="chk-wifi"> Connected to Theater Wi-Fi</label>
         </div>
-        <button class="btn-ready" id="ready-btn" disabled>PREPARE INSTRUMENT</button>
-        <p id="loading-msg">Waiting for the conductor...</p>
+        <button id="ready-btn" class="btn-ready">I'M READY</button>
+        <div id="status">INITIALIZING...</div>
     </div>
 
     <div id="show-screen" style="display:none;">
-        <div id="instruction">Please silence your voice.<br>The performance is ready.</div>
+        <div id="performance-status">Awaiting Conductor...</div>
     </div>
-
-    <div id="status">OFFLINE <span id="sync-dot" class="sync-dot"></span></div>
 
     <script>
         const firebaseConfig = {
@@ -59,107 +48,102 @@ Webapp for patron devices.
         firebase.initializeApp(firebaseConfig);
         const db = firebase.database();
 
-        let audioCtx, clockOffset = 0, wakeLock = null;
-        let mySeat = { id: "Guest", x: 0, y: 0 };
-        const audioBuffers = {};
+        let audioCtx, masterGain, highPassFilter;
+        let mySeat = { id: 'UNKNOWN', x: 0, y: 0 };
+        let clockOffset = 0;
 
-        function init() {
+        // 1. IDENTITY & COORDINATE RESOLUTION
+        async function resolveIdentity() {
             const params = new URLSearchParams(window.location.search);
-            mySeat.id = params.get('id') || "Guest";
-            mySeat.x = parseFloat(params.get('x')) || 0;
-            mySeat.y = parseFloat(params.get('y')) || 0;
-            document.getElementById('seat-label').innerText = `Seat ${mySeat.id}`;
+            const id = params.get('id') || 'GUEST_' + Math.floor(Math.random()*1000);
+            const urlX = params.get('x');
+            const urlY = params.get('y');
 
-            const checks = document.querySelectorAll('.usher-check');
-            const btn = document.getElementById('ready-btn');
-            checks.forEach(c => c.onclick = () => {
-                btn.disabled = !Array.from(checks).every(i => i.checked);
-            });
-        }
+            mySeat.id = id;
 
-        async function preloadAssets() {
-            const msg = document.getElementById('loading-msg');
-            msg.innerText = "Tuning instruments...";
-            const snap = await db.ref('show/script').once('value');
-            const script = snap.val() || [];
-
-            for (const cue of script) {
-                if (cue.type === 'AUDIO' && cue.url) {
-                    try {
-                        const response = await fetch(cue.url);
-                        const arrayBuf = await response.arrayBuffer();
-                        audioBuffers[cue.url] = await audioCtx.decodeAudioData(arrayBuf);
-                    } catch (e) { console.warn("Load failed for:", cue.url); }
+            // If X and Y are in the URL, use them immediately
+            if (urlX !== null && urlY !== null) {
+                mySeat.x = parseFloat(urlX);
+                mySeat.y = parseFloat(urlY);
+                document.getElementById('status').innerText = `ID: ${id} (Pre-Mapped)`;
+            }
+            // Otherwise, ask the RTDBMS for the survey results
+            else {
+                document.getElementById('status').innerText = "FETCHING COORDINATES...";
+                const snap = await db.ref(`survey_results/${id}`).once('value');
+                if (snap.exists()) {
+                    const data = snap.val();
+                    mySeat.x = data.x;
+                    mySeat.y = data.y;
+                    document.getElementById('status').innerText = `ID: ${id} (Live-Mapped)`;
+                } else {
+                    document.getElementById('status').innerText = `ID: ${id} (UNMAPPED)`;
                 }
             }
-            msg.innerText = "Instruments tuned.";
         }
 
-        function handleCue(cue) {
-            // SYNC MATH
-            const now = Date.now();
-            const serverNow = now - clockOffset;
-            const timeUntilStartMs = cue.scheduledTime - serverNow;
-            const startDelaySeconds = timeUntilStartMs / 1000;
-
-            // If the cue is already deep in the past (late arrival), skip it
-            if (startDelaySeconds < -5) return;
-
-            // SCHEDULING
-            const scheduledStartTime = audioCtx.currentTime + Math.max(0, startDelaySeconds);
-
-            if (cue.type === 'AUDIO') {
-                const buffer = audioBuffers[cue.url];
-                if (!buffer) return;
-                const source = audioCtx.createBufferSource();
-                source.buffer = buffer;
-                source.connect(audioCtx.destination);
-                source.start(scheduledStartTime);
-            }
-
-            if (cue.type === 'LIGHT') {
-                setTimeout(() => {
-                    document.body.style.backgroundColor = cue.color || "#fff";
-                    // If spatial, we'd trigger the requestAnimationFrame loop here
-                }, Math.max(0, timeUntilStartMs));
-            }
-        }
-
-        document.getElementById('ready-btn').onclick = async () => {
-            document.getElementById('ready-btn').disabled = true;
+        // 2. AUDIO ENGINE INITIALIZATION
+        function initAudio() {
             audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            if (audioCtx.state === 'suspended') await audioCtx.resume();
+            masterGain = audioCtx.createGain();
 
-            if ('wakeLock' in navigator) {
-                try { wakeLock = await navigator.wakeLock.request('screen'); } catch (err) {}
+            // Check if this device is a PILLAR/A9 Tablet
+            if (mySeat.id.includes('PILLAR')) {
+                // Bypass filter: Route directly to destination for full frequency range
+                masterGain.connect(audioCtx.destination);
+                console.log("PILLAR MODE: High-pass filter bypassed.");
+            } else {
+                // Patron Phone: Apply 350Hz high-pass filter to protect tiny speakers
+                highPassFilter = audioCtx.createBiquadFilter();
+                highPassFilter.type = "highpass";
+                highPassFilter.frequency.setValueAtTime(350, audioCtx.currentTime);
+                masterGain.connect(highPassFilter).connect(audioCtx.destination);
+                console.log("PHONE MODE: 350Hz high-pass enabled.");
             }
+        }
 
-            await preloadAssets();
+        // 3. SHOWTIME LOGIC
+        document.getElementById('ready-btn').onclick = async () => {
+            const c1 = document.getElementById('chk-audio').checked;
+            const c2 = document.getElementById('chk-wifi').checked;
+            if (!c1 || !c2) return alert("Please complete the checklist.");
+
+            await resolveIdentity();
+            initAudio();
 
             document.getElementById('setup-screen').style.display = 'none';
             document.getElementById('show-screen').style.display = 'block';
 
-            // REGISTER WITH CONDUCTOR
-            db.ref(`devices/${mySeat.id}`).set({ ...mySeat, online: true });
-            document.getElementById('status').innerHTML = `CONNECTED <span id="sync-dot" class="sync-dot sync-active"></span>`;
+            // Register as online
+            db.ref(`devices/${mySeat.id}`).set({ ...mySeat, online: true, lastSeen: Date.now() });
 
-            // LISTEN FOR CUES
+            // Listen for global Cues
             db.ref('show/currentCue').on('value', snap => {
                 const cue = snap.val();
-                if (!cue) return;
-                if (cue.action === 'KILL') location.reload();
-                else handleCue(cue);
+                if (cue) handleCue(cue);
             });
         };
 
-        // Continually sync clock with the SM Laptop
-        db.ref('laptop/clock').on('value', snap => {
-            if (snap.exists()) {
-                clockOffset = Date.now() - snap.val();
+        function handleCue(cue) {
+            if (cue.action === 'KILL') location.reload();
+
+            // Spatial logic: Determine if this device is within the cue radius
+            const dist = Math.sqrt(Math.pow(mySeat.x - cue.originX, 2) + Math.pow(mySeat.y - cue.originY, 2));
+            if (dist <= cue.radius) {
+                playSpatialAudio(cue);
             }
+        }
+
+        function playSpatialAudio(cue) {
+            // Implementation of cue playback...
+        }
+
+        // Sync clock with Conductor
+        db.ref('laptop/clock').on('value', snap => {
+            if (snap.exists()) clockOffset = Date.now() - snap.val();
         });
 
-        init();
+        window.onload = resolveIdentity;
     </script>
 </body>
 </html>
