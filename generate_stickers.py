@@ -22,9 +22,10 @@ def generate_stickers_from_tsv(tsv_path='seat_config.tsv', output_dir='stickers'
         reader = csv.DictReader(f, delimiter='\t')
         for row in reader:
             seat_id = row['seat_id']
-            # Get X and Y values from the TSV if they are present
-            x_val = row.get('x', '').strip()
-            y_val = row.get('y', '').strip()
+            # Safely get X and Y values.
+            # (row.get('x') or '') ensures that if the value is None, it becomes an empty string.
+            x_val = (row.get('x') or '').strip()
+            y_val = (row.get('y') or '').strip()
 
             # Construct the URL. Start with the mandatory seat ID
             qr_data = f"{BASE_URL}?id={seat_id}"
@@ -34,7 +35,7 @@ def generate_stickers_from_tsv(tsv_path='seat_config.tsv', output_dir='stickers'
                 qr_data += f"&x={x_val}&y={y_val}"
                 label_xy = f"X: {x_val} Y: {y_val}"
             else:
-                label_xy = "XY: PENDING SURVEY"
+                label_xy = ""
 
             print(f"Generating QR for {seat_id}: {qr_data}")
 
