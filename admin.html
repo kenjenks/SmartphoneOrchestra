@@ -45,8 +45,10 @@ leaves to reset for the next performance.
         .card { background: #111; border: 1px solid #333; padding: 20px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
         .card h3 { margin-top: 0; color: #888; text-transform: uppercase; font-size: 0.9rem; letter-spacing: 1px; }
 
-        .status-box { padding: 10px; border-radius: 6px; margin-bottom: 10px; font-size: 0.9rem; border: 1px solid #222; background: #000; }
+        .status-box { padding: 10px; border-radius: 6px; margin-bottom: 10px; font-size: 0.9rem; border: 1px solid #222; background: #000; transition: all 0.3s ease; }
+        .status-checking { border-color: #ffc107; color: #ffc107; background: rgba(255, 193, 7, 0.1); }
         .status-success { border-color: #28a745; color: #28a745; background: rgba(40, 167, 69, 0.1); }
+        .status-none { border-color: #666; color: #666; background: rgba(100, 100, 100, 0.1); }
 
         .btn { padding: 12px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; transition: 0.2s; font-family: inherit; }
         .btn-primary { background: #007bff; color: white; width: 100%; }
@@ -72,15 +74,15 @@ leaves to reset for the next performance.
             <h3>1. Theater Asset Configuration</h3>
 
             <label>Pillar Layout (.json)</label>
-            <div id="stat-pillars" class="status-box">No Pillar Data</div>
+            <div id="stat-pillars" class="status-box status-checking">...checking database...</div>
             <input type="file" id="file-pillars" accept=".json" onchange="handleFile(this, 'active_pillars', 'stat-pillars')">
 
             <label>Cue Script (.json)</label>
-            <div id="stat-cues" class="status-box">No Cue Data</div>
+            <div id="stat-cues" class="status-box status-checking">...checking database...</div>
             <input type="file" id="file-cues" accept=".json" onchange="handleFile(this, 'show/script', 'stat-cues')">
 
             <label>Show Timeline (.json)</label>
-            <div id="stat-timeline" class="status-box">No Timeline Data</div>
+            <div id="stat-timeline" class="status-box status-checking">...checking database...</div>
             <input type="file" id="file-timeline" accept=".json" onchange="handleFile(this, 'show/timeline', 'stat-timeline')">
         </div>
 
@@ -138,6 +140,25 @@ leaves to reset for the next performance.
         firebase.initializeApp(firebaseConfig);
         const db = firebase.database();
 
+        // INITIAL DATABASE CHECKERS
+        function initDatabaseCheck(path, statusId, readyMsg, emptyMsg) {
+            db.ref(path).on('value', snap => {
+                const el = document.getElementById(statusId);
+                if (snap.exists() && (Object.keys(snap.val()).length > 0)) {
+                    el.className = "status-box status-success";
+                    el.innerText = readyMsg;
+                } else {
+                    el.className = "status-box status-none";
+                    el.innerText = emptyMsg;
+                }
+            });
+        }
+
+        // Start checking paths on load
+        initDatabaseCheck('active_pillars', 'stat-pillars', 'Pillar data is ready', 'No Pillar Data');
+        initDatabaseCheck('show/script', 'stat-cues', 'Cue data is ready', 'No Cue Data');
+        initDatabaseCheck('show/timeline', 'stat-timeline', 'Timeline data is ready', 'No Timeline Data');
+
         // MONITORING
         db.ref('active_pillars').on('value', snap => {
             const count = snap.exists() ? Object.keys(snap.val()).filter(k => k.startsWith('PILLAR')).length : 0;
@@ -157,14 +178,9 @@ leaves to reset for the next performance.
                 try {
                     const data = JSON.parse(e.target.result);
 
-                    // Special Logic for Pillars: Flatten the structure for Beacon access
                     if (path === 'active_pillars' && data.pillars) {
                         log(`PROCESSING: Optimizing Pillar Config for Beacons...`);
-
-                        // Set Speed of Sound
                         await db.ref('active_pillars/speed_of_sound').set(data.speed_of_sound || 344);
-
-                        // Map each pillar by ID key
                         const updates = {};
                         data.pillars.forEach(p => {
                             updates[p.id] = {
@@ -177,14 +193,9 @@ leaves to reset for the next performance.
                         });
                         await db.ref('active_pillars').update(updates);
                     } else {
-                        // Standard overwrite for script/timeline
                         await db.ref(path).set(data);
                     }
-
-                    const el = document.getElementById(statusId);
-                    el.className = "status-box status-success";
-                    el.innerText = `✓ ${file.name} Uploaded`;
-                    log(`SUCCESS: ${path} updated and synced.`);
+                    log(`SUCCESS: ${file.name} uploaded to ${path}.`);
                 } catch (err) {
                     log(`ERROR: File process failed - ${err.message}`);
                     alert("JSON Parse Error. Check file format.");
@@ -199,24 +210,20 @@ leaves to reset for the next performance.
             try {
                 const snapshot = await db.ref('/').once('value');
                 const data = snapshot.val();
-
                 if (!data) {
                     log("ERROR: Database is currently empty.");
                     return;
                 }
-
                 const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 const timestamp = new Date().toISOString().replace(/[:.]/g, '-').split('T')[0];
-
                 a.href = url;
                 a.download = `orchestra_backup_${timestamp}.json`;
                 document.body.appendChild(a);
                 a.click();
                 document.body.removeChild(a);
                 URL.revokeObjectURL(url);
-
                 log("SUCCESS: Database backup file generated.");
             } catch (error) {
                 log(`ERROR: Backup failed - ${error.message}`);
@@ -234,14 +241,14 @@ leaves to reset for the next performance.
         }
 
         async function purgeDevices() {
-            if (confirm("Clear all patron devices? This will reset the count to zero.")) {
+            if (confirm("Clear all patron devices?")) {
                 await db.ref('devices').remove();
                 log("ACTION: Device registry cleared.");
             }
         }
 
         async function purgeEverything() {
-            if (confirm("DANGER: This will wipe ALL cloud data including pillars, script, and cues. Continue?")) {
+            if (confirm("DANGER: Wipe ALL cloud data?")) {
                 await db.ref('/').remove();
                 log("ACTION: DATABASE WIPED.");
                 location.reload();
