@@ -35,7 +35,6 @@ or mezzanine seats.
         #reader { width: 100%; border-radius: 10px; overflow: hidden; margin-bottom: 10px; border: 1px solid #444; }
         button { width: 100%; padding: 15px; font-weight: bold; border-radius: 8px; cursor: pointer; border: none; margin-top: 10px; }
         .btn-main { background: #007bff; color: white; }
-        .btn-save { background: #28a745; color: white; }
 
         .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 15px 0; }
         .stat-item { background: #000; padding: 10px; border-radius: 8px; border: 1px solid #222; }
@@ -49,7 +48,7 @@ or mezzanine seats.
 <body>
 
     <div class="card">
-        <h2>1. Mode & Identification</h2>
+        <h2>1. Identification</h2>
         <div class="mode-selector">
             <button id="btn-mode-acoustic" class="mode-btn active" onclick="setMode('acoustic')">ACOUSTIC</button>
             <button id="btn-mode-manual" class="mode-btn" onclick="setMode('manual')">MANUAL XY</button>
@@ -60,8 +59,7 @@ or mezzanine seats.
     </div>
 
     <div class="card">
-        <h2>2. Data Entry</h2>
-
+        <h2>2. Survey</h2>
         <div id="view-acoustic">
             <div class="pillar-monitor">
                 <div style="text-align:center;"><div id="led-PILLAR_FL" class="led-dot"></div><br><small>FL</small></div>
@@ -71,15 +69,13 @@ or mezzanine seats.
             </div>
             <button class="btn-main" onclick="startAcousticSurvey()">START ACOUSTIC SCAN</button>
         </div>
-
         <div id="view-manual" style="display:none; text-align:center;">
             <div style="margin-bottom:10px;">
                 X: <input type="number" id="man-x" step="0.01">
                 Y: <input type="number" id="man-y" step="0.01">
             </div>
-            <button class="btn-save" onclick="saveManualXY()">SAVE TO DATABASE</button>
+            <button style="background:#28a745; color:white;" onclick="saveManualXY()">SAVE MANUAL XY</button>
         </div>
-
         <div class="stat-grid">
             <div class="stat-item"><span class="stat-label">Device X (m)</span><span id="cur-x">?</span></div>
             <div class="stat-item"><span class="stat-label">Device Y (m)</span><span id="cur-y">?</span></div>
@@ -102,8 +98,6 @@ or mezzanine seats.
         let html5QrCode, audioCtx, analyser, currentSeatId = null;
         let isManualMode = false, micDelay = 20.0, lastScanTime = 0;
         let pillarConfigs = {}, speedOfSound = 344.0;
-
-        // Threshold for detecting a chirp (0-255)
         const CHIRP_THRESHOLD = 150;
 
         db.ref('active_pillars').on('value', snap => {
@@ -146,68 +140,103 @@ or mezzanine seats.
                 const url = new URL(decodedText);
                 currentSeatId = url.searchParams.get("id");
                 document.getElementById('current-id-display').innerText = `LOCKED: ${currentSeatId}`;
-                log(`Target set: ${currentSeatId}`);
+                log(`Locked Target: ${currentSeatId}`);
                 if(isManualMode && pillarConfigs[currentSeatId]) {
                     document.getElementById('man-x').value = pillarConfigs[currentSeatId].x;
                     document.getElementById('man-y').value = pillarConfigs[currentSeatId].y;
                 }
-            } catch(e) { log("Invalid QR format."); }
+            } catch(e) { log("QR Error."); }
         }
 
-        async function initAudio() {
+        async function captureChirps() {
             if (!audioCtx) {
                 audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                 const source = audioCtx.createMediaStreamSource(stream);
                 analyser = audioCtx.createAnalyser();
                 analyser.fftSize = 2048;
                 source.connect(analyser);
             }
             if (audioCtx.state === 'suspended') await audioCtx.resume();
-        }
 
-        async function captureChirps() {
-            await initAudio();
             return new Promise((resolve) => {
                 const results = {};
                 const startTime = performance.now();
-                const bufferLength = analyser.frequencyBinCount;
-                const dataArray = new Uint8Array(bufferLength);
                 const sampleRate = audioCtx.sampleRate;
+                const dataArray = new Uint8Array(analyser.frequencyBinCount);
 
-                log("Listening for Pillar frequencies...");
-
-                const checkAudio = () => {
+                const check = () => {
                     analyser.getByteFrequencyData(dataArray);
-
-                    Object.keys(pillarConfigs).forEach(pid => {
-                        if (results[pid]) return; // Already heard this one
-
-                        const freq = pillarConfigs[pid].freq;
-                        const bin = Math.round(freq / (sampleRate / analyser.fftSize));
-
+                    Object.entries(pillarConfigs).forEach(([pid, cfg]) => {
+                        if (results[pid] || !cfg.freq) return;
+                        const bin = Math.round(cfg.freq / (sampleRate / analyser.fftSize));
                         if (dataArray[bin] > CHIRP_THRESHOLD) {
-                            results[pid] = performance.now() - startTime;
+                            results[pid] = (performance.now() - startTime);
                             document.getElementById(`led-${pid}`).classList.add('active');
                             log(`Heard ${pid} at ${results[pid].toFixed(1)}ms`);
                         }
                     });
-
-                    // Stop if we heard all 4 or 3 seconds pass
-                    if (Object.keys(results).length === 4 || (performance.now() - startTime) > 3000) {
-                        resolve(results);
-                    } else {
-                        requestAnimationFrame(checkAudio);
-                    }
+                    if (Object.keys(results).length === 4 || (performance.now() - startTime) > 3000) resolve(results);
+                    else requestAnimationFrame(check);
                 };
-                requestAnimationFrame(checkAudio);
+                requestAnimationFrame(check);
             });
+        }
+
+        /**
+         * Robust solver that handles 2, 3, or 4 pillars.
+         * For 2 pillars, it uses the theater boundaries to resolve the mirror-point.
+         */
+        function solveXY(measurements) {
+            let points = [];
+            let minX = 0, maxX = 0, minY = 0, maxY = 0;
+
+            Object.entries(pillarConfigs).forEach(([pid, cfg], idx) => {
+                if (measurements[pid]) {
+                    const dist = ((measurements[pid] - micDelay) / 1000) * speedOfSound;
+                    points.push({ x: cfg.x, y: cfg.y, r: dist });
+                }
+                // Establish theater boundaries
+                if (idx === 0) { minX = maxX = cfg.x; minY = maxY = cfg.y; }
+                else {
+                    minX = Math.min(minX, cfg.x); maxX = Math.max(maxX, cfg.x);
+                    minY = Math.min(minY, cfg.y); maxY = Math.max(maxY, cfg.y);
+                }
+            });
+
+            if (points.length < 2) return null;
+
+            let bestX = 0, bestY = 0, minError = Infinity;
+
+            // Define search bounds slightly larger than the pillar box
+            const buffer = 2.0;
+            const startX = minX - buffer, endX = maxX + buffer;
+            const startY = minY - buffer, endY = maxY + buffer;
+
+            // Grid search optimization
+            for (let tx = startX; tx <= endX; tx += 0.25) {
+                for (let ty = startY; ty <= endY; ty += 0.25) {
+                    let err = 0;
+                    points.forEach(p => {
+                        let d = Math.sqrt((tx - p.x)**2 + (ty - p.y)**2);
+                        err += Math.abs(d - p.r);
+                    });
+
+                    // Boundary penalty: favor points inside the theater box
+                    const inside = (tx >= minX && tx <= maxX && ty >= minY && ty <= maxY);
+                    let finalErr = inside ? err : err * 5.0;
+
+                    if (finalErr < minError) {
+                        minError = finalErr;
+                        bestX = tx; bestY = ty;
+                    }
+                }
+            }
+            return { x: bestX, y: bestY };
         }
 
         async function startAcousticSurvey() {
             if (!currentSeatId) return alert("Scan QR first!");
-
-            // Reset LEDs
             ["PILLAR_FL", "PILLAR_FR", "PILLAR_BL", "PILLAR_BR"].forEach(id => {
                 document.getElementById(`led-${id}`).classList.remove('active');
             });
@@ -217,44 +246,33 @@ or mezzanine seats.
             if (pillarConfigs[currentSeatId]) {
                 calibrate(measurements);
             } else {
-                trilaterate(measurements);
+                const pos = solveXY(measurements);
+                if (pos) {
+                    document.getElementById('cur-x').innerText = pos.x.toFixed(2);
+                    document.getElementById('cur-y').innerText = pos.y.toFixed(2);
+                    await db.ref(`survey_results/${currentSeatId}`).set({ ...pos, status: "ACOUSTIC", timestamp: Date.now() });
+                    log(`SAVED: (${pos.x.toFixed(1)}, ${pos.y.toFixed(1)})`);
+                } else {
+                    log("ERROR: Need at least 2 pillars.");
+                }
             }
         }
 
         function calibrate(measurements) {
             const me = pillarConfigs[currentSeatId];
             let totalDelay = 0, count = 0;
-
-            Object.keys(measurements).forEach(pid => {
+            Object.entries(measurements).forEach(([pid, time]) => {
                 if (pid === currentSeatId) return;
                 const p = pillarConfigs[pid];
-                const dist = Math.sqrt(Math.pow(me.x - p.x, 2) + Math.pow(me.y - p.y, 2));
-                const theoreticalTime = (dist / speedOfSound) * 1000;
-                totalDelay += (measurements[pid] - theoreticalTime);
+                const theoreticalTime = (Math.sqrt((me.x - p.x)**2 + (me.y - p.y)**2) / speedOfSound) * 1000;
+                totalDelay += (time - theoreticalTime);
                 count++;
             });
-
             if (count > 0) {
                 micDelay = totalDelay / count;
                 document.getElementById('res-delay').innerText = micDelay.toFixed(2);
-                log(`Recalibrated Mic Delay: ${micDelay.toFixed(2)}ms`);
-                document.getElementById('cur-x').innerText = me.x.toFixed(2);
-                document.getElementById('cur-y').innerText = me.y.toFixed(2);
+                log(`CALIBRATED: Delay ${micDelay.toFixed(1)}ms`);
             }
-        }
-
-        function trilaterate(measurements) {
-            // Simplified trilateration logic for theatre coordinate space
-            let dists = {};
-            Object.keys(measurements).forEach(pid => {
-                dists[pid] = ((measurements[pid] - micDelay) / 1000) * speedOfSound;
-            });
-
-            // Note: Replace with your least-squares trilateration helper
-            const x = 5.0, y = 10.0; // Placeholder
-
-            db.ref(`survey_results/${currentSeatId}`).set({ x, y, status: "ACOUSTIC", timestamp: Date.now() });
-            log(`Saved ${currentSeatId} at (${x}, ${y})`);
         }
 
         async function saveManualXY() {
@@ -262,7 +280,7 @@ or mezzanine seats.
             const x = parseFloat(document.getElementById('man-x').value);
             const y = parseFloat(document.getElementById('man-y').value);
             await db.ref(`survey_results/${currentSeatId}`).set({ x, y, status: "MANUAL", timestamp: Date.now() });
-            log(`Manual save: ${currentSeatId} at (${x}, ${y})`);
+            log(`MANUAL SAVE: (${x}, ${y})`);
         }
     </script>
 </body>
