@@ -17,6 +17,7 @@ or mezzanine seats.
 <head>
     <meta charset="UTF-8">
     <title>SmartphoneOrchestra Surveyor</title>
+
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <script src="https://unpkg.com/html5-qrcode"></script>
@@ -29,7 +30,7 @@ or mezzanine seats.
         .mode-btn.active { background: #007bff; color: white; }
 
         .pillar-monitor { display: flex; justify-content: space-between; margin-bottom: 15px; background: #000; padding: 10px; border-radius: 8px; border: 1px solid #444; }
-        .led-dot { width: 12px; height: 12px; background: #400; border-radius: 50%; display: inline-block; margin-bottom: 5px; }
+        .led-dot { width: 12px; height: 12px; background: #400; border-radius: 50%; display: inline-block; margin-bottom: 5px; transition: 0.2s; }
         .led-dot.active { background: #0f0; box-shadow: 0 0 10px #0f0; }
 
         #reader { width: 100%; border-radius: 10px; overflow: hidden; margin-bottom: 10px; border: 1px solid #444; }
@@ -42,16 +43,16 @@ or mezzanine seats.
         #res-delay, #cur-x, #cur-y { font-family: monospace; font-size: 1.2rem; color: #00ff00; }
 
         #log { height: 120px; overflow-y: auto; background: #000; font-family: monospace; font-size: 0.75rem; padding: 10px; color: #0f0; border: 1px solid #222; margin-top: 10px; }
-        input[type="number"] { background: #000; color: #0f0; border: 1px solid #444; padding: 8px; width: 60px; border-radius: 4px; }
+        input[type="number"] { background: #111; color: #0f0; border: 1px solid #444; padding: 8px; width: 60px; border-radius: 4px; }
     </style>
 </head>
 <body>
 
     <div class="card">
-        <h2>1. Identification</h2>
+        <h2>1. Identity & Mode</h2>
         <div class="mode-selector">
             <button id="btn-mode-acoustic" class="mode-btn active" onclick="setMode('acoustic')">ACOUSTIC</button>
-            <button id="btn-mode-manual" class="mode-btn" onclick="setMode('manual')">MANUAL XY</button>
+            <button id="btn-mode-manual" class="mode-btn" onclick="setMode('manual')">MANUAL</button>
         </div>
         <div id="reader"></div>
         <button id="qr-toggle-btn" style="background:#6f42c1; color:white;" onclick="toggleScanner()">START SCANNER</button>
@@ -59,7 +60,7 @@ or mezzanine seats.
     </div>
 
     <div class="card">
-        <h2>2. Survey</h2>
+        <h2>2. Data Collection</h2>
         <div id="view-acoustic">
             <div class="pillar-monitor">
                 <div style="text-align:center;"><div id="led-PILLAR_FL" class="led-dot"></div><br><small>FL</small></div>
@@ -69,17 +70,19 @@ or mezzanine seats.
             </div>
             <button class="btn-main" onclick="startAcousticSurvey()">START ACOUSTIC SCAN</button>
         </div>
+
         <div id="view-manual" style="display:none; text-align:center;">
             <div style="margin-bottom:10px;">
                 X: <input type="number" id="man-x" step="0.01">
                 Y: <input type="number" id="man-y" step="0.01">
             </div>
-            <button style="background:#28a745; color:white;" onclick="saveManualXY()">SAVE MANUAL XY</button>
+            <button style="background:#28a745; color:white;" onclick="saveManualXY()">SAVE TO DB</button>
         </div>
+
         <div class="stat-grid">
-            <div class="stat-item"><span class="stat-label">Device X (m)</span><span id="cur-x">?</span></div>
-            <div class="stat-item"><span class="stat-label">Device Y (m)</span><span id="cur-y">?</span></div>
-            <div class="stat-item"><span class="stat-label">Mic Delay (ms)</span><span id="res-delay">20.00</span></div>
+            <div class="stat-item"><span class="stat-label">Calculated X</span><span id="cur-x">?</span></div>
+            <div class="stat-item"><span class="stat-label">Calculated Y</span><span id="cur-y">?</span></div>
+            <div class="stat-item"><span class="stat-label">Mic Latency (ms)</span><span id="res-delay">20.00</span></div>
         </div>
     </div>
 
@@ -102,10 +105,7 @@ or mezzanine seats.
 
         db.ref('active_pillars').on('value', snap => {
             const data = snap.val();
-            if(data) {
-                pillarConfigs = data;
-                speedOfSound = data.speed_of_sound || 344.0;
-            }
+            if(data) { pillarConfigs = data; speedOfSound = data.speed_of_sound || 344.0; }
         });
 
         function log(msg) {
@@ -140,12 +140,12 @@ or mezzanine seats.
                 const url = new URL(decodedText);
                 currentSeatId = url.searchParams.get("id");
                 document.getElementById('current-id-display').innerText = `LOCKED: ${currentSeatId}`;
-                log(`Locked Target: ${currentSeatId}`);
+                log(`Target Locked: ${currentSeatId}`);
                 if(isManualMode && pillarConfigs[currentSeatId]) {
                     document.getElementById('man-x').value = pillarConfigs[currentSeatId].x;
                     document.getElementById('man-y').value = pillarConfigs[currentSeatId].y;
                 }
-            } catch(e) { log("QR Error."); }
+            } catch(e) { log("QR Scan Error."); }
         }
 
         async function captureChirps() {
@@ -173,10 +173,10 @@ or mezzanine seats.
                         if (dataArray[bin] > CHIRP_THRESHOLD) {
                             results[pid] = (performance.now() - startTime);
                             document.getElementById(`led-${pid}`).classList.add('active');
-                            log(`Heard ${pid} at ${results[pid].toFixed(1)}ms`);
+                            log(`Recv ${pid}: ${results[pid].toFixed(1)}ms`);
                         }
                     });
-                    if (Object.keys(results).length === 4 || (performance.now() - startTime) > 3000) resolve(results);
+                    if (Object.keys(results).length === 4 || (performance.now() - startTime) > 4000) resolve(results);
                     else requestAnimationFrame(check);
                 };
                 requestAnimationFrame(check);
@@ -184,55 +184,66 @@ or mezzanine seats.
         }
 
         /**
-         * Robust solver that handles 2, 3, or 4 pillars.
-         * For 2 pillars, it uses the theater boundaries to resolve the mirror-point.
+         * Resolves theater coordinates based on 2, 3, or 4 beacons.
+         * For 2 beacons, resolves ambiguity using theater boundary knowledge.
          */
         function solveXY(measurements) {
-            let points = [];
-            let minX = 0, maxX = 0, minY = 0, maxY = 0;
-
-            Object.entries(pillarConfigs).forEach(([pid, cfg], idx) => {
-                if (measurements[pid]) {
-                    const dist = ((measurements[pid] - micDelay) / 1000) * speedOfSound;
-                    points.push({ x: cfg.x, y: cfg.y, r: dist });
-                }
-                // Establish theater boundaries
-                if (idx === 0) { minX = maxX = cfg.x; minY = maxY = cfg.y; }
-                else {
-                    minX = Math.min(minX, cfg.x); maxX = Math.max(maxX, cfg.x);
-                    minY = Math.min(minY, cfg.y); maxY = Math.max(maxY, cfg.y);
+            let circles = [];
+            Object.entries(measurements).forEach(([pid, time]) => {
+                const cfg = pillarConfigs[pid];
+                if (cfg) {
+                    const r = ((time - micDelay) / 1000) * speedOfSound;
+                    circles.push({ x: cfg.x, y: cfg.y, r: r });
                 }
             });
 
-            if (points.length < 2) return null;
+            if (circles.length < 2) return null;
 
-            let bestX = 0, bestY = 0, minError = Infinity;
+            // Define theater bounds for point validation
+            const theater = {
+                minX: Math.min(...Object.values(pillarConfigs).map(p => p.x)),
+                maxX: Math.max(...Object.values(pillarConfigs).map(p => p.x)),
+                minY: Math.min(...Object.values(pillarConfigs).map(p => p.y)),
+                maxY: Math.max(...Object.values(pillarConfigs).map(p => p.y))
+            };
 
-            // Define search bounds slightly larger than the pillar box
-            const buffer = 2.0;
-            const startX = minX - buffer, endX = maxX + buffer;
-            const startY = minY - buffer, endY = maxY + buffer;
+            if (circles.length === 2) {
+                const pts = intersectTwoCircles(circles[0], circles[1]);
+                // Select the point that falls inside theater bounds
+                return pts.find(p => p.x >= theater.minX && p.x <= theater.maxX &&
+                                     p.y >= theater.minY && p.y <= theater.maxY) || pts[0];
+            }
 
-            // Grid search optimization
-            for (let tx = startX; tx <= endX; tx += 0.25) {
-                for (let ty = startY; ty <= endY; ty += 0.25) {
-                    let err = 0;
-                    points.forEach(p => {
-                        let d = Math.sqrt((tx - p.x)**2 + (ty - p.y)**2);
-                        err += Math.abs(d - p.r);
-                    });
-
-                    // Boundary penalty: favor points inside the theater box
-                    const inside = (tx >= minX && tx <= maxX && ty >= minY && ty <= maxY);
-                    let finalErr = inside ? err : err * 5.0;
-
-                    if (finalErr < minError) {
-                        minError = finalErr;
-                        bestX = tx; bestY = ty;
-                    }
+            // For 3+ circles, use Centroid of all valid intersections for stability
+            let intersections = [];
+            for (let i = 0; i < circles.length; i++) {
+                for (let j = i + 1; j < circles.length; j++) {
+                    intersections.push(...intersectTwoCircles(circles[i], circles[j]));
                 }
             }
-            return { x: bestX, y: bestY };
+            const valid = intersections.filter(p => p.x >= theater.minX - 2 && p.x <= theater.maxX + 2 &&
+                                                    p.y >= theater.minY - 2 && p.y <= theater.maxY + 2);
+            if (valid.length === 0) return null;
+
+            const sum = valid.reduce((acc, p) => ({ x: acc.x + p.x, y: acc.y + p.y }), { x: 0, y: 0 });
+            return { x: sum.x / valid.length, y: sum.y / valid.length };
+        }
+
+        function intersectTwoCircles(c1, c2) {
+            const dx = c2.x - c1.x;
+            const dy = c2.y - c1.y;
+            const d = Math.sqrt(dx * dx + dy * dy);
+            if (d > c1.r + c2.r || d < Math.abs(c1.r - c2.r)) return [];
+
+            const a = (c1.r * c1.r - c2.r * c2.r + d * d) / (2 * d);
+            const h = Math.sqrt(Math.max(0, c1.r * c1.r - a * a));
+            const x2 = c1.x + a * dx / d;
+            const y2 = c1.y + a * dy / d;
+
+            return [
+                { x: x2 + h * dy / d, y: y2 - h * dx / d },
+                { x: x2 - h * dy / d, y: y2 + h * dx / d }
+            ];
         }
 
         async function startAcousticSurvey() {
@@ -251,9 +262,9 @@ or mezzanine seats.
                     document.getElementById('cur-x').innerText = pos.x.toFixed(2);
                     document.getElementById('cur-y').innerText = pos.y.toFixed(2);
                     await db.ref(`survey_results/${currentSeatId}`).set({ ...pos, status: "ACOUSTIC", timestamp: Date.now() });
-                    log(`SAVED: (${pos.x.toFixed(1)}, ${pos.y.toFixed(1)})`);
+                    log(`SAVED: Seat ${currentSeatId} at (${pos.x.toFixed(1)}, ${pos.y.toFixed(1)})`);
                 } else {
-                    log("ERROR: Need at least 2 pillars.");
+                    log("ERROR: Position couldn't be resolved.");
                 }
             }
         }
@@ -264,14 +275,15 @@ or mezzanine seats.
             Object.entries(measurements).forEach(([pid, time]) => {
                 if (pid === currentSeatId) return;
                 const p = pillarConfigs[pid];
-                const theoreticalTime = (Math.sqrt((me.x - p.x)**2 + (me.y - p.y)**2) / speedOfSound) * 1000;
+                const dist = Math.sqrt((me.x - p.x)**2 + (me.y - p.y)**2);
+                const theoreticalTime = (dist / speedOfSound) * 1000;
                 totalDelay += (time - theoreticalTime);
                 count++;
             });
             if (count > 0) {
                 micDelay = totalDelay / count;
                 document.getElementById('res-delay').innerText = micDelay.toFixed(2);
-                log(`CALIBRATED: Delay ${micDelay.toFixed(1)}ms`);
+                log(`CALIBRATED: Mic delay set to ${micDelay.toFixed(2)}ms`);
             }
         }
 
@@ -280,7 +292,7 @@ or mezzanine seats.
             const x = parseFloat(document.getElementById('man-x').value);
             const y = parseFloat(document.getElementById('man-y').value);
             await db.ref(`survey_results/${currentSeatId}`).set({ x, y, status: "MANUAL", timestamp: Date.now() });
-            log(`MANUAL SAVE: (${x}, ${y})`);
+            log(`MANUAL SAVE: ${currentSeatId} at (${x}, ${y})`);
         }
     </script>
 </body>
