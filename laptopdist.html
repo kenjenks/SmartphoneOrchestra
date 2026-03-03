@@ -18,9 +18,7 @@ This is run from the Stage Manager or Sound Tech laptop. The clock of the laptop
         .grid { display: grid; grid-template-columns: 1fr 450px; gap: 20px; height: 90vh; }
 
         .timeline-panel { background: #111; border: 1px solid #333; padding: 20px; overflow-y: auto; border-radius: 8px; }
-        .timeline-item {
-            display: flex; gap: 20px; padding: 15px; border-bottom: 1px solid #222; color: #666;
-        }
+        .timeline-item { display: flex; gap: 20px; padding: 15px; border-bottom: 1px solid #222; color: #666; }
         .timeline-item.next { color: #fff; background: #1a1a00; border-left: 5px solid #ffcc00; }
         .timeline-item.active { background: #002200; color: #00ff00; }
 
@@ -30,12 +28,17 @@ This is run from the Stage Manager or Sound Tech laptop. The clock of the laptop
         .cue-card { background: #000; padding: 20px; border: 1px solid #ffcc00; border-radius: 8px; margin-bottom: 20px; }
         .cue-card h3 { margin: 0; color: #ffcc00; text-transform: uppercase; letter-spacing: 2px; }
 
+        .control-row { display: flex; gap: 10px; width: 100%; }
         .btn-go {
-            width: 100%; padding: 40px; font-size: 3rem; font-weight: 900;
+            flex: 3; padding: 40px; font-size: 2.5rem; font-weight: 900;
             background: #28a745; color: white; border: none; border-radius: 12px;
             cursor: pointer; box-shadow: 0 0 20px rgba(40, 167, 69, 0.4);
         }
-        .btn-go:active { background: #218838; transform: scale(0.98); }
+        .btn-skip {
+            flex: 1; background: #800; color: #ff9999; border: 2px solid #a00;
+            border-radius: 12px; font-weight: bold; cursor: pointer; font-size: 1.2rem;
+        }
+        .btn-go:active, .btn-skip:active { transform: scale(0.98); }
         .btn-go:disabled { background: #333; color: #666; cursor: not-allowed; box-shadow: none; }
 
         #countdown-overlay { font-size: 2rem; color: #ffcc00; text-align: center; font-weight: bold; margin-top: 10px; min-height: 1.2em; }
@@ -52,21 +55,23 @@ This is run from the Stage Manager or Sound Tech laptop. The clock of the laptop
     <div class="sm-controls">
         <div>
             <div class="master-clock" id="master-clock">00:00:00</div>
-
             <div class="cue-card">
                 <small>PENDING CUE</small>
                 <h3 id="next-label">--</h3>
                 <div id="next-details" style="font-size: 0.9rem; color: #888; margin-top:5px;">Waiting for timeline...</div>
             </div>
-
             <div id="countdown-overlay">READY</div>
         </div>
 
-        <button id="go-button" class="btn-go" onclick="confirmTrigger()">GO</button>
+        <div class="control-row">
+            <button id="go-button" class="btn-go" onclick="confirmTrigger()">GO in 1 s</button>
+            <button id="skip-button" class="btn-skip" onclick="skipCue()">SKIP</button>
+        </div>
 
-        <div style="display:flex; gap:10px; margin-top:20px;">
-            <button style="background:#444; padding:10px; font-size: 0.8rem;" onclick="emergencyStop()">KILL [K]</button>
-            <div id="status-bar" style="font-size: 0.7rem; color: #555; align-self: center;">
+        <div style="display:flex; flex-wrap: wrap; gap:10px; margin-top:20px;">
+            <button style="background:#444; color: white; padding:10px; flex: 1;" onclick="emergencyStop()">KILL [K]</button>
+            <button style="background:#004080; color: white; padding:10px; flex: 1;" onclick="restartShow()">RESTART SHOW</button>
+            <div id="status-bar" style="font-size: 0.7rem; color: #555; width: 100%; text-align: center; margin-top: 10px;">
                 SYNC: <span id="sync-val">--</span> | PATRONS: <span id="patron-val">0</span>
             </div>
         </div>
@@ -91,14 +96,12 @@ This is run from the Stage Manager or Sound Tech laptop. The clock of the laptop
     let nextIndex = 0;
     let isCountingDown = false;
 
-    // 1. Load Cue Library (the 'what')
     db.ref('show/script').on('value', snap => {
         const data = snap.val() || [];
         cueLibrary = {};
         data.forEach(c => cueLibrary[c.label] = c);
     });
 
-    // 2. Load Timeline (the 'when')
     db.ref('show/timeline').on('value', snap => {
         timeline = snap.val() || [];
         renderTimeline();
@@ -115,13 +118,16 @@ This is run from the Stage Manager or Sound Tech laptop. The clock of the laptop
         });
 
         const active = timeline[nextIndex];
+        const goBtn = document.getElementById('go-button');
         if (active) {
             document.getElementById('next-label').innerText = active.label;
-            document.getElementById('next-details').innerText = `Target: ${active.time} | Sync Buffer: ${active.buffer || 1.0}s`;
-            document.getElementById('go-button').disabled = false;
+            const buf = active.buffer || 1.0;
+            document.getElementById('next-details').innerText = `Target: ${active.time} | Sync Buffer: ${buf}s`;
+            goBtn.innerText = `GO in ${buf} s`;
+            goBtn.disabled = false;
         } else {
             document.getElementById('next-label').innerText = "END OF SHOW";
-            document.getElementById('go-button').disabled = true;
+            goBtn.disabled = true;
         }
     }
 
@@ -132,7 +138,7 @@ This is run from the Stage Manager or Sound Tech laptop. The clock of the laptop
         const cueData = cueLibrary[timelineEvent.cueLabel];
 
         if (!cueData) {
-            alert("Error: Cue '" + timelineEvent.cueLabel + "' not found in cues.json library.");
+            alert(`Error: Cue '${timelineEvent.cueLabel}' not found.`);
             return;
         }
 
@@ -140,12 +146,10 @@ This is run from the Stage Manager or Sound Tech laptop. The clock of the laptop
         const now = Date.now();
         const executionTime = now + (bufferSeconds * 1000);
 
-        // BROADCAST TO CLOUD
-        // Every device receives this immediately, but waits until executionTime to play.
         db.ref('show/currentCue').set({
             ...cueData,
             triggerTime: now,
-            scheduledTime: executionTime,
+            scheduledTime: executionTime, // Absolute time for devices to fire
             id: 'cue_' + now
         });
 
@@ -154,14 +158,30 @@ This is run from the Stage Manager or Sound Tech laptop. The clock of the laptop
         renderTimeline();
     }
 
+    function skipCue() {
+        if (nextIndex < timeline.length) {
+            const skipped = timeline[nextIndex].label;
+            nextIndex++;
+            renderTimeline();
+            console.log(`Skipped cue: ${skipped}`);
+        }
+    }
+
+    function restartShow() {
+        if (confirm("Reset timeline to the beginning?")) {
+            nextIndex = 0;
+            renderTimeline();
+            document.getElementById('countdown-overlay').innerText = "SHOW RESET";
+        }
+    }
+
     function visualCountdown(seconds) {
         isCountingDown = true;
         const overlay = document.getElementById('countdown-overlay');
         let remaining = seconds;
-
         const timer = setInterval(() => {
             remaining -= 0.1;
-            overlay.innerText = `FIRE IN: ${remaining.toFixed(1)}s`;
+            overlay.innerText = `FIRE IN: ${Math.max(0, remaining).toFixed(1)}s`;
             if (remaining <= 0) {
                 clearInterval(timer);
                 overlay.innerText = "EXECUTED";
@@ -176,7 +196,6 @@ This is run from the Stage Manager or Sound Tech laptop. The clock of the laptop
         document.getElementById('countdown-overlay').innerText = "KILLED";
     }
 
-    // CLOCK & SYNC
     setInterval(() => {
         const now = new Date();
         document.getElementById('master-clock').innerText = now.toTimeString().split(' ')[0];
@@ -185,7 +204,7 @@ This is run from the Stage Manager or Sound Tech laptop. The clock of the laptop
     }, 1000);
 
     db.ref('devices').on('value', snap => {
-        document.getElementById('patron-val').innerText = snap.numChildren();
+        document.getElementById('patron-val').innerText = snap.numChildren() || 0;
     });
 
     window.onkeydown = (e) => {
