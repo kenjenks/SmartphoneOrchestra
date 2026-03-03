@@ -16,7 +16,7 @@ or mezzanine seats.
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>SmartphoneOrchestra Surveyor</title>
+    <title>Orchestra Surveyor: Manual & Acoustic v2</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <script src="https://unpkg.com/html5-qrcode"></script>
@@ -24,75 +24,65 @@ or mezzanine seats.
         body { font-family: 'Segoe UI', sans-serif; background: #000; color: #fff; padding: 20px; margin: 0; }
         .card { background: #1a1a1a; border-radius: 15px; padding: 20px; border: 1px solid #333; margin-bottom: 15px; }
 
+        /* High-visibility toggle */
+        .mode-selector { display: flex; background: #333; border-radius: 8px; margin-bottom: 15px; padding: 5px; }
+        .mode-btn { flex: 1; padding: 10px; border-radius: 6px; border: none; background: transparent; color: #888; cursor: pointer; font-weight: bold; }
+        .mode-btn.active { background: #007bff; color: white; }
+
         .pillar-monitor { display: flex; justify-content: space-between; margin-bottom: 15px; background: #000; padding: 10px; border-radius: 8px; border: 1px solid #444; }
-        .pillar-led { text-align: center; flex: 1; }
-        .led-dot { width: 12px; height: 12px; background: #400; border-radius: 50%; display: inline-block; margin-bottom: 5px; box-shadow: 0 0 5px rgba(0,0,0,1); }
+        .led-dot { width: 12px; height: 12px; background: #400; border-radius: 50%; display: inline-block; margin-bottom: 5px; }
         .led-dot.active { background: #0f0; box-shadow: 0 0 10px #0f0; }
-        .led-dot.inactive { background: #f00; box-shadow: 0 0 10px #f00; }
-        .pillar-label { font-size: 0.6rem; color: #888; display: block; }
 
-        .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 15px 0; }
-        .stat-item { background: #000; padding: 10px; border-radius: 8px; border: 1px solid #222; }
-        .stat-label { font-size: 0.7rem; color: #666; display: block; text-transform: uppercase; }
-        #res-delay, #cur-x, #cur-y { font-family: monospace; font-size: 1.2rem; color: #00ff00; }
+        .manual-input-group { display: none; background: #222; padding: 15px; border-radius: 10px; border: 1px solid #007bff; margin-top: 10px; }
+        .manual-input-group.visible { display: block; }
 
-        .manual-input-group { display: none; margin-top: 15px; border-top: 1px dashed #444; padding-top: 15px; }
-        .manual-input-group.active { display: block; }
-        input[type="number"] { width: 80px; padding: 10px; background: #000; border: 1px solid #007bff; color: #fff; border-radius: 5px; font-size: 1rem; }
-
-        #reader { width: 100%; border-radius: 10px; overflow: hidden; margin-bottom: 10px; border: 1px solid #444; background: #111; }
-        button { width: 100%; padding: 15px; font-weight: bold; border-radius: 8px; cursor: pointer; border: none; margin-top: 10px; transition: 0.2s; }
+        #reader { width: 100%; border-radius: 10px; overflow: hidden; margin-bottom: 10px; border: 1px solid #444; }
+        button { width: 100%; padding: 15px; font-weight: bold; border-radius: 8px; cursor: pointer; border: none; margin-top: 10px; }
         .btn-main { background: #007bff; color: white; }
-        .btn-qr { background: #6f42c1; color: white; }
-        .btn-toggle { background: #333; color: #aaa; font-size: 0.8rem; padding: 8px; }
         .btn-save { background: #28a745; color: white; }
-
-        #log { height: 100px; overflow-y: auto; background: #000; font-family: monospace; font-size: 0.75rem; padding: 10px; color: #0f0; border: 1px solid #222; margin-top: 10px; border-radius: 5px; }
+        #log { height: 120px; overflow-y: auto; background: #000; font-family: monospace; font-size: 0.75rem; padding: 10px; color: #0f0; border: 1px solid #222; margin-top: 10px; }
     </style>
 </head>
 <body>
 
     <div class="card">
-        <h2>1. Identify Target</h2>
+        <h2>1. Mode & Identification</h2>
+        <div class="mode-selector">
+            <button id="btn-mode-acoustic" class="mode-btn active" onclick="setMode('acoustic')">ACOUSTIC</button>
+            <button id="btn-mode-manual" class="mode-btn" onclick="setMode('manual')">MANUAL XY</button>
+        </div>
+
         <div id="reader"></div>
-        <button class="btn-qr" id="qr-toggle-btn" onclick="toggleScanner()">SCAN QR CODE</button>
-        <div id="current-id-display" style="margin-top:10px; font-weight:bold; color:#6f42c1; text-align:center;">No ID Scanned</div>
+        <button id="qr-toggle-btn" style="background:#6f42c1; color:white;" onclick="toggleScanner()">START SCANNER</button>
+        <div id="current-id-display" style="margin-top:10px; font-weight:bold; color:#00ff00; text-align:center; font-size: 1.2rem;">READY TO SCAN</div>
     </div>
 
     <div class="card">
-        <div style="display:flex; justify-content: space-between; align-items: center;">
-            <h2 style="margin:0;">2. XY Mapping</h2>
-            <button class="btn-toggle" onclick="toggleManualMode()" style="width:auto; margin:0;">Toggle Manual XY</button>
-        </div>
+        <h2>2. Data Entry</h2>
 
-        <div id="acoustic-monitor">
-            <div class="pillar-monitor" style="margin-top:15px;">
-                <div class="pillar-led"><div id="led-PILLAR_FL" class="led-dot"></div><span class="pillar-label">FL</span></div>
-                <div class="pillar-led"><div id="led-PILLAR_FR" class="led-dot"></div><span class="pillar-label">FR</span></div>
-                <div class="pillar-led"><div id="led-PILLAR_BL" class="led-dot"></div><span class="pillar-label">BL</span></div>
-                <div class="pillar-led"><div id="led-PILLAR_BR" class="led-dot"></div><span class="pillar-label">BR</span></div>
+        <div id="view-acoustic">
+            <div class="pillar-monitor">
+                <div style="text-align:center;"><div id="led-PILLAR_FL" class="led-dot"></div><br><small>FL</small></div>
+                <div style="text-align:center;"><div id="led-PILLAR_FR" class="led-dot"></div><br><small>FR</small></div>
+                <div style="text-align:center;"><div id="led-PILLAR_BL" class="led-dot"></div><br><small>BL</small></div>
+                <div style="text-align:center;"><div id="led-PILLAR_BR" class="led-dot"></div><br><small>BR</small></div>
             </div>
-            <button class="btn-main" id="survey-btn" onclick="startAcousticSurvey()">START ACOUSTIC SCAN</button>
+            <button class="btn-main" onclick="startAcousticSurvey()">START ACOUSTIC SCAN</button>
         </div>
 
-        <div id="manual-monitor" class="manual-input-group">
-            <div style="display:flex; justify-content: space-around; align-items: center; margin-bottom: 10px;">
-                <div>X: <input type="number" id="man-x" step="0.1" placeholder="0.0"></div>
-                <div>Y: <input type="number" id="man-y" step="0.1" placeholder="0.0"></div>
+        <div id="view-manual" class="manual-input-group">
+            <div style="display:flex; gap: 10px; justify-content: center; margin-bottom: 10px;">
+                <label>X: <input type="number" id="man-x" step="0.01" style="padding:10px; width:70px;"></label>
+                <label>Y: <input type="number" id="man-y" step="0.01" style="padding:10px; width:70px;"></label>
             </div>
-            <button class="btn-save" onclick="saveManualXY()">SAVE MANUAL XY</button>
-        </div>
-
-        <div class="stat-grid">
-            <div class="stat-item"><span class="stat-label">Device X (m)</span><span id="cur-x">?</span></div>
-            <div class="stat-item"><span class="stat-label">Device Y (m)</span><span id="cur-y">?</span></div>
-            <div class="stat-item"><span class="stat-label">Mic Delay (ms)</span><span id="res-delay">20.00</span></div>
+            <button class="btn-save" onclick="saveManualXY()">SAVE TO DATABASE</button>
         </div>
     </div>
 
-    <div id="log">Ready.</div>
+    <div id="log">Console initialized.</div>
 
     <script>
+        // --- Initialization ---
         const firebaseConfig = {
             apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
             authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
@@ -108,8 +98,11 @@ or mezzanine seats.
         let html5QrCode;
         let currentSeatId = null;
         let isManualMode = false;
-        let micDelay = 20.0;
         let pillarConfigs = {};
+
+        // DEBOUNCE LOGIC
+        let lastScanTime = 0;
+        const SCAN_COOLDOWN = 3000; // 3 seconds
 
         db.ref('active_pillars').on('value', snap => { if(snap.val()) pillarConfigs = snap.val(); });
 
@@ -119,6 +112,17 @@ or mezzanine seats.
             l.scrollTop = l.scrollHeight;
         }
 
+        // --- UI Logic ---
+        function setMode(mode) {
+            isManualMode = (mode === 'manual');
+            document.getElementById('btn-mode-acoustic').className = isManualMode ? 'mode-btn' : 'mode-btn active';
+            document.getElementById('btn-mode-manual').className = isManualMode ? 'mode-btn active' : 'mode-btn';
+
+            document.getElementById('view-acoustic').style.display = isManualMode ? 'none' : 'block';
+            document.getElementById('view-manual').className = isManualMode ? 'manual-input-group visible' : 'manual-input-group';
+            log(`Mode set to ${mode.toUpperCase()}`);
+        }
+
         function toggleScanner() {
             if (!html5QrCode) {
                 html5QrCode = new Html5Qrcode("reader");
@@ -126,31 +130,30 @@ or mezzanine seats.
                 document.getElementById('qr-toggle-btn').innerText = "STOP SCANNER";
             } else {
                 html5QrCode.stop().then(() => { html5QrCode = null; });
-                document.getElementById('qr-toggle-btn').innerText = "SCAN QR CODE";
+                document.getElementById('qr-toggle-btn').innerText = "START SCANNER";
             }
         }
 
         function onScanSuccess(decodedText) {
+            const now = Date.now();
+            if (now - lastScanTime < SCAN_COOLDOWN) return; // Ignore if scanned too recently
+
+            lastScanTime = now;
+
             try {
                 const url = new URL(decodedText);
                 currentSeatId = url.searchParams.get("id");
-                document.getElementById('current-id-display').innerText = `TARGET: ${currentSeatId}`;
-                log(`Locked Target: ${currentSeatId}`);
+                document.getElementById('current-id-display').innerText = `LOCKED: ${currentSeatId}`;
+                log(`Scan successful: ${currentSeatId}`);
 
-                // If we scan a pillar in manual mode, auto-fill its known XY
                 if(isManualMode && pillarConfigs[currentSeatId]) {
                     document.getElementById('man-x').value = pillarConfigs[currentSeatId].x;
                     document.getElementById('man-y').value = pillarConfigs[currentSeatId].y;
-                    log("Auto-filled Pillar XY.");
+                    log(`Auto-filled known coordinates for ${currentSeatId}`);
                 }
-            } catch(e) { log("Invalid QR."); }
-        }
-
-        function toggleManualMode() {
-            isManualMode = !isManualMode;
-            document.getElementById('acoustic-monitor').style.display = isManualMode ? 'none' : 'block';
-            document.getElementById('manual-monitor').className = isManualMode ? 'manual-input-group active' : 'manual-input-group';
-            log(isManualMode ? "Switched to MANUAL entry." : "Switched to ACOUSTIC survey.");
+            } catch(e) {
+                log("Scan ignored: Not a valid ID URL.");
+            }
         }
 
         async function saveManualXY() {
@@ -158,22 +161,17 @@ or mezzanine seats.
             const x = parseFloat(document.getElementById('man-x').value);
             const y = parseFloat(document.getElementById('man-y').value);
 
-            if (isNaN(x) || isNaN(y)) return alert("Enter valid X and Y numbers.");
+            if (isNaN(x) || isNaN(y)) return alert("Enter numeric X and Y.");
 
             await db.ref(`survey_results/${currentSeatId}`).set({
                 x: x, y: y, status: "MANUAL", timestamp: Date.now()
             });
-            log(`MANUAL SAVE: ${currentSeatId} at (${x}, ${y})`);
-
-            // Update "Device" view if we just 'manual surveyed' ourselves
-            document.getElementById('cur-x').innerText = x.toFixed(2);
-            document.getElementById('cur-y').innerText = y.toFixed(2);
+            log(`SUCCESS: Saved ${currentSeatId} manually.`);
         }
 
         async function startAcousticSurvey() {
             if (!currentSeatId) return alert("Scan a QR first!");
-            log("Acoustic survey started (Waiting for chirps)...");
-            // ... (Your existing acoustic capture/trilateration logic here)
+            log("Starting acoustic survey... (Wait for pillars)");
         }
     </script>
 </body>
