@@ -17,193 +17,151 @@ as commanded by timeline.json (as represented by the RTDBMS).
     <style>
         body { margin: 0; background: #000; color: #fff; font-family: 'Segoe UI', sans-serif; height: 100vh; display: flex; align-items: center; justify-content: center; text-align: center; overflow: hidden; touch-action: none; }
         #setup-screen { padding: 20px; max-width: 400px; z-index: 10; }
-        .checklist { text-align: left; background: #111; padding: 20px; border-radius: 12px; border: 1px solid #333; margin-bottom: 25px; }
-        .checklist label { display: block; margin: 10px 0; font-size: 1.1rem; }
-        .btn-ready { width: 100%; padding: 20px; font-size: 1.5rem; background: #007bff; color: #fff; border: none; border-radius: 50px; cursor: pointer; transition: background 0.3s; }
-        .btn-ready:disabled { background: #333; color: #666; cursor: not-allowed; }
-        #status { margin-top: 20px; font-family: monospace; color: #888; text-transform: uppercase; font-size: 0.8rem; letter-spacing: 1px; }
-        #show-screen { display: none; width: 100%; height: 100%; }
-
-        /* Recovery Overlay */
-        #recovery-overlay {
-            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.95); z-index: 9999; flex-direction: column;
-            align-items: center; justify-content: center; cursor: pointer;
-        }
-        .pulse-text { animation: pulse-red 1.5s infinite; font-size: 1.5rem; color: #ff4444; font-weight: bold; }
-        @keyframes pulse-red { 0% { opacity: 1; } 50% { opacity: 0.4; } 100% { opacity: 1; } }
+        #show-screen { display: none; position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; background: #000; }
+        .btn-ready { background: #007bff; color: white; border: none; padding: 20px 40px; border-radius: 50px; font-size: 1.5rem; font-weight: bold; cursor: pointer; box-shadow: 0 0 20px rgba(0,123,255,0.5); }
     </style>
 </head>
 <body>
 
     <div id="setup-screen">
-        <h1>Smartphone Orchestra</h1>
-        <div class="checklist">
-            <label><input type="checkbox" id="chk-audio" onchange="checkStatus()"> Silence Ringer / Max Vol</label>
-            <label><input type="checkbox" id="chk-wifi" onchange="checkStatus()"> Theatre Wi-Fi Connected</label>
-            <label><input type="checkbox" id="chk-bright" onchange="checkStatus()"> Max Screen Brightness</label>
-        </div>
-        <button id="ready-btn" class="btn-ready" disabled>ENTER THE MESH</button>
-        <div id="status">Syncing with Conductor...</div>
+        <h1 id="id-display">Connecting...</h1>
+        <button id="ready-btn" class="btn-ready">I AM READY</button>
     </div>
 
     <div id="show-screen"></div>
-
-    <div id="recovery-overlay" onclick="resumeAudio()">
-        <div class="pulse-text">CONNECTION INTERRUPTED</div>
-        <p>Tap to rejoin the performance</p>
-    </div>
 
     <script>
         const firebaseConfig = {
             apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
             authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
-            databaseURL: "https://smartphoneorchestra-dwt-default-rtdb.firebaseio.com/",
-            projectId: "smartphoneorchestra-dwt",
-            storageBucket: "smartphoneorchestra-dwt.firebasestorage.app",
-            messagingSenderId: "722537253165",
-            appId: "1:722537253165:web:8e8b6495bd508de35b2ba4"
+            databaseURL: "https://smartphoneorchestra-dwt-default-rtdb.firebaseio.com",
+            projectId: "smartphoneorchestra-dwt"
         };
         firebase.initializeApp(firebaseConfig);
         const db = firebase.database();
 
-        let audioCtx, masterGain, highPass;
-        let mySeat = { id: 'GUEST', x: 0, y: 0 };
-        const bufferCache = {};
+        let mySeat = { id: 'unknown', x: 0, y: 0 };
+        let audioCtx, masterGain, bufferCache = {};
+        let activeAnimation = null; // Holds the requestAnimationFrame ID
 
-        // --- LINEAR CLOCK SYNC ---
-        let syncPoints = [];
-        let driftRate = 1.0;
-        let timeOffset = 0;
-
-        function getSyncedTime() {
-            return (Date.now() * driftRate) + timeOffset;
-        }
-
-        db.ref('laptop/clock').on('value', snap => {
-            if (!snap.exists()) return;
-            const laptopTime = snap.val();
-            const localTime = Date.now();
-            syncPoints.push({ local: localTime, remote: laptopTime });
-            if (syncPoints.length > 10) syncPoints.shift();
-
-            if (syncPoints.length >= 2) {
-                const p1 = syncPoints[0];
-                const p2 = syncPoints[syncPoints.length - 1];
-                driftRate = (p2.remote - p1.remote) / (p2.local - p1.local);
-                timeOffset = p2.remote - (p2.local * driftRate);
-            } else {
-                timeOffset = laptopTime - localTime;
-            }
-        });
-
-        // --- IDENTITY & ASSETS ---
         async function resolveIdentity() {
             const params = new URLSearchParams(window.location.search);
-            mySeat.id = params.get('id') || 'GUEST_' + Math.floor(Math.random()*1000);
+            mySeat.id = params.get('id') || 'Z99';
             mySeat.x = parseFloat(params.get('x')) || 0;
             mySeat.y = parseFloat(params.get('y')) || 0;
+            document.getElementById('id-display').innerText = `Seat ${mySeat.id}`;
         }
 
         async function preloadAssets() {
-            const statusDiv = document.getElementById('status');
-            try {
-                const response = await fetch('cues.json');
-                const cues = await response.json();
-                const urls = [...new Set(cues.filter(c => c.type === 'AUDIO').map(c => c.url))];
-                if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-
-                for (let i = 0; i < urls.length; i++) {
-                    statusDiv.innerText = `PRELOADING: ${Math.round((i/urls.length)*100)}%`;
-                    const res = await fetch(urls[i]);
-                    bufferCache[urls[i]] = await audioCtx.decodeAudioData(await res.arrayBuffer());
-                }
-                statusDiv.innerText = `READY - ${mySeat.id}`;
-                checkStatus();
-            } catch (e) { statusDiv.innerText = "LOAD ERROR"; }
-        }
-
-        function checkStatus() {
-            const readyBtn = document.getElementById('ready-btn');
-            readyBtn.disabled = !(document.getElementById('chk-audio').checked &&
-                                  document.getElementById('chk-wifi').checked &&
-                                  document.getElementById('chk-bright').checked);
-        }
-
-        // --- PERFORMANCE LOCKS ---
-        async function startPerformanceMode() {
-            if (screen.orientation && screen.orientation.lock) {
-                try {
-                    if (!document.fullscreenElement) await document.documentElement.requestFullscreen();
-                    await screen.orientation.lock('portrait-primary');
-                } catch (e) { console.warn("Lock failed"); }
-            }
-            audioCtx.onstatechange = () => {
-                document.getElementById('recovery-overlay').style.display =
-                    (audioCtx.state === 'suspended' || audioCtx.state === 'interrupted') ? 'flex' : 'none';
-            };
-        }
-
-        async function resumeAudio() {
-            if (audioCtx) await audioCtx.resume();
-        }
-
-        function initAudioEngine() {
-            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const snap = await db.ref('show/script').once('value');
+            const script = snap.val() || [];
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             masterGain = audioCtx.createGain();
+            masterGain.connect(audioCtx.destination);
 
-            // --- THE PILLAR BYPASS LOGIC ---
-            if (mySeat.id.toUpperCase().includes('PILLAR')) {
-                // A9 Beacons have subwoofers. Provide full-range audio.
-                console.log("PILLAR DETECTED: Disabling High-Pass Protection.");
-                masterGain.connect(audioCtx.destination);
-            } else {
-                // Patron phone protection: Cut everything below 350Hz.
-                highPass = audioCtx.createBiquadFilter();
-                highPass.type = "highpass";
-                highPass.frequency.setValueAtTime(350, audioCtx.currentTime);
-                masterGain.connect(highPass).connect(audioCtx.destination);
+            for (const cue of script) {
+                if (cue.type === 'AUDIO' && cue.url) {
+                    const res = await fetch(cue.url);
+                    const data = await res.arrayBuffer();
+                    bufferCache[cue.url] = await audioCtx.decodeAudioData(data);
+                }
             }
         }
 
-        function playSpatialAudio(cue) {
-            const dist = Math.sqrt(Math.pow(mySeat.x - cue.originX, 2) + Math.pow(mySeat.y - cue.originY, 2));
-            if (dist > cue.radius) return;
+        function playSpatialCue(cue) {
+            // Cancel any previous sweep animation
+            if (activeAnimation) cancelAnimationFrame(activeAnimation);
 
-            let vol = (cue.rolloff === "none") ? 1.0 : (1 - (dist / cue.radius));
-            const serverNow = getSyncedTime();
-            const delaySec = (cue.triggerTime - serverNow) / 1000;
-            const startTime = audioCtx.currentTime + delaySec;
+            const startTime = cue.triggerTime / 1000; // Firebase timestamp in seconds
+            const duration = cue.elapsedT || 0;
+            const screen = document.getElementById('show-screen');
 
-            if (delaySec < -1.0) return;
+            let audioSource = null;
+            let audioGain = null;
 
+            // 1. Initialize Audio if applicable
             if (cue.type === 'AUDIO' && bufferCache[cue.url]) {
-                const source = audioCtx.createBufferSource();
-                source.buffer = bufferCache[cue.url];
-                const g = audioCtx.createGain();
-                g.gain.setValueAtTime(vol, startTime);
-                source.connect(g).connect(masterGain);
-                source.start(Math.max(audioCtx.currentTime, startTime));
+                audioSource = audioCtx.createBufferSource();
+                audioSource.buffer = bufferCache[cue.url];
+                audioGain = audioCtx.createGain();
+                audioSource.connect(audioGain).connect(masterGain);
+                audioSource.start(Math.max(audioCtx.currentTime, startTime));
+
+                // Hard Stop at elapsedT
+                if (duration > 0) {
+                    audioSource.stop(startTime + duration);
+                }
             }
 
-            if (cue.type === 'LIGHT' || cue.color) {
-                setTimeout(() => {
-                    document.getElementById('show-screen').style.background = cue.color || '#000';
-                }, Math.max(0, delaySec * 1000));
+            // 2. The Animation Loop (The Sweep)
+            function update() {
+                const now = audioCtx.currentTime;
+                const elapsedSinceStart = now - startTime;
+
+                // If cue is finished, reset screen and stop loop
+                if (duration > 0 && elapsedSinceStart > duration) {
+                    screen.style.background = '#000';
+                    if (audioGain) audioGain.gain.setTargetAtTime(0, now, 0.05);
+                    return;
+                }
+
+                // Calculate current source position (Interpolate between origin and dest)
+                let currentX = cue.originX || 0;
+                let currentY = cue.originY || 0;
+
+                if (duration > 0 && cue.destX !== undefined) {
+                    const pct = Math.min(1, elapsedSinceStart / duration);
+                    currentX = cue.originX + (cue.destX - cue.originX) * pct;
+                    currentY = cue.originY + (cue.destY - cue.originY) * pct;
+                }
+
+                // Spatial Logic
+                const dist = Math.sqrt(Math.pow(mySeat.x - currentX, 2) + Math.pow(mySeat.y - currentY, 2));
+                let intensity = 0;
+
+                if (cue.radius) {
+                    if (cue.rolloff === 'linear') {
+                        intensity = Math.max(0, 1 - (dist / cue.radius));
+                    } else { // 'none' / hard edge
+                        intensity = dist <= cue.radius ? 1 : 0;
+                    }
+                } else {
+                    intensity = 1; // Global cue if no radius
+                }
+
+                // Apply to Light
+                if (cue.type === 'LIGHT' || cue.color) {
+                    if (intensity > 0) {
+                        screen.style.background = cue.color || '#fff';
+                        screen.style.opacity = intensity;
+                    } else {
+                        screen.style.background = '#000';
+                    }
+                }
+
+                // Apply to Audio
+                if (audioGain) {
+                    audioGain.gain.setTargetAtTime(intensity, now, 0.02);
+                }
+
+                activeAnimation = requestAnimationFrame(update);
+            }
+
+            if (audioCtx.currentTime >= startTime || duration > 0) {
+                update();
             }
         }
 
         document.getElementById('ready-btn').onclick = async () => {
-            initAudioEngine();
-            await startPerformanceMode();
+            if (audioCtx.state === 'suspended') await audioCtx.resume();
             document.getElementById('setup-screen').style.display = 'none';
             document.getElementById('show-screen').style.display = 'block';
-            db.ref(`devices/${mySeat.id}`).set({ ...mySeat, online: true, lastSeen: Date.now() });
+
             db.ref('show/currentCue').on('value', snap => {
                 const cue = snap.val();
                 if (cue) {
                     if (cue.action === 'KILL') location.reload();
-                    playSpatialAudio(cue);
+                    playSpatialCue(cue);
                 }
             });
         };
@@ -211,6 +169,7 @@ as commanded by timeline.json (as represented by the RTDBMS).
         window.onload = async () => {
             await resolveIdentity();
             await preloadAssets();
+            document.getElementById('ready-btn').disabled = false;
         };
     </script>
 </body>
