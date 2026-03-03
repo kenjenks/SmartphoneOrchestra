@@ -16,7 +16,7 @@ or mezzanine seats.
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Orchestra Surveyor: Manual & Acoustic v2</title>
+    <title>SmartphoneOrchestra Surveyor</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <script src="https://unpkg.com/html5-qrcode"></script>
@@ -24,7 +24,6 @@ or mezzanine seats.
         body { font-family: 'Segoe UI', sans-serif; background: #000; color: #fff; padding: 20px; margin: 0; }
         .card { background: #1a1a1a; border-radius: 15px; padding: 20px; border: 1px solid #333; margin-bottom: 15px; }
 
-        /* High-visibility toggle */
         .mode-selector { display: flex; background: #333; border-radius: 8px; margin-bottom: 15px; padding: 5px; }
         .mode-btn { flex: 1; padding: 10px; border-radius: 6px; border: none; background: transparent; color: #888; cursor: pointer; font-weight: bold; }
         .mode-btn.active { background: #007bff; color: white; }
@@ -33,14 +32,18 @@ or mezzanine seats.
         .led-dot { width: 12px; height: 12px; background: #400; border-radius: 50%; display: inline-block; margin-bottom: 5px; }
         .led-dot.active { background: #0f0; box-shadow: 0 0 10px #0f0; }
 
-        .manual-input-group { display: none; background: #222; padding: 15px; border-radius: 10px; border: 1px solid #007bff; margin-top: 10px; }
-        .manual-input-group.visible { display: block; }
-
         #reader { width: 100%; border-radius: 10px; overflow: hidden; margin-bottom: 10px; border: 1px solid #444; }
         button { width: 100%; padding: 15px; font-weight: bold; border-radius: 8px; cursor: pointer; border: none; margin-top: 10px; }
         .btn-main { background: #007bff; color: white; }
         .btn-save { background: #28a745; color: white; }
+
+        .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 15px 0; }
+        .stat-item { background: #000; padding: 10px; border-radius: 8px; border: 1px solid #222; }
+        .stat-label { font-size: 0.7rem; color: #666; display: block; text-transform: uppercase; }
+        #res-delay, #cur-x, #cur-y { font-family: monospace; font-size: 1.2rem; color: #00ff00; }
+
         #log { height: 120px; overflow-y: auto; background: #000; font-family: monospace; font-size: 0.75rem; padding: 10px; color: #0f0; border: 1px solid #222; margin-top: 10px; }
+        input[type="number"] { background: #000; color: #0f0; border: 1px solid #444; padding: 8px; width: 60px; border-radius: 4px; }
     </style>
 </head>
 <body>
@@ -51,10 +54,9 @@ or mezzanine seats.
             <button id="btn-mode-acoustic" class="mode-btn active" onclick="setMode('acoustic')">ACOUSTIC</button>
             <button id="btn-mode-manual" class="mode-btn" onclick="setMode('manual')">MANUAL XY</button>
         </div>
-
         <div id="reader"></div>
         <button id="qr-toggle-btn" style="background:#6f42c1; color:white;" onclick="toggleScanner()">START SCANNER</button>
-        <div id="current-id-display" style="margin-top:10px; font-weight:bold; color:#00ff00; text-align:center; font-size: 1.2rem;">READY TO SCAN</div>
+        <div id="current-id-display" style="margin-top:10px; font-weight:bold; color:#00ff00; text-align:center;">READY TO SCAN</div>
     </div>
 
     <div class="card">
@@ -70,41 +72,47 @@ or mezzanine seats.
             <button class="btn-main" onclick="startAcousticSurvey()">START ACOUSTIC SCAN</button>
         </div>
 
-        <div id="view-manual" class="manual-input-group">
-            <div style="display:flex; gap: 10px; justify-content: center; margin-bottom: 10px;">
-                <label>X: <input type="number" id="man-x" step="0.01" style="padding:10px; width:70px;"></label>
-                <label>Y: <input type="number" id="man-y" step="0.01" style="padding:10px; width:70px;"></label>
+        <div id="view-manual" style="display:none; text-align:center;">
+            <div style="margin-bottom:10px;">
+                X: <input type="number" id="man-x" step="0.01">
+                Y: <input type="number" id="man-y" step="0.01">
             </div>
             <button class="btn-save" onclick="saveManualXY()">SAVE TO DATABASE</button>
+        </div>
+
+        <div class="stat-grid">
+            <div class="stat-item"><span class="stat-label">Device X (m)</span><span id="cur-x">?</span></div>
+            <div class="stat-item"><span class="stat-label">Device Y (m)</span><span id="cur-y">?</span></div>
+            <div class="stat-item"><span class="stat-label">Mic Delay (ms)</span><span id="res-delay">20.00</span></div>
         </div>
     </div>
 
     <div id="log">Console initialized.</div>
 
     <script>
-        // --- Initialization ---
         const firebaseConfig = {
             apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
             authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
             databaseURL: "https://smartphoneorchestra-dwt-default-rtdb.firebaseio.com",
-            projectId: "smartphoneorchestra-dwt",
-            storageBucket: "smartphoneorchestra-dwt.appspot.com",
-            messagingSenderId: "389274027412",
-            appId: "1:389274027412:web:681498263948b89412"
+            projectId: "smartphoneorchestra-dwt"
         };
         firebase.initializeApp(firebaseConfig);
         const db = firebase.database();
 
-        let html5QrCode;
-        let currentSeatId = null;
-        let isManualMode = false;
-        let pillarConfigs = {};
+        let html5QrCode, audioCtx, analyser, currentSeatId = null;
+        let isManualMode = false, micDelay = 20.0, lastScanTime = 0;
+        let pillarConfigs = {}, speedOfSound = 344.0;
 
-        // DEBOUNCE LOGIC
-        let lastScanTime = 0;
-        const SCAN_COOLDOWN = 3000; // 3 seconds
+        // Threshold for detecting a chirp (0-255)
+        const CHIRP_THRESHOLD = 150;
 
-        db.ref('active_pillars').on('value', snap => { if(snap.val()) pillarConfigs = snap.val(); });
+        db.ref('active_pillars').on('value', snap => {
+            const data = snap.val();
+            if(data) {
+                pillarConfigs = data;
+                speedOfSound = data.speed_of_sound || 344.0;
+            }
+        });
 
         function log(msg) {
             const l = document.getElementById('log');
@@ -112,15 +120,12 @@ or mezzanine seats.
             l.scrollTop = l.scrollHeight;
         }
 
-        // --- UI Logic ---
         function setMode(mode) {
             isManualMode = (mode === 'manual');
-            document.getElementById('btn-mode-acoustic').className = isManualMode ? 'mode-btn' : 'mode-btn active';
-            document.getElementById('btn-mode-manual').className = isManualMode ? 'mode-btn active' : 'mode-btn';
-
+            document.getElementById('btn-mode-acoustic').classList.toggle('active', !isManualMode);
+            document.getElementById('btn-mode-manual').classList.toggle('active', isManualMode);
             document.getElementById('view-acoustic').style.display = isManualMode ? 'none' : 'block';
-            document.getElementById('view-manual').className = isManualMode ? 'manual-input-group visible' : 'manual-input-group';
-            log(`Mode set to ${mode.toUpperCase()}`);
+            document.getElementById('view-manual').style.display = isManualMode ? 'block' : 'none';
         }
 
         function toggleScanner() {
@@ -135,43 +140,129 @@ or mezzanine seats.
         }
 
         function onScanSuccess(decodedText) {
-            const now = Date.now();
-            if (now - lastScanTime < SCAN_COOLDOWN) return; // Ignore if scanned too recently
-
-            lastScanTime = now;
-
+            if (Date.now() - lastScanTime < 3000) return;
+            lastScanTime = Date.now();
             try {
                 const url = new URL(decodedText);
                 currentSeatId = url.searchParams.get("id");
                 document.getElementById('current-id-display').innerText = `LOCKED: ${currentSeatId}`;
-                log(`Scan successful: ${currentSeatId}`);
-
+                log(`Target set: ${currentSeatId}`);
                 if(isManualMode && pillarConfigs[currentSeatId]) {
                     document.getElementById('man-x').value = pillarConfigs[currentSeatId].x;
                     document.getElementById('man-y').value = pillarConfigs[currentSeatId].y;
-                    log(`Auto-filled known coordinates for ${currentSeatId}`);
                 }
-            } catch(e) {
-                log("Scan ignored: Not a valid ID URL.");
-            }
+            } catch(e) { log("Invalid QR format."); }
         }
 
-        async function saveManualXY() {
-            if (!currentSeatId) return alert("Scan a QR first!");
-            const x = parseFloat(document.getElementById('man-x').value);
-            const y = parseFloat(document.getElementById('man-y').value);
+        async function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                const source = audioCtx.createMediaStreamSource(stream);
+                analyser = audioCtx.createAnalyser();
+                analyser.fftSize = 2048;
+                source.connect(analyser);
+            }
+            if (audioCtx.state === 'suspended') await audioCtx.resume();
+        }
 
-            if (isNaN(x) || isNaN(y)) return alert("Enter numeric X and Y.");
+        async function captureChirps() {
+            await initAudio();
+            return new Promise((resolve) => {
+                const results = {};
+                const startTime = performance.now();
+                const bufferLength = analyser.frequencyBinCount;
+                const dataArray = new Uint8Array(bufferLength);
+                const sampleRate = audioCtx.sampleRate;
 
-            await db.ref(`survey_results/${currentSeatId}`).set({
-                x: x, y: y, status: "MANUAL", timestamp: Date.now()
+                log("Listening for Pillar frequencies...");
+
+                const checkAudio = () => {
+                    analyser.getByteFrequencyData(dataArray);
+
+                    Object.keys(pillarConfigs).forEach(pid => {
+                        if (results[pid]) return; // Already heard this one
+
+                        const freq = pillarConfigs[pid].freq;
+                        const bin = Math.round(freq / (sampleRate / analyser.fftSize));
+
+                        if (dataArray[bin] > CHIRP_THRESHOLD) {
+                            results[pid] = performance.now() - startTime;
+                            document.getElementById(`led-${pid}`).classList.add('active');
+                            log(`Heard ${pid} at ${results[pid].toFixed(1)}ms`);
+                        }
+                    });
+
+                    // Stop if we heard all 4 or 3 seconds pass
+                    if (Object.keys(results).length === 4 || (performance.now() - startTime) > 3000) {
+                        resolve(results);
+                    } else {
+                        requestAnimationFrame(checkAudio);
+                    }
+                };
+                requestAnimationFrame(checkAudio);
             });
-            log(`SUCCESS: Saved ${currentSeatId} manually.`);
         }
 
         async function startAcousticSurvey() {
-            if (!currentSeatId) return alert("Scan a QR first!");
-            log("Starting acoustic survey... (Wait for pillars)");
+            if (!currentSeatId) return alert("Scan QR first!");
+
+            // Reset LEDs
+            ["PILLAR_FL", "PILLAR_FR", "PILLAR_BL", "PILLAR_BR"].forEach(id => {
+                document.getElementById(`led-${id}`).classList.remove('active');
+            });
+
+            const measurements = await captureChirps();
+
+            if (pillarConfigs[currentSeatId]) {
+                calibrate(measurements);
+            } else {
+                trilaterate(measurements);
+            }
+        }
+
+        function calibrate(measurements) {
+            const me = pillarConfigs[currentSeatId];
+            let totalDelay = 0, count = 0;
+
+            Object.keys(measurements).forEach(pid => {
+                if (pid === currentSeatId) return;
+                const p = pillarConfigs[pid];
+                const dist = Math.sqrt(Math.pow(me.x - p.x, 2) + Math.pow(me.y - p.y, 2));
+                const theoreticalTime = (dist / speedOfSound) * 1000;
+                totalDelay += (measurements[pid] - theoreticalTime);
+                count++;
+            });
+
+            if (count > 0) {
+                micDelay = totalDelay / count;
+                document.getElementById('res-delay').innerText = micDelay.toFixed(2);
+                log(`Recalibrated Mic Delay: ${micDelay.toFixed(2)}ms`);
+                document.getElementById('cur-x').innerText = me.x.toFixed(2);
+                document.getElementById('cur-y').innerText = me.y.toFixed(2);
+            }
+        }
+
+        function trilaterate(measurements) {
+            // Simplified trilateration logic for theatre coordinate space
+            let dists = {};
+            Object.keys(measurements).forEach(pid => {
+                dists[pid] = ((measurements[pid] - micDelay) / 1000) * speedOfSound;
+            });
+
+            // Note: Replace with your least-squares trilateration helper
+            const x = 5.0, y = 10.0; // Placeholder
+
+            db.ref(`survey_results/${currentSeatId}`).set({ x, y, status: "ACOUSTIC", timestamp: Date.now() });
+            log(`Saved ${currentSeatId} at (${x}, ${y})`);
+        }
+
+        async function saveManualXY() {
+            if (!currentSeatId) return alert("Scan QR first!");
+            const x = parseFloat(document.getElementById('man-x').value);
+            const y = parseFloat(document.getElementById('man-y').value);
+            await db.ref(`survey_results/${currentSeatId}`).set({ x, y, status: "MANUAL", timestamp: Date.now() });
+            log(`Manual save: ${currentSeatId} at (${x}, ${y})`);
         }
     </script>
 </body>
