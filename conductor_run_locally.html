@@ -1,10 +1,19 @@
 <!DOCTYPE html>
 <!--
-laptopdist.html
+conductor_run_locally.html
 
 Webapp for leading the Smarphone Orchestra, sending cues to patro devices over Firebase.
 
-This is run from the Stage Manager or Sound Tech laptop. The clock of the laptop provides teh timebase for all devices.
+This is run locally from the Stage Manager or Sound Tech laptop. Open the local file in 
+your browser. (Double click on conductor_run_locally.html file in Windows Explorer.)
+
+These files must be in the same folder:
+
+- cues.json
+- pillar_config.json
+- timeline.json
+
+The clock of the laptop provides the timebase for all devices.
 
 -->
 <html lang="en">
@@ -211,6 +220,37 @@ This is run from the Stage Manager or Sound Tech laptop. The clock of the laptop
         if (e.code === "Space") { e.preventDefault(); confirmTrigger(); }
         if (e.key === "k" || e.key === "K") { emergencyStop(); }
     };
+
+
+    // ─── OSC/Chataigne bridge listener ───────────────────────────────────────────
+const evtSource = new EventSource('http://localhost:3000/events');
+
+evtSource.onmessage = (e) => {
+    const { label, buffer } = JSON.parse(e.data);
+    if (label === '0.0 SILENCE') {
+        emergencyStop();
+        return;
+    }
+    const idx = timeline.findIndex(t => t.cueLabel === label);
+    if (idx !== -1) {
+        nextIndex = idx;
+        confirmTrigger();
+    } else {
+        console.warn('Bridge: cue label not found in timeline:', label);
+    }
+};
+
+evtSource.onopen = () => {
+    document.getElementById('bridge-val').innerText = 'BRIDGE: OK';
+    document.getElementById('bridge-val').style.color = '#00ff00';
+};
+
+evtSource.onerror = () => {
+    document.getElementById('bridge-val').innerText = 'BRIDGE: OFFLINE';
+    document.getElementById('bridge-val').style.color = '#ff4444';
+};
+
+
 </script>
 </body>
 </html>
