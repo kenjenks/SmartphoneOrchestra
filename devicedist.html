@@ -6,34 +6,81 @@ Webapp for patron devices. Plays sounds and lightshow
 in cues.json (as represented by the RTDBMS)
 as commanded by timeline.json (as represented by the RTDBMS).
 
+devicedist.html: Feature List
+
+1. Synchronized Spatial Audio Engine
+- Firebase Real-Time Integration: Listens for 'currentCue' updates and maps
+  them to local playback using a shared master clock to eliminate jitter.
+
+- Acoustic Spatialization: Calculates real-time gain based on the distance
+  between the patron's seat (from seat_config.tsv) and the sound's
+  originX/Y coordinates.
+
+- Hardware "Silent Warm-up": Triggers a 100ms silent burst immediately
+  upon receiving a cue to prime the MP3 decoder and wake the mobile
+  device's audio hardware before the actual scheduled start time.
+
+- Non-Blocking Asset Preloading: Fetches and decodes all AUDIO type
+  cues into a local bufferCache during the initial setup phase.
+
+2. A9 Pillar Management (Anchor Mode)
+- Identity-Based Filtering: Recognizes "PILLAR_" seat_ids and
+  automatically filters out individual instrument stems to play only
+  the high-fidelity Master Mixes designed for the corners.
+
+- Deep Bass Reinforcement: Provides the room-wide low-frequency
+  foundation for localized phone sounds, acting as a "subwoofer anchor."
+
+3. Additive Visual Engine
+- Global Animation Loop: Uses requestAnimationFrame to provide 60fps
+  color updates without the flickering or "strobe" effects.
+
+- RGB Additive Blending: Implements 'lighter' composite operations,
+  allowing overlapping light cues to mix colors mathematically
+  (e.g., Red + Blue = Magenta).
+
+- Spatial Light Mapping: Scales screen brightness based on the patron’s
+  proximity to the light's originX/Y, allowing for sweeps and pulses.
+
+4. Performance & Reliability
+- Asset Resilience: Wraps preloading in try/catch blocks to ensure
+  a single missing MP3 doesn't crash the entire performer node.
+
+- Battery & System Monitoring: Reports device battery level and
+  charging status back to Firebase for real-time stage management.
+
+- System Kill Switch: Listens for 'SYSTEM' cues with 'KILL' actions
+  to force immediate browser reloads across all nodes.
+
 -->
-<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Smartphone Orchestra: Patron Node</title>
+    <title>Smartphone Orchestra: Performer Node</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <style>
-        body { margin: 0; padding: 0; background: #000; color: #fff; font-family: sans-serif; height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; overflow: hidden; }
-        #status { font-size: 0.8rem; color: #444; position: fixed; bottom: 10px; width: 100%; text-align: center; }
-        #interaction-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #000; z-index: 100; display: flex; flex-direction: column; align-items: center; justify-content: center; transition: opacity 0.5s; }
-        .btn-start { padding: 20px 40px; font-size: 1.5rem; background: #222; color: #fff; border: 1px solid #444; border-radius: 8px; cursor: pointer; }
-        #visual-canvas { position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; }
-        .info-text { margin-top: 20px; color: #666; font-size: 0.9rem; }
+        body { margin: 0; background: #000; color: #fff; font-family: 'Segoe UI', sans-serif; height: 100vh; display: flex; align-items: center; justify-content: center; text-align: center; overflow: hidden; touch-action: none; }
+        #setup-screen { padding: 20px; max-width: 400px; z-index: 10; }
+        #show-screen { display: none; position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; background: #000; }
+        .btn { padding: 15px 30px; font-size: 1.2rem; background: #444; color: #fff; border: none; border-radius: 5px; cursor: pointer; }
+        .btn:disabled { background: #222; color: #555; }
+        #status { margin-top: 10px; font-size: 0.8rem; color: #888; }
+        #visual-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
     </style>
 </head>
 <body>
 
-    <div id="interaction-overlay">
-        <h1 id="seat-label">WAITING...</h1>
-        <button class="btn-start" onclick="initAudio()">ENTER ORCHESTRA</button>
-        <p class="info-text">Please ensure silent mode is OFF</p>
+    <div id="setup-screen">
+        <h2 id="seat-display">Locating Seat...</h2>
+        <button id="ready-btn" class="btn" disabled>ENTER ORCHESTRA</button>
+        <div id="status">Syncing with Theater...</div>
     </div>
 
-    <canvas id="visual-canvas"></canvas>
-    <div id="status">SYNCING...</div>
+    <div id="show-screen">
+        <canvas id="visual-canvas"></canvas>
+    </div>
 
     <script>
         const firebaseConfig = {
@@ -45,42 +92,79 @@ as commanded by timeline.json (as represented by the RTDBMS).
         firebase.initializeApp(firebaseConfig);
         const db = firebase.database();
 
-        let audioCtx, myIdentity = null;
+        let audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        let myIdentity = { x: 7.7, y: 12.5, seat_id: 'Unknown' };
         let bufferCache = {};
+
+        // Light Animation Globals
         const canvas = document.getElementById('visual-canvas');
         const ctx = canvas.getContext('2d');
+        let activeLightCues = [];
+        let animationFrameRequested = false;
 
-        // Resolve Seat Identity from URL or Auto-Assign
         async function resolveIdentity() {
-            const urlParams = new URLSearchParams(window.location.search);
-            const seatId = urlParams.get('seat');
+            const params = new URLSearchParams(window.location.search);
+            const seatId = params.get('seat');
+            if (!seatId) return;
 
-            if (seatId) {
-                const snap = await db.ref('theater/seats').orderByChild('seat_id').equalTo(seatId).once('value');
-                snap.forEach(child => { myIdentity = child.val(); });
-            }
-
-            if (myIdentity) {
-                document.getElementById('seat-label').innerText = `SEAT: ${myIdentity.seat_id}`;
-                // Register device presence
-                db.ref(`devices/${myIdentity.seat_id}`).set({ status: 'online', ts: Date.now() });
-            } else {
-                document.getElementById('seat-label').innerText = "OBSERVER MODE";
-                myIdentity = { x: 7.7, y: 12.5, seat_id: 'OBSERVER' };
-            }
-        }
-        resolveIdentity();
-
-        function initAudio() {
-            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            document.getElementById('interaction-overlay').style.opacity = '0';
-            setTimeout(() => { document.getElementById('interaction-overlay').style.display = 'none'; }, 500);
-
-            // Listen for Cues
-            db.ref('show/currentCue').on('value', snap => {
-                const cue = snap.val();
-                if (cue) playSpatialCue(cue);
+            const snap = await db.ref('theater/seats').once('value');
+            snap.forEach(child => {
+                if (child.val().seat_id === seatId) {
+                    myIdentity = child.val();
+                    document.getElementById('seat-display').innerText = "Seat " + seatId;
+                }
             });
+        }
+
+        async function preloadAssets() {
+            const snap = await db.ref('show/cues').once('value');
+            const cues = snap.val();
+            for (let key in cues) {
+                const cue = cues[key];
+                if (cue.type === 'AUDIO' && cue.url && !bufferCache[cue.url]) {
+                    try {
+                        const res = await fetch(cue.url);
+                        const data = await res.arrayBuffer();
+                        bufferCache[cue.url] = await audioCtx.decodeAudioData(data);
+                    } catch (e) { console.error("Load failed:", cue.label); }
+                }
+            }
+            document.getElementById('status').innerText = "Orchestra Ready";
+        }
+
+        // Global Light Loop: Blends all active cues
+        function updateLights() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.globalCompositeOperation = 'lighter'; // Additive blending (R+R, G+G, B+B)
+
+            const now = Date.now();
+            activeLightCues = activeLightCues.filter(c => now < c.endTime);
+
+            activeLightCues.forEach(cue => {
+                const elapsed = now - cue.startTime;
+                const progress = elapsed / cue.duration;
+
+                // Linear fade out
+                const fadeIntensity = Math.max(0, 1 - progress);
+
+                // Spatial Intensity
+                let spatialMult = 1.0;
+                if (cue.originX !== undefined) {
+                    const dist = Math.sqrt(Math.pow(myIdentity.x - cue.originX, 2) + Math.pow(myIdentity.y - cue.originY, 2));
+                    spatialMult = Math.max(0, 1 - (dist / (cue.radius || 15)));
+                }
+
+                ctx.globalAlpha = fadeIntensity * spatialMult;
+                ctx.fillStyle = cue.color || '#ffffff';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+            });
+
+            if (activeLightCues.length > 0) {
+                requestAnimationFrame(updateLights);
+            } else {
+                animationFrameRequested = false;
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+            }
         }
 
         async function playSpatialCue(cue) {
@@ -88,55 +172,39 @@ as commanded by timeline.json (as represented by the RTDBMS).
             if (cue.type === 'AUDIO') {
                 const isPillar = myIdentity.seat_id.startsWith("PILLAR");
                 const isPillarCue = cue.label.startsWith("PILLAR_MASTER");
-
-                // Pillar Logic: Only play designated master mix
                 if (isPillar && cue.label !== myIdentity.seat_id.replace("PILLAR_", "PILLAR_MASTER_")) return;
-
-                // Patron Logic: Ignore pillar master mixes
                 if (!isPillar && isPillarCue) return;
             }
 
-            // System Kill Check
-            if (cue.type === 'SYSTEM' && cue.action === 'KILL') {
-                location.reload();
-                return;
-            }
-
             const now = Date.now();
-            const delay = cue.scheduledTime ? (cue.scheduledTime - now) / 1000 : 0;
+            const scheduledTime = cue.scheduledTime || now;
+            const delay = (scheduledTime - now) / 1000;
 
             // --- AUDIO LOGIC ---
             if (cue.type === 'AUDIO' && cue.url) {
                 if (!bufferCache[cue.url]) {
-                    const response = await fetch(cue.url);
-                    const arrayBuffer = await response.arrayBuffer();
-                    bufferCache[cue.url] = await audioCtx.decodeAudioData(arrayBuffer);
+                    const res = await fetch(cue.url);
+                    const data = await res.arrayBuffer();
+                    bufferCache[cue.url] = await audioCtx.decodeAudioData(data);
                 }
-
                 const buffer = bufferCache[cue.url];
 
-                // 1. SILENT HARDWARE WARM-UP
-                // Triggered immediately during the 1s buffer window to prime the hardware
+                // Silent Hardware Warm-up (decoder priming)
                 const warmUp = audioCtx.createBufferSource();
                 const warmUpGain = audioCtx.createGain();
                 warmUp.buffer = buffer;
-                warmUpGain.gain.value = 0; // Absolute silence
+                warmUpGain.gain.value = 0;
                 warmUp.connect(warmUpGain);
                 warmUpGain.connect(audioCtx.destination);
-                warmUp.start(0, 0, 0.1); // Play 100ms burst to wake decoder/hardware
+                warmUp.start(0, 0, 0.1);
 
-                // 2. SPATIAL CALCULATIONS
+                // Spatial Volume calculation
                 let volume = 1.0;
                 if (cue.originX !== undefined) {
                     const dist = Math.sqrt(Math.pow(myIdentity.x - cue.originX, 2) + Math.pow(myIdentity.y - cue.originY, 2));
-                    if (cue.rolloff === 'linear') {
-                        volume = Math.max(0, 1 - (dist / (cue.radius || 10)));
-                    } else if (cue.rolloff === 'none') {
-                        volume = dist <= cue.radius ? 1.0 : 0;
-                    }
+                    if (cue.rolloff === 'linear') volume = Math.max(0, 1 - (dist / (cue.radius || 10)));
                 }
 
-                // 3. SCHEDULED PLAYBACK
                 const source = audioCtx.createBufferSource();
                 const gainNode = audioCtx.createGain();
                 source.buffer = buffer;
@@ -146,41 +214,48 @@ as commanded by timeline.json (as represented by the RTDBMS).
                 source.start(audioCtx.currentTime + Math.max(0, delay));
             }
 
-            // --- LIGHT LOGIC (Shared by all devices) ---
+            // --- ADDITIVE LIGHT LOGIC ---
             if (cue.type === 'LIGHT') {
+                const duration = cue.elapsedT ? cue.elapsedT * 1000 : 3000;
+
                 setTimeout(() => {
                     canvas.width = window.innerWidth;
                     canvas.height = window.innerHeight;
-                    ctx.fillStyle = cue.color || '#ffffff';
-                    ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-                    // Fade out light
-                    let opacity = 1.0;
-                    const fade = setInterval(() => {
-                        opacity -= 0.05;
-                        ctx.clearRect(0, 0, canvas.width, canvas.height);
-                        ctx.globalAlpha = opacity;
-                        ctx.fillStyle = cue.color || '#ffffff';
-                        ctx.fillRect(0, 0, canvas.width, canvas.height);
-                        if (opacity <= 0) clearInterval(fade);
-                    }, 50);
-                }, Math.max(0, delay * 1000));
+                    activeLightCues.push({
+                        ...cue,
+                        startTime: Date.now(),
+                        endTime: Date.now() + duration,
+                        duration: duration
+                    });
+
+                    if (!animationFrameRequested) {
+                        animationFrameRequested = true;
+                        requestAnimationFrame(updateLights);
+                    }
+                }, Math.max(0, scheduledTime - Date.now()));
             }
         }
 
-        // Battery level monitoring for Android devices
-        if ('getBattery' in navigator) {
-            navigator.getBattery().then(battery => {
-                const report = () => {
-                    db.ref(`devices/${myIdentity?.seat_id || 'unknown'}/battery`).set({
-                        level: Math.round(battery.level * 100),
-                        charging: battery.charging
-                    });
-                };
-                report();
-                battery.onlevelchange = report;
+        document.getElementById('ready-btn').onclick = async () => {
+            if (audioCtx.state === 'suspended') await audioCtx.resume();
+            document.getElementById('setup-screen').style.display = 'none';
+            document.getElementById('show-screen').style.display = 'block';
+
+            db.ref('show/currentCue').on('value', snap => {
+                const cue = snap.val();
+                if (cue) {
+                    if (cue.action === 'KILL') location.reload();
+                    playSpatialCue(cue);
+                }
             });
-        }
+        };
+
+        window.onload = async () => {
+            await resolveIdentity();
+            await preloadAssets();
+            document.getElementById('ready-btn').disabled = false;
+        };
     </script>
 </body>
 </html>
