@@ -1,28 +1,112 @@
 [
-	{ "label": "0.0 SILENCE", "type": "SYSTEM", "action": "KILL" },
-	{ "label": "1.0 Ambient Wash", "type": "AUDIO", "url": "https://static.wixstatic.com/mp3/9178d1_c64e342ad14242659d886799c6ed7b4c.mp3"},
-	{ "label": "2.0 Front Pulse",
-		"type": "AUDIO",
-		"url": "https://static.wixstatic.com/mp3/9178d1_a5cb96dce682491ea42e418161799bbf.mp3",
-		"originX": 7.5,
-		"originY": 0,
-		"destX": 15,
-		"destY": 0,
-		"radius": 5,
-		"rolloff": "linear",
-		"elapsedT": 10,
-		"motion": "slowfastslow"
-	},
-	{ "label": "3.0 Blue Sweep",
-		"type": "LIGHT",
-		"color": "#0000ff",
-		"originX": 7.5,
-		"originY": 0,
-		"destX": 15,
-		"destY": 0,
-		"radius": 5,
-		"rolloff": "none",
-		"motion": "slowfastslow"
-	},
-	{ "label": "4.0 Final Build", "type": "AUDIO", "url": "https://static.wixstatic.com/mp3/9178d1_94e834e9df8040959ba9c0cc1644eebc.mp3"}
+  { "label": "0.0 SILENCE", "type": "SYSTEM", "action": "KILL" },
+  {
+    "label": "PILLAR_MASTER_FL",
+    "type": "AUDIO",
+    "url": "audio/A9-Front-Left-Master.mp3",
+    "radius": 0,
+    "rolloff": "none"
+  },
+  {
+    "label": "PILLAR_MASTER_FR",
+    "type": "AUDIO",
+    "url": "audio/A9-Front-Right-Master.mp3",
+    "radius": 0,
+    "rolloff": "none"
+  },
+  {
+    "label": "PILLAR_MASTER_BL",
+    "type": "AUDIO",
+    "url": "audio/A9-Back-Left-Master.mp3",
+    "radius": 0,
+    "rolloff": "none"
+  },
+  {
+    "label": "PILLAR_MASTER_BR",
+    "type": "AUDIO",
+    "url": "audio/A9-Back-Right-Master.mp3",
+    "radius": 0,
+    "rolloff": "none"
+  },
+  {
+    "label": "010-A1S1-Intro-Violin",
+    "type": "AUDIO",
+    "url": "audio/010-A1S1-Intro-Violin.mp3",
+    "originX": 3.0, "originY": 4.0,
+    "radius": 12.0, "rolloff": "linear", "color": "#FFD700"
+  },
+  {
+    "label": "010-A1S1-Intro-Violoncello",
+    "type": "AUDIO",
+    "url": "audio/010-A1S1-Intro-Violoncello.mp3",
+    "originX": 12.5, "originY": 6.0,
+    "radius": 12.0, "rolloff": "linear", "color": "#CD853F"
+  },
+  {
+    "label": "010-A1S1-Intro-Contrabass",
+    "type": "AUDIO",
+    "url": "audio/010-A1S1-Intro-Contrabass.mp3",
+    "originX": 14.5, "originY": 10.0,
+    "radius": 15.0, "rolloff": "linear", "color": "#8B4513"
+  },
+  {
+    "label": "010-A1S1-Intro-Flute",
+    "type": "AUDIO",
+    "url": "audio/010-A1S1-Intro-Flute.mp3",
+    "originX": 6.0, "originY": 8.0,
+    "radius": 10.0, "rolloff": "linear", "color": "#E0FFFF"
+  },
+  {
+    "label": "010-A1S1-Intro-Oboe",
+    "type": "AUDIO",
+    "url": "audio/010-A1S1-Intro-Oboe.mp3",
+    "originX": 9.5, "originY": 8.0,
+    "radius": 10.0, "rolloff": "linear", "color": "#98FB98"
+  },
+  {
+    "label": "010-A1S1-Intro-Bassoon",
+    "type": "AUDIO",
+    "url": "audio/010-A1S1-Intro-Bassoon.mp3",
+    "originX": 7.7, "originY": 12.0,
+    "radius": 10.0, "rolloff": "linear", "color": "#556B2F"
+  },
+  {
+    "label": "010-A1S1-Intro-Horn_in_F",
+    "type": "AUDIO",
+    "url": "audio/010-A1S1-Intro-Horn_in_F.mp3",
+    "originX": 4.0, "originY": 15.0,
+    "radius": 15.0, "rolloff": "linear", "color": "#FF8C00"
+  },
+  {
+    "label": "010-A1S1-Intro-Timpani",
+    "type": "AUDIO",
+    "url": "audio/010-A1S1-Intro-Timpani.mp3",
+    "originX": 7.7, "originY": 20.0,
+    "radius": 20.0, "rolloff": "linear", "color": "#B22222"
+  },
+  {
+    "label": "010-A1S1-Intro-Bass_Drum",
+    "type": "AUDIO",
+    "url": "audio/010-A1S1-Intro-Bass_Drum.mp3",
+    "originX": 10.0, "originY": 22.0,
+    "radius": 20.0, "rolloff": "linear", "color": "#800000"
+  },
+  {
+    "label": "010-A1S1-Intro-Piano_Primo",
+    "type": "AUDIO",
+    "url": "audio/010-A1S1-Intro-Piano_Piano_Primo_RH.mp3",
+    "originX": 2.0, "originY": 10.0,
+    "radius": 8.0, "rolloff": "linear", "color": "#FFFFFF"
+  },
+  {
+    "label": "3.0 Blue Sweep",
+    "type": "LIGHT",
+    "color": "#0000ff",
+    "originX": 7.5, "originY": 5,
+    "destX": 15, "destY": 5,
+    "radius": 5,
+    "rolloff": "linear",
+    "elapsedT": 10,
+    "motion": "slowfastslow"
+  }
 ]
