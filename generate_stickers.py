@@ -33,7 +33,7 @@ def generate_stickers_from_tsv(tsv_path='seat_config.tsv', output_dir='stickers'
             # If X and Y are present, append them to the URL to reduce network traffic
             if x_val and y_val:
                 qr_data += f"&x={x_val}&y={y_val}"
-                label_xy = f"X: {x_val} Y: {y_val}"
+                label_xy = f"({float(x_val):.1f}, {float(y_val):.1f})"
             else:
                 label_xy = ""
 
@@ -54,7 +54,7 @@ def generate_stickers_from_tsv(tsv_path='seat_config.tsv', output_dir='stickers'
 
             # Add text labels to the sticker image
             draw.text((20, 10), f"SEAT: {seat_id}", fill="black", font=font)
-            draw.text((20, 40), label_xy, fill="black", font=font)
+            draw.text((200, 10), label_xy, fill="black", font=font)
 
             img.save(f"{output_dir}/{seat_id}.png")
 
