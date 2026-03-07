@@ -163,7 +163,7 @@ The clock of the laptop provides the timebase for all devices.
         console.log("Triggering:", cue.cueLabel);
 
         // Send to Firebase
-        db.ref('currentCue').set({
+        db.ref('show/currentCue').set({
             label: cue.cueLabel,
             timestamp: Date.now(),
             serverTime: firebase.database.ServerValue.TIMESTAMP
