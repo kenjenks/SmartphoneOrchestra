@@ -27,61 +27,62 @@ The clock of the laptop provides the timebase for all devices.
         .grid { display: grid; grid-template-columns: 1fr 450px; gap: 20px; height: 90vh; }
 
         .timeline-panel { background: #111; border: 1px solid #333; padding: 20px; overflow-y: auto; border-radius: 8px; }
-        .timeline-item { display: flex; gap: 20px; padding: 15px; border-bottom: 1px solid #222; color: #666; }
-        .timeline-item.next { color: #fff; background: #1a1a00; border-left: 5px solid #ffcc00; }
-        .timeline-item.active { background: #002200; color: #00ff00; }
+        .control-panel { background: #1a1a1a; border: 1px solid #444; padding: 20px; display: flex; flex-direction: column; border-radius: 8px; }
 
-        .sm-controls { background: #1a1a1a; padding: 30px; border-radius: 8px; border: 2px solid #444; display: flex; flex-direction: column; justify-content: space-between; }
-        .master-clock { font-family: monospace; font-size: 5rem; text-align: center; color: #00ff00; background: #000; padding: 10px; border-radius: 5px; margin-bottom: 10px; }
+        h2 { margin-top: 0; color: #4CAF50; text-transform: uppercase; letter-spacing: 1px; font-size: 1.2em; }
 
-        .cue-card { background: #000; padding: 20px; border: 1px solid #ffcc00; border-radius: 8px; margin-bottom: 20px; }
-        .cue-card h3 { margin: 0; color: #ffcc00; text-transform: uppercase; letter-spacing: 2px; }
+        #master-clock { font-family: 'Courier New', monospace; font-size: 4em; color: #00ff00; text-align: center; margin: 20px 0; background: #000; padding: 10px; border-radius: 4px; border: 1px solid #222; }
 
-        .control-row { display: flex; gap: 10px; width: 100%; }
-        .btn-go {
-            flex: 3; padding: 40px; font-size: 2.5rem; font-weight: 900;
-            background: #28a745; color: white; border: none; border-radius: 12px;
-            cursor: pointer; box-shadow: 0 0 20px rgba(40, 167, 69, 0.4);
-        }
-        .btn-skip {
-            flex: 1; background: #800; color: #ff9999; border: 2px solid #a00;
-            border-radius: 12px; font-weight: bold; cursor: pointer; font-size: 1.2rem;
-        }
-        .btn-go:active, .btn-skip:active { transform: scale(0.98); }
-        .btn-go:disabled { background: #333; color: #666; cursor: not-allowed; box-shadow: none; }
+        .timeline-item { display: flex; justify-content: space-between; padding: 12px; border-bottom: 1px solid #222; font-size: 0.95em; }
+        .timeline-item.next { background: #223322; border: 1px solid #4CAF50; border-radius: 4px; }
+        .timeline-item.past { opacity: 0.4; }
+        .status { font-weight: bold; color: #888; }
+        .next .status { color: #00ff00; animation: blink 1s infinite; }
 
-        #countdown-overlay { font-size: 2rem; color: #ffcc00; text-align: center; font-weight: bold; margin-top: 10px; min-height: 1.2em; }
+        @keyframes blink { 50% { opacity: 0.5; } }
+
+        .big-btn { width: 100%; padding: 25px; font-size: 1.5em; font-weight: bold; cursor: pointer; border: none; border-radius: 8px; margin-bottom: 15px; text-transform: uppercase; transition: transform 0.1s; }
+        .big-btn:active { transform: scale(0.98); }
+        .trigger-btn { background: #4CAF50; color: white; }
+        .stop-btn { background: #f44336; color: white; font-size: 1em; padding: 15px; }
+
+        .stats { margin-top: auto; font-size: 0.85em; color: #666; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .stat-box { background: #000; padding: 10px; border-radius: 4px; border: 1px solid #333; }
+        .stat-label { display: block; font-size: 0.8em; text-transform: uppercase; }
+        .stat-val { font-size: 1.2em; color: #aaa; }
     </style>
 </head>
 <body>
 
 <div class="grid">
     <div class="timeline-panel">
-        <h2 style="color: #888;">THEATER TIMELINE</h2>
-        <div id="timeline-list"></div>
+        <h2>Show Timeline</h2>
+        <div id="timeline-list">Loading timeline.json...</div>
     </div>
 
-    <div class="sm-controls">
-        <div>
-            <div class="master-clock" id="master-clock">00:00:00</div>
-            <div class="cue-card">
-                <small>PENDING CUE</small>
-                <h3 id="next-label">--</h3>
-                <div id="next-details" style="font-size: 0.9rem; color: #888; margin-top:5px;">Waiting for timeline...</div>
+    <div class="control-panel">
+        <h2>Master Control</h2>
+        <div id="master-clock">00:00:00.000</div>
+
+        <button class="big-btn trigger-btn" onclick="confirmTrigger()">Trigger Next Cue [Space]</button>
+        <button class="big-btn stop-btn" onclick="emergencyStop()">Emergency Stop [K]</button>
+
+        <div class="stats">
+            <div class="stat-box">
+                <span class="stat-label">Bridge Status</span>
+                <span class="stat-val" id="bridge-val">Disconnected</span>
             </div>
-            <div id="countdown-overlay">READY</div>
-        </div>
-
-        <div class="control-row">
-            <button id="go-button" class="btn-go" onclick="confirmTrigger()">GO in 1 s</button>
-            <button id="skip-button" class="btn-skip" onclick="skipCue()">SKIP</button>
-        </div>
-
-        <div style="display:flex; flex-wrap: wrap; gap:10px; margin-top:20px;">
-            <button style="background:#444; color: white; padding:10px; flex: 1;" onclick="emergencyStop()">KILL [K]</button>
-            <button style="background:#004080; color: white; padding:10px; flex: 1;" onclick="restartShow()">RESTART SHOW</button>
-            <div id="status-bar" style="font-size: 0.7rem; color: #555; width: 100%; text-align: center; margin-top: 10px;">
-                SYNC: <span id="sync-val">--</span> | PATRONS: <span id="patron-val">0</span>
+            <div class="stat-box">
+                <span class="stat-label">Firebase Sync</span>
+                <span class="stat-val" id="sync-val">---</span>
+            </div>
+            <div class="stat-box">
+                <span class="stat-label">Connected Patrons</span>
+                <span class="stat-val" id="patron-val">0</span>
+            </div>
+            <div class="stat-box">
+                <span class="stat-label">Next Cue ID</span>
+                <span class="stat-val" id="next-cue-val">None</span>
             </div>
         </div>
     </div>
@@ -100,104 +101,76 @@ The clock of the laptop provides the timebase for all devices.
     firebase.initializeApp(firebaseConfig);
     const db = firebase.database();
 
-    let cueLibrary = {};
     let timeline = [];
     let nextIndex = 0;
-    let isCountingDown = false;
 
-    db.ref('show/script').on('value', snap => {
-        const data = snap.val() || [];
-        cueLibrary = {};
-        data.forEach(c => cueLibrary[c.label] = c);
-    });
+    // --- Float-aware time conversion ---
+    function timeToSecs(hms) {
+        if (!hms) return 0;
+        const a = hms.split(':');
+        // parseFloat ensures milliseconds like :40.909 are preserved
+        return (+a[0]) * 3600 + (+a[1]) * 60 + parseFloat(a[2]);
+    }
 
-    db.ref('show/timeline').on('value', snap => {
-        timeline = snap.val() || [];
-        renderTimeline();
-    });
+    async function loadConfig() {
+        try {
+            const res = await fetch('timeline.json');
+            timeline = await res.json();
+            renderTimeline();
+        } catch (e) {
+            document.getElementById('timeline-list').innerText = "Error loading timeline.json";
+        }
+    }
 
     function renderTimeline() {
         const list = document.getElementById('timeline-list');
         list.innerHTML = '';
+
+        const now = new Date();
+        const nowSecs = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds() + (now.getMilliseconds() / 1000);
+
         timeline.forEach((item, i) => {
+            const itemSecs = timeToSecs(item.time);
+            const diff = itemSecs - nowSecs;
+
             const div = document.createElement('div');
-            div.className = `timeline-item ${i === nextIndex ? 'next' : ''}`;
-            div.innerHTML = `<b>${item.time}</b> <span>${item.label}</span> <small>(${item.cueLabel})</small>`;
+            div.className = `timeline-item ${i === nextIndex ? 'next' : ''} ${i < nextIndex ? 'past' : ''}`;
+
+            let statusText = "";
+            if (i < nextIndex) {
+                statusText = "EXECUTED";
+            } else {
+                statusText = diff > 0 ? `In ${diff.toFixed(1)}s` : "READY";
+            }
+
+            div.innerHTML = `
+                <span><strong>${item.time}</strong></span>
+                <span>${item.label}</span>
+                <span class="status">${statusText}</span>
+            `;
             list.appendChild(div);
         });
 
-        const active = timeline[nextIndex];
-        const goBtn = document.getElementById('go-button');
-        if (active) {
-            document.getElementById('next-label').innerText = active.label;
-            const buf = active.buffer || 1.0;
-            document.getElementById('next-details').innerText = `Target: ${active.time} | Sync Buffer: ${buf}s`;
-            goBtn.innerText = `GO in ${buf} s`;
-            goBtn.disabled = false;
-        } else {
-            document.getElementById('next-label').innerText = "END OF SHOW";
-            goBtn.disabled = true;
+        if (timeline[nextIndex]) {
+            document.getElementById('next-cue-val').innerText = timeline[nextIndex].cueLabel;
         }
     }
 
     function confirmTrigger() {
-        if (isCountingDown || !timeline[nextIndex]) return;
+        if (nextIndex >= timeline.length) return;
 
-        const timelineEvent = timeline[nextIndex];
-        const cueData = cueLibrary[timelineEvent.cueLabel];
+        const cue = timeline[nextIndex];
+        console.log("Triggering:", cue.cueLabel);
 
-        if (!cueData) {
-            alert(`Error: Cue '${timelineEvent.cueLabel}' not found.`);
-            return;
-        }
-
-        const bufferSeconds = timelineEvent.buffer || 1.0;
-        const now = Date.now();
-        const executionTime = now + (bufferSeconds * 1000);
-
-        db.ref('show/currentCue').set({
-            ...cueData,
-            triggerTime: now,
-            scheduledTime: executionTime, // Absolute time for devices to fire
-            id: 'cue_' + now
+        // Send to Firebase
+        db.ref('currentCue').set({
+            label: cue.cueLabel,
+            timestamp: Date.now(),
+            serverTime: firebase.database.ServerValue.TIMESTAMP
         });
 
-        visualCountdown(bufferSeconds);
         nextIndex++;
         renderTimeline();
-    }
-
-    function skipCue() {
-        if (nextIndex < timeline.length) {
-            const skipped = timeline[nextIndex].label;
-            nextIndex++;
-            renderTimeline();
-            console.log(`Skipped cue: ${skipped}`);
-        }
-    }
-
-    function restartShow() {
-        if (confirm("Reset timeline to the beginning?")) {
-            nextIndex = 0;
-            renderTimeline();
-            document.getElementById('countdown-overlay').innerText = "SHOW RESET";
-        }
-    }
-
-    function visualCountdown(seconds) {
-        isCountingDown = true;
-        const overlay = document.getElementById('countdown-overlay');
-        let remaining = seconds;
-        const timer = setInterval(() => {
-            remaining -= 0.1;
-            overlay.innerText = `FIRE IN: ${Math.max(0, remaining).toFixed(1)}s`;
-            if (remaining <= 0) {
-                clearInterval(timer);
-                overlay.innerText = "EXECUTED";
-                isCountingDown = false;
-                setTimeout(() => { if(!isCountingDown) overlay.innerText = "READY"; }, 2000);
-            }
-        }, 100);
     }
 
     function emergencyStop() {
@@ -205,17 +178,27 @@ The clock of the laptop provides the timebase for all devices.
         document.getElementById('countdown-overlay').innerText = "KILLED";
     }
 
+    // High-frequency UI Heartbeat (50ms for 20fps precision)
     setInterval(() => {
         const now = new Date();
-        document.getElementById('master-clock').innerText = now.toTimeString().split(' ')[0];
+        const ms = String(now.getMilliseconds()).padStart(3, '0');
+        // Update the visual clock with milliseconds
+        document.getElementById('master-clock').innerText = now.toTimeString().split(' ')[0] + "." + ms;
+
+        // Push heart-beat to Firebase to keep patron devices in sync
         db.ref('laptop/clock').set(Date.now());
         document.getElementById('sync-val').innerText = db.ref(".info/connected") ? "OK" : "LOST";
-    }, 1000);
 
+        // Refresh the timeline countdowns
+        renderTimeline();
+    }, 50);
+
+    // Track patron count
     db.ref('devices').on('value', snap => {
         document.getElementById('patron-val').innerText = snap.numChildren() || 0;
     });
 
+    // Keyboard Shortcuts
     window.onkeydown = (e) => {
         if (e.code === "Space") { e.preventDefault(); confirmTrigger(); }
         if (e.key === "k" || e.key === "K") { emergencyStop(); }
@@ -252,5 +235,6 @@ evtSource.onerror = () => {
 
 
 </script>
+
 </body>
 </html>
