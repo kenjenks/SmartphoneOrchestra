@@ -81,6 +81,10 @@ def generate_lighting(xml_path, config_path):
             # Check for audible notes
             if any(n.find('rest') is None for n in m_in_part.findall('.//note')):
                 cue_label = f"VIS_{section_key.upper()}_M{m_num}"
+
+                # Fetch rolloff from config, defaulting to "none" if it's missing
+                rolloff_type = sec_conf.get("rolloff", "none")
+
                 cues_data.append({
                     "label": cue_label,
                     "type": "VISUAL",
@@ -88,7 +92,8 @@ def generate_lighting(xml_path, config_path):
                     "originX": sec_conf["originX"],
                     "originY": sec_conf["originY"],
                     "radius": sec_conf["radius"],
-                    "intensity": current_intensity
+                    "intensity": current_intensity,
+                    "rolloff": rolloff_type
                 })
                 timeline_events.append({
                     "time": timestamp,
