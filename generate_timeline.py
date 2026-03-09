@@ -24,7 +24,7 @@ def generate_timeline_only(manifest_path='movement_manifest.json', config_path='
 
         # We need both maps from the manifest
         audio_map = manifest.get("audio_assets", {})
-        lsq_map = manifest.get("lsq_assets", {})  # New expected key in manifest
+        lsq_map = manifest.get("visual_assets", {})  # New expected key in manifest
 
         master_assets = []
 
