@@ -36,71 +36,88 @@ leaves to reset for the next performance.
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <style>
-        body { font-family: 'Courier New', monospace; background: #000; color: #0f0; padding: 20px; }
-        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-        .card { border: 1px solid #0f0; padding: 15px; background: #050505; border-radius: 8px; }
-        h3 { color: #fff; border-bottom: 1px solid #333; padding-bottom: 5px; margin-top: 0; }
-        .status-box { padding: 5px; margin: 5px 0; font-size: 0.8rem; border-left: 3px solid #333; }
-        .status-ok { border-color: #0f0; color: #0f0; }
-        .status-empty { border-color: #f00; color: #f00; }
-        .stat-val { font-size: 2.5rem; font-weight: bold; }
-        button { background: #222; color: #0f0; border: 1px solid #0f0; padding: 10px; cursor: pointer; width: 100%; margin-top: 10px; font-weight: bold; }
-        button:hover { background: #0f0; color: #000; }
-        button.danger { color: #f00; border-color: #f00; }
-        button.danger:hover { background: #f00; color: #fff; }
-        #log { height: 180px; overflow-y: scroll; background: #111; padding: 10px; font-size: 11px; margin-top: 20px; border: 1px solid #222; grid-column: span 2; }
-        label { display: block; margin-top: 15px; color: #888; font-size: 0.8rem; }
+        body { font-family: 'Segoe UI', sans-serif; background-color: #050505; color: #e0e0e0; padding: 20px; display: flex; flex-direction: column; align-items: center; }
+        .admin-container { width: 100%; max-width: 900px; display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .card { background: #1a1a1a; border-radius: 12px; padding: 20px; border: 1px solid #333; }
+        h1 { grid-column: span 2; color: #00ff00; text-align: center; letter-spacing: 2px; }
+        h3 { margin-top: 0; color: #888; font-size: 0.9rem; text-transform: uppercase; border-bottom: 1px solid #333; padding-bottom: 10px; }
+        .status-box { background: #000; padding: 10px; border-radius: 6px; font-family: monospace; font-size: 0.85rem; margin-bottom: 10px; border-left: 4px solid #444; }
+        .status-online { border-left-color: #00ff00; color: #00ff00; }
+        .status-offline { border-left-color: #ff3333; color: #ff3333; }
+        .stat-grid { display: flex; justify-content: space-around; text-align: center; margin: 20px 0; }
+        .stat-item .val { font-size: 2.5rem; font-weight: bold; color: #fff; }
+        .btn { width: 100%; padding: 12px; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; margin-top: 10px; text-transform: uppercase; }
+        .btn-secondary { background: #333; color: #ccc; }
+        .btn-danger { background: #600; color: #fff; }
+        /* THE LOG STYLE */
+        #log {
+            grid-column: span 2;
+            background: #000;
+            border: 1px solid #222;
+            height: 180px;
+            overflow-y: scroll;
+            padding: 10px;
+            font-family: monospace;
+            font-size: 0.75rem;
+            color: #00ff00;
+            border-radius: 6px;
+            margin-top: 20px;
+        }
+        .log-entry { margin-bottom: 4px; border-bottom: 1px solid #111; }
+        input[type="file"] { display: block; margin: 10px 0; color: #888; }
     </style>
 </head>
 <body>
-    <h1>SYSTEM ADMINISTRATION</h1>
 
-    <div class="grid">
+    <h1>CONTROL CENTER</h1>
+
+    <div class="admin-container">
+
         <div class="card">
-            <h3>1. Show Configuration</h3>
+            <h3>1. Show Data Upload</h3>
+            <label style="font-size: 0.8rem; color: #aaa;">Pillar Configuration (.json)</label>
+            <div id="stat-pillar" class="status-box">checking...</div>
+            <input type="file" id="file-pillar" accept=".json" onchange="handleFile(this, 'show/pillar_config', 'stat-pillar')">
 
-            <label>Visual Timeline (.json)</label>
+            <label style="font-size: 0.8rem; color: #aaa;">Visual Timeline (.json)</label>
             <div id="stat-timeline" class="status-box">checking...</div>
-            <input type="file" id="file-timeline" accept=".json" onchange="uploadTimeline()">
-
-            <label>Seat/Pillar Config (.tsv)</label>
-            <div id="stat-tsv" class="status-box">checking...</div>
-            <input type="file" id="file-tsv" accept=".tsv,.txt" onchange="uploadTSV()">
+            <input type="file" id="file-timeline" accept=".json" onchange="handleFile(this, 'show/visual_timeline', 'stat-timeline')">
         </div>
 
         <div class="card">
             <h3>2. Performance Registry</h3>
-            <div style="display:flex; justify-content: space-around; text-align: center; margin: 20px 0;">
-                <div>
-                    <div class="stat-val" id="count-beacons">0</div>
-                    <div style="color:#666; font-size:0.7rem;">ACTIVE PILLARS</div>
+            <div class="stat-grid">
+                <div class="stat-item">
+                    <div class="val" id="count-beacons">0</div>
+                    <div style="font-size: 0.7rem; color: #666;">PILLARS</div>
                 </div>
-                <div>
-                    <div class="stat-val" id="count-patrons">0</div>
-                    <div style="color:#666; font-size:0.7rem;">DEVICES</div>
+                <div class="stat-item">
+                    <div class="val" id="count-patrons">0</div>
+                    <div style="font-size: 0.7rem; color: #666;">DEVICES</div>
                 </div>
             </div>
-            <button onclick="purgeDevices()">PURGE DEVICE REGISTRY</button>
-            <button onclick="purgeSurvey()" class="danger">WIPE SURVEY RESULTS</button>
+            <button class="btn btn-secondary" onclick="purgeDevices()">PURGE DEVICE REGISTRY</button>
+            <button class="btn btn-secondary" onclick="purgeSurvey()">WIPE SURVEY RESULTS</button>
         </div>
 
         <div class="card">
-            <h3>3. Maintenance & Backup</h3>
-            <button onclick="downloadBackup()">DOWNLOAD DB BACKUP (.JSON)</button>
-            <button onclick="purgeEverything()" class="danger">WIPE ENTIRE CLOUD</button>
+            <h3>3. Maintenance</h3>
+            <button class="btn btn-secondary" onclick="downloadDatabaseBackup()">DOWNLOAD DB BACKUP</button>
+            <button class="btn btn-danger" onclick="purgeEverything()">WIPE ALL CLOUD DATA</button>
         </div>
 
         <div class="card">
             <h3>4. Emergency</h3>
-            <button onclick="sendKillSignal()" class="danger" style="padding:20px; font-size:1.2rem;">GLOBAL BLACKOUT / KILL</button>
-            <p style="font-size:0.7rem; color:#555; margin-top:5px;">*Instantly kills AudioContexts and blacks screens on all connected devices.</p>
+            <button class="btn btn-danger" style="padding:25px; font-size:1.1rem;" onclick="sendKillSignal()">
+                GLOBAL BLACKOUT / KILL
+            </button>
         </div>
 
         <div id="log"></div>
+
     </div>
 
     <script>
-        // Use the explicit config from your previous files
         const firebaseConfig = {
             apiKey: "AIzaSyAs-ActualKeyFromYourConfig",
             authDomain: "smartphone-orchestra-b1063.firebaseapp.com",
@@ -110,113 +127,77 @@ leaves to reset for the next performance.
             messagingSenderId: "389274035651",
             appId: "1:389274035651:web:5d2432616212df8b1f5926"
         };
+
         firebase.initializeApp(firebaseConfig);
         const db = firebase.database();
 
-        // --- REAL-TIME LISTENERS ---
-        db.ref('active_pillars').on('value', s => {
-            document.getElementById('count-beacons').innerText = s.numChildren();
-        });
+        // Status Listeners
+        db.ref('active_pillars').on('value', s => { document.getElementById('count-beacons').innerText = s.numChildren(); });
+        db.ref('devices').on('value', s => { document.getElementById('count-patrons').innerText = s.numChildren(); });
 
-        db.ref('devices').on('value', s => {
-            document.getElementById('count-patrons').innerText = s.numChildren();
+        db.ref('show/pillar_config').on('value', s => {
+            const el = document.getElementById('stat-pillar');
+            el.innerText = s.exists() ? `LOADED: ${s.val().pillars.length} Pillars` : "EMPTY";
+            el.className = s.exists() ? "status-box status-online" : "status-box status-offline";
         });
 
         db.ref('show/visual_timeline').on('value', s => {
             const el = document.getElementById('stat-timeline');
-            if(s.exists()) {
-                el.innerText = `LOADED: ${s.val()[0].label}`;
-                el.className = "status-box status-ok";
-            } else {
-                el.innerText = "EMPTY - UPLOAD REQUIRED";
-                el.className = "status-box status-empty";
-            }
+            el.innerText = s.exists() ? `LOADED: ${s.val()[0].label}` : "EMPTY";
+            el.className = s.exists() ? "status-box status-online" : "status-box status-offline";
         });
 
-        db.ref('show/pillar_config').on('value', s => {
-            const el = document.getElementById('stat-tsv');
-            el.innerText = s.exists() ? `LOADED: ${s.numChildren()} PILLARS` : "EMPTY";
-            el.className = s.exists() ? "status-box status-ok" : "status-box status-empty";
-        });
-
-        // --- CORE FUNCTIONS ---
-        async function uploadTimeline() {
-            const file = document.getElementById('file-timeline').files[0];
-            if(!file) return;
+        // Functions
+        async function handleFile(input, path, statusId) {
+            const file = input.files[0];
+            if (!file) return;
             const reader = new FileReader();
             reader.onload = async (e) => {
                 try {
                     const data = JSON.parse(e.target.result);
-                    await db.ref('show/visual_timeline').set(data);
-                    log(`SUCCESS: Uploaded timeline for "${data[0].label}"`);
-                } catch(err) { log(`ERROR: ${err.message}`); }
+                    await db.ref(path).set(data);
+                    log(`SUCCESS: Published ${file.name} to ${path}`);
+                } catch (err) { log(`ERROR: Failed to parse ${file.name}`); }
             };
             reader.readAsText(file);
         }
 
-        async function uploadTSV() {
-            const file = document.getElementById('file-tsv').files[0];
-            if(!file) return;
-            const reader = new FileReader();
-            reader.onload = async (e) => {
-                const lines = e.target.result.split('\n');
-                const pillarConfig = {};
-                const seatMap = {};
-                lines.slice(1).forEach(line => {
-                    const cols = line.split('\t');
-                    if(cols.length < 5) return;
-                    const entry = { id: cols[0], x: parseFloat(cols[3]), y: parseFloat(cols[4]) };
-                    if(cols[1] === 'Pillar') pillarConfig[entry.id] = entry;
-                    else seatMap[entry.id] = entry;
-                });
-                await db.ref('show/pillar_config').set(pillarConfig);
-                await db.ref('show/seat_map').set(seatMap);
-                log(`SUCCESS: Synced ${Object.keys(pillarConfig).length} Pillars and ${Object.keys(seatMap).length} Seats.`);
-            };
-            reader.readAsText(file);
+        async function downloadDatabaseBackup() {
+            try {
+                const snapshot = await db.ref('/').once('value');
+                const blob = new Blob([JSON.stringify(snapshot.val(), null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `backup_${Date.now()}.json`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                log("SUCCESS: Backup downloaded.");
+            } catch (e) { log(`ERROR: Backup failed: ${e.message}`); }
         }
 
         function sendKillSignal() {
-            db.ref('show/currentCue').set({ action: 'KILL', timestamp: Date.now() });
-            log("COMMAND: Global Kill signal sent.");
+            db.ref('show/currentCue').set({ action: 'KILL', triggerTime: Date.now() });
+            log("COMMAND: Global Kill Signal sent.");
         }
 
         async function purgeDevices() {
-            if(confirm("Clear patron registry?")) {
-                await db.ref('devices').remove();
-                log("ACTION: Device registry cleared.");
-            }
+            if (confirm("Clear patrons?")) { await db.ref('devices').remove(); log("ACTION: Devices cleared."); }
         }
 
         async function purgeSurvey() {
-            if(confirm("Wipe all survey results?")) {
-                await db.ref('survey_results').remove();
-                log("ACTION: Survey results wiped.");
-            }
+            if (confirm("Wipe survey?")) { await db.ref('survey_results').remove(); log("ACTION: Survey wiped."); }
         }
 
         async function purgeEverything() {
-            if(confirm("DANGER: WIPE ENTIRE DATABASE?")) {
-                await db.ref('/').remove();
-                log("ACTION: DATABASE WIPED.");
-            }
-        }
-
-        async function downloadBackup() {
-            const snap = await db.ref('/').once('value');
-            const blob = new Blob([JSON.stringify(snap.val(), null, 2)], {type: 'application/json'});
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `orchestra_backup_${Date.now()}.json`;
-            a.click();
-            log("SUCCESS: Backup downloaded.");
+            if (confirm("DANGER: WIPE ALL?")) { await db.ref('/').remove(); log("ACTION: DATABASE WIPED."); location.reload(); }
         }
 
         function log(msg) {
-            const l = document.getElementById('log');
-            l.innerHTML += `<div>[${new Date().toLocaleTimeString()}] ${msg}</div>`;
-            l.scrollTop = l.scrollHeight;
+            const box = document.getElementById('log');
+            box.innerHTML += `<div class="log-entry">[${new Date().toLocaleTimeString()}] ${msg}</div>`;
+            box.scrollTop = box.scrollHeight;
         }
     </script>
 </body>
