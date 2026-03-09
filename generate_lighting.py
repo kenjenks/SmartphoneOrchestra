@@ -1,118 +1,157 @@
-# generate_lighting.py - Creates lighting cues and timeline entries for musical instruments from an uncompressed musicXml file.
+# generate_lighting.py - Creates light sequences (lsq) files
+#
+# Creates lsq txt files for each movement described in
+# show_manifest.json, which has file names for
+# instrument_*.musicxml (uncompressed),
+# movement_manifest_*.json and instrument_config_*.json
+# for each movement.
+#
+# Performs spatial coordinate calculation and
+# Light Sequence (LSQ) generation for the instruments
+# described in instrument_config_*.json. Also uses the
+# motion cues from the "choreography" block.
+#
+# It outputs .txt files that are referenced in movement manifests.
+#
+# After creating the lsq .txt files, upload them to a web host
+# then paste the URLs into the "visual_assets" section of
+# movement_manifest_*.json.
 
 import xml.etree.ElementTree as ET
 import json
+import math
+import os
 
 
-def seconds_to_timestamp(base_time, offset_seconds):
-    """Converts seconds into HH:MM:SS.mmm format for sub-second precision."""
-    h, m, s = map(int, base_time.split(':'))
+class MusicXMLLightingGenerator:
+    def __init__(self, fps=20):
+        self.fps = fps
 
-    # Calculate total seconds as a float
-    total_seconds = (h * 3600) + (m * 60) + s + offset_seconds
+    def parse_musicxml_dynamics(self, xml_path, target_part_name):
+        """Extracts a timestamped list of intensity values from MusicXML."""
+        try:
+            tree = ET.parse(xml_path)
+            root = tree.getroot()
+        except Exception as e:
+            print(f"Error reading XML {xml_path}: {e}")
+            return []
 
-    new_h = int((total_seconds // 3600) % 24)
-    new_m = int((total_seconds % 3600) // 60)
-    new_s = int(total_seconds % 60)
-    # Extract milliseconds
-    milli = int((total_seconds % 1) * 1000)
+        # Find the correct part
+        part_id = None
+        for part in root.findall(".//part-list/score-part"):
+            name = part.find("part-name").text
+            if name and target_part_name.lower() in name.lower():
+                part_id = part.get("id")
+                break
 
-    return f"{new_h:02d}:{new_m:02d}:{new_s:02d}.{milli:03d}"
+        if not part_id:
+            return []
+
+        part_node = root.find(f".//part[@id='{part_id}']")
+        current_time = 0.0
+        dynamics_timeline = []  # List of (time, intensity_val)
+
+        # Default starting values
+        divisions = 1
+        tempo_bpm = 120.0
+
+        for measure in part_node.findall("measure"):
+            # Update Tempo/Divisions if present
+            attr = measure.find("attributes")
+            if attr is not None:
+                div_node = attr.find("divisions")
+                if div_node is not None: divisions = int(div_node.text)
+
+            sound = measure.find(".//direction/sound")
+            if sound is not None and sound.get("tempo"):
+                tempo_bpm = float(sound.get("tempo"))
+
+            # Logic: Duration of a 'division' in seconds
+            # seconds_per_beat = 60 / bpm. Standard quarter note = divisions.
+            sec_per_div = 60.0 / (tempo_bpm * divisions)
+
+            for element in measure:
+                # Handle Dynamics (p, mf, f, etc.)
+                dynamic_node = element.find(".//direction-type/dynamics")
+                if dynamic_node is not None:
+                    # Get the first tag name (e.g., <mf/>)
+                    dynamic_mark = dynamic_node[0].tag
+                    dynamics_timeline.append((current_time, dynamic_mark))
+
+                # Advance time for notes and rests
+                if element.tag == "note":
+                    dur_node = element.find("duration")
+                    if dur_node is not None:
+                        current_time += int(dur_node.text) * sec_per_div
+
+        return dynamics_timeline, current_time
+
+    def generate_lsq_for_movement(self, mov_manifest_path, show_manifest_dir="."):
+        with open(mov_manifest_path, 'r') as f:
+            manifest = json.load(f)
+
+        # Get XML and Config paths
+        xml_filename = manifest.get("musicXml", {}).get("filename")
+        if not xml_filename: return
+
+        # Find which instrument config to use (from show_manifest context usually)
+        # For this script, we'll assume it's the one linked in the manifest or default
+        config_path = "instrument_config.json"  # Fallback
+
+        with open(config_path, 'r') as f:
+            inst_config = json.load(f)
+
+        dynamic_map = inst_config.get("dynamic_map", {})
+        sections = inst_config.get("sections", {})
+
+        # We also need pillar positions to calculate spatial intensity
+        with open("pillar_config.json", 'r') as f:
+            pillars = json.load(f).get("pillars", [])
+
+        os.makedirs('lsq', exist_ok=True)
+
+        for instrument, sec_conf in sections.items():
+            print(f"Processing {instrument} from {xml_filename}...")
+
+            timeline, total_dur = self.parse_musicxml_dynamics(xml_filename, instrument)
+            if not timeline: continue
+
+            # Convert discrete dynamics into a continuous stream at 20fps
+            steps = int(total_dur * self.fps)
+            lsq_rows = []
+
+            current_dynamic = "mp"  # Default starting dynamic
+
+            for i in range(steps):
+                curr_t = i / self.fps
+
+                # Check for dynamic updates
+                for event_t, mark in timeline:
+                    if event_t <= curr_t:
+                        current_dynamic = mark
+
+                base_intensity = dynamic_map.get(current_dynamic, 0.5)
+
+                # Spatial pillar calculation
+                sx, sy, srad = sec_conf['originX'], sec_conf['originY'], sec_conf['radius']
+                row = []
+                for p in pillars:
+                    dist = math.sqrt((sx - p['x']) ** 2 + (sy - p['y']) ** 2)
+                    pillar_gain = max(0, 1 - (dist / srad))
+                    row.append(f"{(base_intensity * pillar_gain):.2f}")
+
+                lsq_rows.append(",".join(row))
+
+            output_fn = f"lsq/{instrument.lower()}_mvt.txt"
+            with open(output_fn, 'w') as out:
+                out.write("\n".join(lsq_rows))
+            print(f"  -> Saved {output_fn}")
 
 
-def generate_lighting(xml_path, config_path):
-    with open(config_path, 'r') as f:
-        config = json.load(f)
-
-    tree = ET.parse(xml_path)
-    root = tree.getroot()
-
-    # Default constants (will be updated by XML scan)
-    current_bpm = 120.0
-    time_numerator = 4
-    running_total_seconds = 0.0
-
-    timeline_events, cues_data = [], []
-    part_mapping = {}
-
-    # Map XML Parts to Sections
-    for score_part in root.findall(".//score-part"):
-        p_id, p_name = score_part.get('id'), score_part.find('part-name').text
-        for key in config["sections"].keys():
-            if key.lower() in p_name.lower():
-                part_mapping[p_id] = key
-
-    # Iterate by measure using the first part as the master timeline
-    first_part = root.find("part")
-
-    for measure in first_part.findall('measure'):
-        m_num = int(measure.get('number'))
-
-        # Check for Tempo or Time Signature changes in the master part
-        tempo_change = measure.find(".//per-minute")
-        if tempo_change is not None:
-            current_bpm = float(tempo_change.text)
-
-        beats = measure.find(".//beats")
-        if beats is not None:
-            time_numerator = int(beats.text)
-
-        # Calculate this specific measure's duration using floats
-        measure_duration = (60.0 / current_bpm) * time_numerator
-
-        # Calculate timestamp for the start of this measure
-        timestamp = seconds_to_timestamp(config["start_time_base"], running_total_seconds)
-
-        for part in root.findall('part'):
-            p_id = part.get('id')
-            if p_id not in part_mapping: continue
-
-            section_key = part_mapping[p_id]
-            sec_conf = config["sections"][section_key]
-
-            m_in_part = part.find(f"measure[@number='{m_num}']")
-            if m_in_part is None: continue
-
-            current_intensity = 0.5
-            for dyn in m_in_part.findall('.//dynamics/*'):
-                if dyn.tag in config["dynamic_map"]:
-                    current_intensity = config["dynamic_map"][dyn.tag]
-
-            # Check for audible notes
-            if any(n.find('rest') is None for n in m_in_part.findall('.//note')):
-                cue_label = f"VIS_{section_key.upper()}_M{m_num}"
-
-                # Fetch rolloff from config, defaulting to "none" if it's missing
-                rolloff_type = sec_conf.get("rolloff", "none")
-
-                cues_data.append({
-                    "label": cue_label,
-                    "type": "VISUAL",
-                    "color": sec_conf["color"],
-                    "originX": sec_conf["originX"],
-                    "originY": sec_conf["originY"],
-                    "radius": sec_conf["radius"],
-                    "intensity": current_intensity,
-                    "rolloff": rolloff_type
-                })
-                timeline_events.append({
-                    "time": timestamp,
-                    "cueLabel": cue_label,
-                    "label": f"{section_key} (M{m_num})"
-                })
-
-        # Increment time for the next measure
-        running_total_seconds += measure_duration
-
-    # Save outputs
-    with open('visual_cues.json', 'w') as f:
-        json.dump(cues_data, f, indent=2)
-    with open('visual_timeline.json', 'w') as f:
-        json.dump(timeline_events, f, indent=2)
-
-    print(f"Generated {len(timeline_events)} cues. Final duration: {running_total_seconds:.3f}s")
-
-
+# Execution logic
 if __name__ == "__main__":
-    # Now using instrument.musicxml as requested
-    generate_lighting('instrument.musicxml', 'instrument_config.json')
+    generator = MusicXMLLightingGenerator(fps=20)
+    # Iterate through your movement manifests
+    manifests = ["movement_manifest_intro.json", "movement_manifest_storm.json"]
+    for m in manifests:
+        generator.generate_lsq_for_movement(m)
