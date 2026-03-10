@@ -36,52 +36,51 @@ leaves to reset for the next performance.
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <style>
-        body { font-family: 'Segoe UI', sans-serif; background-color: #050505; color: #e0e0e0; padding: 20px; display: flex; flex-direction: column; align-items: center; }
-        .admin-container { width: 100%; max-width: 900px; display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-        .card { background: #1a1a1a; border-radius: 12px; padding: 20px; border: 1px solid #333; }
-        h1 { grid-column: span 2; color: #00ff00; text-align: center; letter-spacing: 2px; }
-        h3 { margin-top: 0; color: #888; font-size: 0.9rem; text-transform: uppercase; border-bottom: 1px solid #333; padding-bottom: 10px; }
-        .status-box { background: #000; padding: 10px; border-radius: 6px; font-family: monospace; font-size: 0.85rem; margin-bottom: 10px; border-left: 4px solid #444; }
-        .status-online { border-left-color: #00ff00; color: #00ff00; }
-        .status-offline { border-left-color: #ff3333; color: #ff3333; }
-        .stat-grid { display: flex; justify-content: space-around; text-align: center; margin: 20px 0; }
-        .stat-item .val { font-size: 2.5rem; font-weight: bold; color: #fff; }
-        .btn { width: 100%; padding: 12px; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; margin-top: 10px; text-transform: uppercase; }
-        .btn-secondary { background: #333; color: #ccc; }
-        .btn-danger { background: #600; color: #fff; }
-        /* THE LOG STYLE */
-        #log {
-            grid-column: span 2;
-            background: #000;
-            border: 1px solid #222;
-            height: 180px;
-            overflow-y: scroll;
-            padding: 10px;
-            font-family: monospace;
-            font-size: 0.75rem;
-            color: #00ff00;
-            border-radius: 6px;
-            margin-top: 20px;
-        }
-        .log-entry { margin-bottom: 4px; border-bottom: 1px solid #111; }
-        input[type="file"] { display: block; margin: 10px 0; color: #888; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #050505; color: #eee; padding: 20px; line-height: 1.4; }
+        .dashboard { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .card { background: #111; border: 1px solid #333; padding: 20px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); }
+        h3 { margin-top: 0; color: #888; text-transform: uppercase; font-size: 0.9rem; letter-spacing: 1px; border-bottom: 1px solid #222; padding-bottom: 10px; }
+
+        /* Stats Styling */
+        .stat-grid { display: flex; gap: 20px; margin-bottom: 20px; }
+        .stat-item { flex: 1; background: #1a1a1a; padding: 15px; border-radius: 6px; text-align: center; border: 1px solid #222; }
+        .val { font-size: 2rem; font-weight: bold; color: #00ffcc; font-family: 'Courier New', monospace; }
+        .label { font-size: 0.7rem; color: #666; margin-top: 5px; }
+
+        /* Button Styling */
+        .btn { display: inline-block; background: #222; color: #ccc; border: 1px solid #444; padding: 12px 18px; cursor: pointer; border-radius: 4px; font-size: 0.85rem; transition: all 0.2s; text-transform: uppercase; font-weight: 600; margin-right: 8px; margin-bottom: 8px; }
+        .btn:hover { background: #333; color: #fff; border-color: #666; }
+        .btn-danger { color: #ff5555; border-color: #600; }
+        .btn-danger:hover { background: #400; border-color: #a00; color: #fff; }
+
+        /* Table Styling */
+        #timeline-view { margin-top: 15px; background: #000; border-radius: 4px; border: 1px solid #222; overflow: hidden; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+        th { background: #1a1a1a; color: #666; text-align: left; padding: 10px; border-bottom: 1px solid #222; }
+        td { padding: 10px; border-bottom: 1px solid #111; color: #aaa; }
+
+        /* Log Styling */
+        #log { background: #000; border: 1px solid #222; height: 180px; overflow-y: scroll; padding: 15px; margin-top: 20px; border-radius: 8px; font-family: 'Consolas', 'Monaco', monospace; font-size: 0.8rem; }
+        .log-entry { margin-bottom: 4px; border-bottom: 1px solid #111; padding-bottom: 2px; }
+        .timestamp { color: #555; margin-right: 8px; }
     </style>
 </head>
 <body>
 
-    <h1>CONTROL CENTER</h1>
+    <header style="margin-bottom: 30px;">
+        <h1 style="margin:0; font-weight: 300;">Smartphone Orchestra <span style="color:#444;">|</span> <span style="font-weight: 800; color:#00ffcc;">ADMIN</span></h1>
+        <p id="active-show-display" style="color:#666; margin:5px 0;">No Production Loaded</p>
+    </header>
 
-    <div class="admin-container">
-
+    <div class="dashboard">
         <div class="card">
-            <h3>1. Show Data Upload</h3>
-            <label style="font-size: 0.8rem; color: #aaa;">Pillar Configuration (.json)</label>
-            <div id="stat-pillar" class="status-box">checking...</div>
-            <input type="file" id="file-pillar" accept=".json" onchange="handleFile(this, 'show/pillar_config', 'stat-pillar')">
+            <h3>1. Timeline Management</h3>
+            <button class="btn" onclick="document.getElementById('file-input').click()">Upload visual_timeline.json</button>
+            <input type="file" id="file-input" style="display:none" onchange="uploadTimeline(this)">
 
-            <label style="font-size: 0.8rem; color: #aaa;">Visual Timeline (.json)</label>
-            <div id="stat-timeline" class="status-box">checking...</div>
-            <input type="file" id="file-timeline" accept=".json" onchange="handleFile(this, 'show/visual_timeline', 'stat-timeline')">
+            <div id="timeline-view">
+                <div style="padding: 20px; color: #444; text-align: center;">EMPTY - Waiting for JSON Upload...</div>
+            </div>
         </div>
 
         <div class="card">
@@ -89,35 +88,38 @@ leaves to reset for the next performance.
             <div class="stat-grid">
                 <div class="stat-item">
                     <div class="val" id="count-beacons">0</div>
-                    <div style="font-size: 0.7rem; color: #666;">PILLARS</div>
+                    <div class="label">PILLARS (A9)</div>
                 </div>
                 <div class="stat-item">
                     <div class="val" id="count-patrons">0</div>
-                    <div style="font-size: 0.7rem; color: #666;">DEVICES</div>
+                    <div class="label">PATRON DEVICES</div>
                 </div>
             </div>
-            <button class="btn btn-secondary" onclick="purgeDevices()">PURGE DEVICE REGISTRY</button>
-            <button class="btn btn-secondary" onclick="purgeSurvey()">WIPE SURVEY RESULTS</button>
+            <button class="btn" onclick="purgeDevices()">Purge Device Registry</button>
+            <button class="btn" onclick="purgeSurvey()">Wipe Survey Results</button>
         </div>
 
         <div class="card">
             <h3>3. Maintenance</h3>
-            <button class="btn btn-secondary" onclick="downloadDatabaseBackup()">DOWNLOAD DB BACKUP</button>
-            <button class="btn btn-danger" onclick="purgeEverything()">WIPE ALL CLOUD DATA</button>
+            <button class="btn" onclick="downloadDatabaseBackup()">Download DB Backup</button>
+            <button class="btn btn-danger" onclick="purgeEverything()">Wipe All Cloud Data</button>
         </div>
 
         <div class="card">
             <h3>4. Emergency</h3>
-            <button class="btn btn-danger" style="padding:25px; font-size:1.1rem;" onclick="sendKillSignal()">
+            <button class="btn btn-danger" style="width:100%; padding:30px; font-size:1.2rem;" onclick="sendKillSignal()">
                 GLOBAL BLACKOUT / KILL
             </button>
+            <p style="font-size: 0.7rem; color: #444; margin-top: 10px; text-align: center;">
+                Sends KILL action to all devices. Forces hard reload & AudioContext closure.
+            </p>
         </div>
-
-        <div id="log"></div>
-
     </div>
 
+    <div id="log"></div>
+
     <script>
+        // CONFIGURATION
         const firebaseConfig = {
             apiKey: "AIzaSyAs-ActualKeyFromYourConfig",
             authDomain: "smartphone-orchestra-b1063.firebaseapp.com",
@@ -131,72 +133,118 @@ leaves to reset for the next performance.
         firebase.initializeApp(firebaseConfig);
         const db = firebase.database();
 
-        // Status Listeners
-        db.ref('active_pillars').on('value', s => { document.getElementById('count-beacons').innerText = s.numChildren(); });
-        db.ref('devices').on('value', s => { document.getElementById('count-patrons').innerText = s.numChildren(); });
+        // ─── DATA OBSERVERS ──────────────────────────────────────────────────
 
-        db.ref('show/pillar_config').on('value', s => {
-            const el = document.getElementById('stat-pillar');
-            el.innerText = s.exists() ? `LOADED: ${s.val().pillars.length} Pillars` : "EMPTY";
-            el.className = s.exists() ? "status-box status-online" : "status-box status-offline";
+        // Sync Show Info & Timeline
+        db.ref('show').on('value', snap => {
+            const data = snap.val();
+            if (!data) {
+                document.getElementById('active-show-display').innerText = "No Production Loaded";
+                document.getElementById('timeline-view').innerHTML = '<div style="padding: 20px; color: #444; text-align: center;">EMPTY</div>';
+                return;
+            }
+
+            document.getElementById('active-show-display').innerText = `Current Production: ${data.show_title || "Unnamed"}`;
+
+            if (data.movements) {
+                let html = '<table><tr><th>Movement</th><th>Start Time</th><th>Cues</th></tr>';
+                data.movements.forEach(m => {
+                    html += `<tr>
+                        <td style="color:#eee; font-weight:bold;">${m.movement_name}</td>
+                        <td>${m.planned_start}</td>
+                        <td>${m.cues ? m.cues.length : 0}</td>
+                    </tr>`;
+                });
+                html += '</table>';
+                document.getElementById('timeline-view').innerHTML = html;
+            }
         });
 
-        db.ref('show/visual_timeline').on('value', s => {
-            const el = document.getElementById('stat-timeline');
-            el.innerText = s.exists() ? `LOADED: ${s.val()[0].label}` : "EMPTY";
-            el.className = s.exists() ? "status-box status-online" : "status-box status-offline";
+        // Sync Registry Counts (Separating Pillars from Patrons)
+        db.ref('devices').on('value', snap => {
+            const devices = snap.val() || {};
+            let patrons = 0;
+            let pillars = 0;
+
+            Object.values(devices).forEach(d => {
+                if (d.seat_id && d.seat_id.startsWith('PILLAR_')) {
+                    pillars++;
+                } else {
+                    patrons++;
+                }
+            });
+
+            document.getElementById('count-beacons').innerText = pillars;
+            document.getElementById('count-patrons').innerText = patrons;
         });
 
-        // Functions
-        async function handleFile(input, path, statusId) {
+        // ─── HANDLERS ────────────────────────────────────────────────────────
+
+        async function uploadTimeline(input) {
             const file = input.files[0];
             if (!file) return;
             const reader = new FileReader();
             reader.onload = async (e) => {
                 try {
                     const data = JSON.parse(e.target.result);
-                    await db.ref(path).set(data);
-                    log(`SUCCESS: Published ${file.name} to ${path}`);
-                } catch (err) { log(`ERROR: Failed to parse ${file.name}`); }
+                    log(`Parsing ${data.show_title}...`);
+                    await db.ref('show').set(data);
+                    log("SUCCESS: New visual_timeline.json deployed.");
+                } catch (err) {
+                    log(`ERROR: JSON Parse failed. ${err.message}`);
+                }
             };
             reader.readAsText(file);
         }
 
-        async function downloadDatabaseBackup() {
-            try {
-                const snapshot = await db.ref('/').once('value');
-                const blob = new Blob([JSON.stringify(snapshot.val(), null, 2)], { type: 'application/json' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `backup_${Date.now()}.json`;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                log("SUCCESS: Backup downloaded.");
-            } catch (e) { log(`ERROR: Backup failed: ${e.message}`); }
-        }
-
         function sendKillSignal() {
             db.ref('show/currentCue').set({ action: 'KILL', triggerTime: Date.now() });
-            log("COMMAND: Global Kill Signal sent.");
+            log("CRITICAL: Global Kill Signal dispatched to all devices.");
         }
 
         async function purgeDevices() {
-            if (confirm("Clear patrons?")) { await db.ref('devices').remove(); log("ACTION: Devices cleared."); }
+            if (confirm("This will clear all connected smartphones. Proceed?")) {
+                await db.ref('devices').remove();
+                log("MAINTENANCE: Patron registry purged.");
+            }
         }
 
         async function purgeSurvey() {
-            if (confirm("Wipe survey?")) { await db.ref('survey_results').remove(); log("ACTION: Survey wiped."); }
+            if (confirm("This will delete all test walk data. Proceed?")) {
+                await db.ref('survey_results').remove();
+                log("MAINTENANCE: Survey results wiped.");
+            }
         }
 
         async function purgeEverything() {
-            if (confirm("DANGER: WIPE ALL?")) { await db.ref('/').remove(); log("ACTION: DATABASE WIPED."); location.reload(); }
+            if (confirm("DANGER: This wipes EVERYTHING (Show, Devices, Surveys). OK?")) {
+                await db.ref('/').remove();
+                log("MAINTENANCE: TOTAL CLOUD WIPE COMPLETED.");
+                location.reload();
+            }
+        }
+
+        async function downloadDatabaseBackup() {
+            try {
+                const snap = await db.ref('/').once('value');
+                const blob = new Blob([JSON.stringify(snap.val(), null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `tempest_db_backup_${Date.now()}.json`;
+                a.click();
+                log("MAINTENANCE: Local backup saved.");
+            } catch (e) {
+                log(`ERROR: Backup failed: ${e.message}`);
+            }
         }
 
         function log(msg) {
             const box = document.getElementById('log');
-            box.innerHTML += `<div class="log-entry">[${new Date().toLocaleTimeString()}] ${msg}</div>`;
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+            entry.innerHTML = `<span class="timestamp">[${new Date().toLocaleTimeString()}]</span> ${msg}`;
+            box.appendChild(entry);
             box.scrollTop = box.scrollHeight;
         }
     </script>
