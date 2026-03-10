@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Smartphone Orchestra: TEST BEACON</title>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background: #000; color: #fff; text-align: center; padding: 40px; margin: 0; }
+        .pillar-card { border: 4px solid #333; padding: 40px; border-radius: 20px; display: inline-block; min-width: 320px; background: #050505; }
+        #freq-display { font-size: 5rem; color: #00ff00; margin: 20px 0; font-weight: bold; font-family: monospace; }
+        #status { font-family: monospace; color: #444; }
+        .led { width: 40px; height: 40px; background: #200; border-radius: 50%; margin: 20px auto; transition: 0.1s; }
+        .led.active { background: #f00; box-shadow: 0 0 20px #f00; }
+        button { background: #00ffcc; color: #000; border: none; padding: 15px 30px; border-radius: 8px; font-weight: bold; cursor: pointer; }
+    </style>
+</head>
+<body>
+
+    <div class="pillar-card">
+        <h2>TEST BEACON (FL)</h2>
+        <div id="freq-display">1000Hz</div>
+        <div class="led" id="pulse-led"></div>
+        <div id="status">SYNCING...</div>
+        <br>
+        <button onclick="startBeacon()">START EMISSION</button>
+    </div>
+
+    <script>
+        // PROTECTED BLOCK: Firebase Configuration
+        const firebaseConfig = {
+            apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
+            authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
+            databaseURL: "https://smartphoneorchestra-dwt-default-rtdb.firebaseio.com",
+            projectId: "smartphoneorchestra-dwt"
+        };
+
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
+        let serverOffset = 0;
+        let audioCtx = null;
+        const EPOCH_MS = 2000;
+
+        db.ref(".info/serverTimeOffset").on("value", s => serverOffset = s.val() || 0);
+
+        async function startBeacon() {
+            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            if (audioCtx.state === 'suspended') await audioCtx.resume();
+            document.getElementById('status').innerText = "BEACON ACTIVE";
+            scheduleNextChirp();
+        }
+
+        function scheduleNextChirp() {
+            const now = Date.now() + serverOffset;
+            const nextEpoch = Math.ceil(now / EPOCH_MS) * EPOCH_MS;
+            const delay = nextEpoch - now;
+
+            setTimeout(() => {
+                emitChirp(nextEpoch);
+                scheduleNextChirp();
+            }, delay);
+        }
+
+        function emitChirp(timestamp) {
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            const led = document.getElementById('pulse-led');
+
+            osc.frequency.setValueAtTime(1000, audioCtx.currentTime);
+            gain.gain.setValueAtTime(0, audioCtx.currentTime);
+            gain.gain.linearRampToValueAtTime(0.8, audioCtx.currentTime + 0.01);
+            gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.12);
+
+            osc.connect(gain).connect(audioCtx.destination);
+            led.classList.add('active');
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.15);
+
+            setTimeout(() => led.classList.remove('active'), 150);
+
+            // Log the "Master Time" of this chirp so the receiver can calculate ToF
+            db.ref(`chirp_log/PILLAR_FL`).set({ timestamp: timestamp });
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Range Test Tool</title>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background: #000; color: #fff; padding: 20px; text-align: center; }
+        .card { background: #1a1a1a; border-radius: 15px; padding: 30px; border: 1px solid #333; margin-bottom: 15px; }
+        .big-dist { font-size: 5rem; color: #00ffcc; font-family: monospace; margin: 20px 0; }
+        .status-bar { color: #888; font-size: 0.9rem; margin-bottom: 20px; }
+        button { background: #444; color: #fff; border: none; padding: 20px; width: 100%; border-radius: 8px; font-weight: bold; cursor: pointer; margin-bottom: 10px; font-size: 1.1rem; }
+        button.active { background: #00ffcc; color: #000; }
+        .log { background: #000; border: 1px solid #333; padding: 10px; height: 100px; overflow-y: auto; font-family: monospace; font-size: 0.8rem; color: #0f0; text-align: left; }
+    </style>
+</head>
+<body>
+
+    <div class="card">
+        <div class="status-bar">
+            OFFSET: <span id="stat-sync">SYNCING...</span> |
+            LAG: <span id="stat-lag">0</span>ms
+        </div>
+
+        <div id="display-label">CURRENT RANGE</div>
+        <div class="big-dist" id="dist-val">--.--m</div>
+
+        <button id="cal-btn" onclick="startTest('cal')">1. CALIBRATE (TOUCHING SPEAKER)</button>
+        <button id="range-btn" onclick="startTest('range')">2. MEASURE RANGE</button>
+    </div>
+
+    <div class="card">
+        <div id="log" class="log"></div>
+    </div>
+
+    <script>
+        // PROTECTED BLOCK: Firebase Configuration
+        const firebaseConfig = {
+            apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
+            authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
+            databaseURL: "https://smartphoneorchestra-dwt-default-rtdb.firebaseio.com",
+            projectId: "smartphoneorchestra-dwt"
+        };
+
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
+        let serverOffset = 0;
+        let micDelay = 0;
+        let speedOfSound = 344.0;
+        let audioCtx = null;
+        let testMode = null;
+
+        db.ref(".info/serverTimeOffset").on("value", s => {
+            serverOffset = s.val() || 0;
+            document.getElementById('stat-sync').innerText = "LOCKED";
+        });
+
+        async function startTest(mode) {
+            testMode = mode;
+            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            if (audioCtx.state === 'suspended') await audioCtx.resume();
+
+            document.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+            document.getElementById(mode + '-btn').classList.add('active');
+
+            log(`Mode: ${mode.toUpperCase()} - Listening...`);
+            captureChirp();
+        }
+
+        async function captureChirp() {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const source = audioCtx.createMediaStreamSource(stream);
+            const analyser = audioCtx.createAnalyser();
+            analyser.fftSize = 4096;
+            source.connect(analyser);
+
+            const buffer = new Uint8Array(analyser.frequencyBinCount);
+            const targetBin = Math.round(1000 / (audioCtx.sampleRate / analyser.fftSize));
+
+            const listen = () => {
+                analyser.getByteFrequencyData(buffer);
+                const now = Date.now() + serverOffset;
+
+                if (buffer[targetBin] > 200) {
+                    processHit(now);
+                    // Stop stream to save battery during test
+                    stream.getTracks().forEach(t => t.stop());
+                } else {
+                    requestAnimationFrame(listen);
+                }
+            };
+            listen();
+        }
+
+        async function processHit(receivedTime) {
+            const snap = await db.ref('chirp_log/PILLAR_FL').once('value');
+            const sentTime = snap.val().timestamp;
+
+            if (testMode === 'cal') {
+                // At dist 0, the entire delta is hardware lag
+                micDelay = receivedTime - sentTime;
+                document.getElementById('stat-lag').innerText = micDelay;
+                log(`CALIBRATED: Mic Delay is ${micDelay}ms`);
+            } else {
+                // Standard Ranging
+                const tofMs = (receivedTime - sentTime - micDelay);
+                const distance = (tofMs / 1000) * speedOfSound;
+
+                document.getElementById('dist-val').innerText = distance.toFixed(2) + "m";
+                log(`RANGE: ${distance.toFixed(2)} meters`);
+            }
+        }
+
+        function log(msg) {
+            const box = document.getElementById('log');
+            box.innerHTML += `<div>[${new Date().toLocaleTimeString()}] ${msg}</div>`;
+            box.scrollTop = box.scrollHeight;
+        }
+    </script>
+</body>
+</html>
