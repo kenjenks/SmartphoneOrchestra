@@ -25,70 +25,63 @@ or mezzanine seats.
         body { font-family: 'Segoe UI', sans-serif; background: #000; color: #fff; padding: 20px; margin: 0; }
         .card { background: #1a1a1a; border-radius: 15px; padding: 20px; border: 1px solid #333; margin-bottom: 15px; }
 
-        .mode-selector { display: flex; background: #333; border-radius: 8px; margin-bottom: 15px; padding: 5px; }
-        .mode-btn { flex: 1; padding: 10px; border-radius: 6px; border: none; background: transparent; color: #888; cursor: pointer; font-weight: bold; }
-        .mode-btn.active { background: #007bff; color: white; }
+        .status-bar { display: flex; justify-content: space-between; font-size: 0.85rem; color: #888; margin-bottom: 15px; background: #0a0a0a; padding: 10px; border-radius: 8px; border: 1px solid #222; }
+        .status-val { color: #00ffcc; font-weight: bold; font-family: monospace; }
 
-        .pillar-monitor { display: flex; justify-content: space-between; margin-bottom: 15px; background: #000; padding: 10px; border-radius: 8px; border: 1px solid #444; }
-        .led-dot { width: 12px; height: 12px; background: #400; border-radius: 50%; display: inline-block; margin-bottom: 5px; transition: 0.2s; }
-        .led-dot.active { background: #0f0; box-shadow: 0 0 10px #0f0; }
+        .mode-selector { display: flex; background: #333; border-radius: 8px; margin-bottom: 15px; overflow: hidden; }
+        .mode-btn { flex: 1; padding: 12px; border: none; background: transparent; color: #888; cursor: pointer; transition: 0.3s; }
+        .mode-btn.active { background: #00ffcc; color: #000; font-weight: bold; }
 
-        #reader { width: 100%; border-radius: 10px; overflow: hidden; margin-bottom: 10px; border: 1px solid #444; }
-        button { width: 100%; padding: 15px; font-weight: bold; border-radius: 8px; cursor: pointer; border: none; margin-top: 10px; }
-        .btn-main { background: #007bff; color: white; }
+        #reader { width: 100%; border-radius: 10px; overflow: hidden; margin-bottom: 15px; border: 2px solid #333; }
+        .log { background: #000; border: 1px solid #333; padding: 10px; height: 150px; overflow-y: auto; font-family: monospace; font-size: 0.8rem; color: #0f0; border-radius: 5px; }
 
-        .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 15px 0; }
-        .stat-item { background: #000; padding: 10px; border-radius: 8px; border: 1px solid #222; }
-        .stat-label { font-size: 0.7rem; color: #666; display: block; text-transform: uppercase; }
-        #res-delay, #cur-x, #cur-y { font-family: monospace; font-size: 1.2rem; color: #00ff00; }
+        input { background: #222; border: 1px solid #444; color: #fff; padding: 12px; width: 100%; box-sizing: border-box; margin-bottom: 10px; border-radius: 5px; font-size: 1rem; }
+        button { background: #00ffcc; color: #000; border: none; padding: 15px; width: 100%; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 1rem; }
+        button:disabled { background: #222; color: #444; cursor: not-allowed; }
 
-        #log { height: 120px; overflow-y: auto; background: #000; font-family: monospace; font-size: 0.75rem; padding: 10px; color: #0f0; border: 1px solid #222; margin-top: 10px; }
-        input[type="number"] { background: #111; color: #0f0; border: 1px solid #444; padding: 8px; width: 60px; border-radius: 4px; }
+        #survey-status { margin-top: 10px; font-weight: bold; text-align: center; min-height: 1.2em; }
     </style>
 </head>
 <body>
 
     <div class="card">
-        <h2>1. Identity & Mode</h2>
-        <div class="mode-selector">
-            <button id="btn-mode-acoustic" class="mode-btn active" onclick="setMode('acoustic')">ACOUSTIC</button>
-            <button id="btn-mode-manual" class="mode-btn" onclick="setMode('manual')">MANUAL</button>
+        <div class="status-bar">
+            <span>V: <span id="stat-v" class="status-val">---</span> m/s</span>
+            <span>LAG: <span id="stat-lag" class="status-val">---</span> ms</span>
+            <span>SYNC: <span id="stat-sync" class="status-val">OFFLINE</span></span>
         </div>
+        <h3>1. Scan Seat QR</h3>
         <div id="reader"></div>
-        <button id="qr-toggle-btn" style="background:#6f42c1; color:white;" onclick="toggleScanner()">START SCANNER</button>
-        <div id="current-id-display" style="margin-top:10px; font-weight:bold; color:#00ff00; text-align:center;">READY TO SCAN</div>
+        <div id="scanned-id" style="font-size: 1.4rem; color: #00ffcc; text-align: center; margin: 10px 0; font-weight: bold;">
+            SCAN PILLAR_FL TO CALIBRATE
+        </div>
     </div>
 
     <div class="card">
-        <h2>2. Data Collection</h2>
-        <div id="view-acoustic">
-            <div class="pillar-monitor">
-                <div style="text-align:center;"><div id="led-PILLAR_FL" class="led-dot"></div><br><small>FL</small></div>
-                <div style="text-align:center;"><div id="led-PILLAR_FR" class="led-dot"></div><br><small>FR</small></div>
-                <div style="text-align:center;"><div id="led-PILLAR_BL" class="led-dot"></div><br><small>BL</small></div>
-                <div style="text-align:center;"><div id="led-PILLAR_BR" class="led-dot"></div><br><small>BR</small></div>
-            </div>
-            <button class="btn-main" onclick="startAcousticSurvey()">START ACOUSTIC SCAN</button>
+        <div class="mode-selector">
+            <button class="mode-btn active" id="btn-auto" onclick="setMode('auto')">SONIC AUTO</button>
+            <button class="mode-btn" id="btn-manual" onclick="setMode('manual')">MANUAL ENTRY</button>
         </div>
 
-        <div id="view-manual" style="display:none; text-align:center;">
-            <div style="margin-bottom:10px;">
-                X: <input type="number" id="man-x" step="0.01">
-                Y: <input type="number" id="man-y" step="0.01">
-            </div>
-            <button style="background:#28a745; color:white;" onclick="saveManualXY()">SAVE TO DB</button>
+        <div id="auto-ui">
+            <button id="listen-btn" onclick="startSurvey()">CALIBRATE / CAPTURE POSITION</button>
+            <div id="survey-status"></div>
         </div>
 
-        <div class="stat-grid">
-            <div class="stat-item"><span class="stat-label">Calculated X</span><span id="cur-x">?</span></div>
-            <div class="stat-item"><span class="stat-label">Calculated Y</span><span id="cur-y">?</span></div>
-            <div class="stat-item"><span class="stat-label">Mic Latency (ms)</span><span id="res-delay">20.00</span></div>
+        <div id="manual-ui" style="display:none;">
+            <input type="number" id="man-x" step="0.01" placeholder="X Coordinate (meters)">
+            <input type="number" id="man-y" step="0.01" placeholder="Y Coordinate (meters)">
+            <button onclick="saveManualXY()">SAVE MANUAL POSITION</button>
         </div>
     </div>
 
-    <div id="log">Console initialized.</div>
+    <div class="card">
+        <h3>Diagnostic Log</h3>
+        <div id="log" class="log"></div>
+    </div>
 
     <script>
+        // PROTECTED BLOCK: Firebase Configuration
         const firebaseConfig = {
             apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
             authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
@@ -98,201 +91,284 @@ or mezzanine seats.
         firebase.initializeApp(firebaseConfig);
         const db = firebase.database();
 
-        let html5QrCode, audioCtx, analyser, currentSeatId = null;
-        let isManualMode = false, micDelay = 20.0, lastScanTime = 0;
-        let pillarConfigs = {}, speedOfSound = 344.0;
-        const CHIRP_THRESHOLD = 150;
+        // Operational Constants & State
+        let currentSeatId = null;
+        let mode = 'auto';
+        let pillarConfigs = {};
+        let speedOfSound = 344.0;
+        let micDelay = 0;
+        let serverOffset = 0;
+        let isCalibrated = false;
+        let audioCtx = null;
 
-        db.ref('active_pillars').on('value', snap => {
-            const data = snap.val();
-            if(data) { pillarConfigs = data; speedOfSound = data.speed_of_sound || 344.0; }
+        // Establish Server Clock Offset
+        db.ref(".info/serverTimeOffset").on("value", (snap) => {
+            serverOffset = snap.val() || 0;
+            document.getElementById('stat-sync').innerText = "LOCKED";
+            document.getElementById('stat-sync').style.color = "#00ffcc";
         });
 
-        function log(msg) {
-            const l = document.getElementById('log');
-            l.innerHTML += `<div>[${new Date().toLocaleTimeString()}] ${msg}</div>`;
-            l.scrollTop = l.scrollHeight;
-        }
+        // Load Pillar Registry
+        db.ref('pillar_config').on('value', snap => {
+            const data = snap.val();
+            if (!data || !data.pillars) return;
+            pillarConfigs = {};
+            data.pillars.forEach(p => {
+                pillarConfigs[p.id] = p;
+            });
+            log(`SYSTEM: ${data.pillars.length} pillars synced from cloud.`);
+        });
 
-        function setMode(mode) {
-            isManualMode = (mode === 'manual');
-            document.getElementById('btn-mode-acoustic').classList.toggle('active', !isManualMode);
-            document.getElementById('btn-mode-manual').classList.toggle('active', isManualMode);
-            document.getElementById('view-acoustic').style.display = isManualMode ? 'none' : 'block';
-            document.getElementById('view-manual').style.display = isManualMode ? 'block' : 'none';
-        }
+        // Initialize QR Scanner
+        const html5QrCode = new Html5Qrcode("reader");
+        html5QrCode.start({ facingMode: "environment" }, { fps: 10, qrbox: 250 }, (decodedText) => {
+            currentSeatId = decodedText;
+            document.getElementById('scanned-id').innerText = "TARGET: " + currentSeatId;
+            log("Scanned QR: " + currentSeatId);
 
-        function toggleScanner() {
-            if (!html5QrCode) {
-                html5QrCode = new Html5Qrcode("reader");
-                html5QrCode.start({ facingMode: "environment" }, { fps: 10, qrbox: 250 }, onScanSuccess);
-                document.getElementById('qr-toggle-btn').innerText = "STOP SCANNER";
-            } else {
-                html5QrCode.stop().then(() => { html5QrCode = null; });
-                document.getElementById('qr-toggle-btn').innerText = "START SCANNER";
+            if(currentSeatId === "PILLAR_FL") {
+                document.getElementById('survey-status').innerText = "Ready for Environmental Sync";
+                document.getElementById('survey-status').style.color = "#00ffcc";
             }
+        });
+
+        function setMode(m) {
+            mode = m;
+            document.getElementById('btn-auto').classList.toggle('active', m === 'auto');
+            document.getElementById('btn-manual').classList.toggle('active', m === 'manual');
+            document.getElementById('auto-ui').style.display = m === 'auto' ? 'block' : 'none';
+            document.getElementById('manual-ui').style.display = m === 'manual' ? 'block' : 'none';
         }
 
-        function onScanSuccess(decodedText) {
-            if (Date.now() - lastScanTime < 3000) return;
-            lastScanTime = Date.now();
-            try {
-                const url = new URL(decodedText);
-                currentSeatId = url.searchParams.get("id");
-                document.getElementById('current-id-display').innerText = `LOCKED: ${currentSeatId}`;
-                log(`Target Locked: ${currentSeatId}`);
-                if(isManualMode && pillarConfigs[currentSeatId]) {
-                    document.getElementById('man-x').value = pillarConfigs[currentSeatId].x;
-                    document.getElementById('man-y').value = pillarConfigs[currentSeatId].y;
-                }
-            } catch(e) { log("QR Scan Error."); }
-        }
-
-        async function captureChirps() {
-            if (!audioCtx) {
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                const source = audioCtx.createMediaStreamSource(stream);
-                analyser = audioCtx.createAnalyser();
-                analyser.fftSize = 2048;
-                source.connect(analyser);
-            }
+        async function startSurvey() {
+            if (!currentSeatId) return alert("Please scan a seat QR code first.");
+            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             if (audioCtx.state === 'suspended') await audioCtx.resume();
 
-            return new Promise((resolve) => {
-                const results = {};
-                const startTime = performance.now();
-                const sampleRate = audioCtx.sampleRate;
-                const dataArray = new Uint8Array(analyser.frequencyBinCount);
+            document.getElementById('listen-btn').disabled = true;
+            document.getElementById('survey-status').innerText = "LISTENING FOR EPOCH...";
+            document.getElementById('survey-status').style.color = "#888";
 
-                const check = () => {
-                    analyser.getByteFrequencyData(dataArray);
-                    Object.entries(pillarConfigs).forEach(([pid, cfg]) => {
-                        if (results[pid] || !cfg.freq) return;
-                        const bin = Math.round(cfg.freq / (sampleRate / analyser.fftSize));
-                        if (dataArray[bin] > CHIRP_THRESHOLD) {
-                            results[pid] = (performance.now() - startTime);
-                            document.getElementById(`led-${pid}`).classList.add('active');
-                            log(`Recv ${pid}: ${results[pid].toFixed(1)}ms`);
-                        }
+            const detections = {};
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const source = audioCtx.createMediaStreamSource(stream);
+            const analyser = audioCtx.createAnalyser();
+            analyser.fftSize = 4096;
+            source.connect(analyser);
+
+            const buffer = new Uint8Array(analyser.frequencyBinCount);
+            const sessionStartTime = Date.now() + serverOffset;
+
+            const captureLoop = () => {
+                analyser.getByteFrequencyData(buffer);
+                const now = Date.now() + serverOffset;
+
+                Object.values(pillarConfigs).forEach(p => {
+                    const bin = Math.round(p.preferred_freq / (audioCtx.sampleRate / analyser.fftSize));
+                    // Look for high-amplitude peaks at staggered frequencies
+                    if (buffer[bin] > 190 && !detections[p.id]) {
+                        detections[p.id] = now;
+                        log(`DETECTED: ${p.id} (${p.preferred_freq}Hz)`);
+                    }
+                });
+
+                // Listen for up to 3 seconds to catch a full 2000ms epoch cycle
+                if (Object.keys(detections).length < 4 && (Date.now() + serverOffset - sessionStartTime) < 3500) {
+                    requestAnimationFrame(captureLoop);
+                } else {
+                    processDetections(detections);
+                }
+            };
+            captureLoop();
+        }
+
+        async function processDetections(detections) {
+            document.getElementById('listen-btn').disabled = false;
+
+            // Retrieve the reference timestamps the pillars recorded when they chirped
+            const snap = await db.ref('chirp_log').once('value');
+            const logs = snap.val();
+            if (!logs) return log("ERROR: No pillar chirp logs found in Firebase.");
+
+            if (currentSeatId === "PILLAR_FL") {
+                // LOCK CALIBRATION (Environmental Sync)
+                if (!detections["PILLAR_FL"]) return log("FAILED: Could not hear PILLAR_FL. Move closer.");
+
+                // 1. Solve Mic Delay (Time of Arrival - Time of Chirp at dist=0)
+                micDelay = detections["PILLAR_FL"] - logs["PILLAR_FL"].timestamp;
+
+                // 2. Solve Speed of Sound using other 3 pillars
+                let vSum = 0, vCount = 0;
+                Object.entries(detections).forEach(([id, recTime]) => {
+                    if (id === "PILLAR_FL" || !logs[id]) return;
+                    const p = pillarConfigs[id];
+                    const theoreticalDist = Math.sqrt(p.x**2 + p.y**2);
+                    const tofSeconds = (recTime - logs[id].timestamp - micDelay) / 1000;
+                    if (tofSeconds > 0) {
+                        vSum += (theoreticalDist / tofSeconds);
+                        vCount++;
+                    }
+                });
+
+                speedOfSound = vCount > 0 ? vSum / vCount : 344.0;
+                isCalibrated = true;
+
+                document.getElementById('stat-v').innerText = speedOfSound.toFixed(1);
+                document.getElementById('stat-lag').innerText = micDelay.toFixed(0);
+                log(`LOCKED: V=${speedOfSound.toFixed(1)}m/s, MicLag=${micDelay.toFixed(0)}ms`);
+                document.getElementById('survey-status').innerText = "ENVIRONMENT LOCKED";
+                document.getElementById('survey-status').style.color = "#00ffcc";
+            } else {
+                // STANDARD SEAT SURVEY
+                if (!isCalibrated) return alert("SOP ERROR: You must calibrate at PILLAR_FL first!");
+
+                const position = solveTrilateration(detections, logs);
+                if (position) {
+                    await db.ref(`survey_results/${currentSeatId}`).set({
+                        x: position.x,
+                        y: position.y,
+                        confidence: position.confidence,
+                        status: "AUTO",
+                        timestamp: Date.now()
                     });
-                    if (Object.keys(results).length === 4 || (performance.now() - startTime) > 4000) resolve(results);
-                    else requestAnimationFrame(check);
-                };
-                requestAnimationFrame(check);
-            });
+                    log(`SUCCESS: ${currentSeatId} saved at (${position.x.toFixed(2)}, ${position.y.toFixed(2)})`);
+                }
+            }
         }
 
         /**
-         * Resolves theater coordinates based on 2, 3, or 4 beacons.
-         * For 2 beacons, resolves ambiguity using theater boundary knowledge.
+         * solveTrilateration
+         * Implements Combinatorial Redundancy and Boundary Constraints
          */
-        function solveXY(measurements) {
-            let circles = [];
-            Object.entries(measurements).forEach(([pid, time]) => {
-                const cfg = pillarConfigs[pid];
-                if (cfg) {
-                    const r = ((time - micDelay) / 1000) * speedOfSound;
-                    circles.push({ x: cfg.x, y: cfg.y, r: r });
+        function solveTrilateration(detections, logs) {
+            const mKeys = Object.keys(detections).filter(k => logs[k]);
+            const trials = [];
+            const measurements = {};
+
+            // Convert ToF to Distances
+            mKeys.forEach(id => {
+                const tof = (detections[id] - logs[id].timestamp - micDelay) / 1000;
+                if (tof > 0) {
+                    measurements[id] = {
+                        x: pillarConfigs[id].x,
+                        y: pillarConfigs[id].y,
+                        r: tof * speedOfSound
+                    };
                 }
             });
 
-            if (circles.length < 2) return null;
+            const keys = Object.keys(measurements);
 
-            // Define theater bounds for point validation
-            const theater = {
-                minX: Math.min(...Object.values(pillarConfigs).map(p => p.x)),
-                maxX: Math.max(...Object.values(pillarConfigs).map(p => p.x)),
-                minY: Math.min(...Object.values(pillarConfigs).map(p => p.y)),
-                maxY: Math.max(...Object.values(pillarConfigs).map(p => p.y))
-            };
+            // Case A: 3+ Pillars (Triangulation Combinations)
+            if (keys.length >= 3) {
+                const combinations = getCombinations(keys, 3);
+                combinations.forEach(c => {
+                    const res = trilaterate3(measurements[c[0]], measurements[c[1]], measurements[c[2]]);
+                    if (res) trials.push(res);
+                });
+            }
+            // Case B: 2 Pillars (Ambiguity Resolution)
+            else if (keys.length === 2) {
+                const p1 = measurements[keys[0]];
+                const p2 = measurements[keys[1]];
+                const pts = intersect2(p1, p2);
 
-            if (circles.length === 2) {
-                const pts = intersectTwoCircles(circles[0], circles[1]);
-                // Select the point that falls inside theater bounds
-                return pts.find(p => p.x >= theater.minX && p.x <= theater.maxX &&
-                                     p.y >= theater.minY && p.y <= theater.maxY) || pts[0];
+                // Apply Theater Boundary Constraints (0 to Max X, 0 to Max Y)
+                const maxX = Math.max(...Object.values(pillarConfigs).map(p => p.x));
+                const maxY = Math.max(...Object.values(pillarConfigs).map(p => p.y));
+
+                pts.forEach(pt => {
+                    if (pt.x >= -0.5 && pt.x <= maxX + 0.5 && pt.y >= -0.5 && pt.y <= maxY + 0.5) {
+                        trials.push(pt);
+                    }
+                });
             }
 
-            // For 3+ circles, use Centroid of all valid intersections for stability
-            let intersections = [];
-            for (let i = 0; i < circles.length; i++) {
-                for (let j = i + 1; j < circles.length; j++) {
-                    intersections.push(...intersectTwoCircles(circles[i], circles[j]));
-                }
+            if (trials.length === 0) {
+                document.getElementById('survey-status').innerText = "GEOMETRY FAILED";
+                document.getElementById('survey-status').style.color = "#ff4444";
+                return null;
             }
-            const valid = intersections.filter(p => p.x >= theater.minX - 2 && p.x <= theater.maxX + 2 &&
-                                                    p.y >= theater.minY - 2 && p.y <= theater.maxY + 2);
-            if (valid.length === 0) return null;
 
-            const sum = valid.reduce((acc, p) => ({ x: acc.x + p.x, y: acc.y + p.y }), { x: 0, y: 0 });
-            return { x: sum.x / valid.length, y: sum.y / valid.length };
+            // Calculate Centroid
+            const avgX = trials.reduce((s, p) => s + p.x, 0) / trials.length;
+            const avgY = trials.reduce((s, p) => s + p.y, 0) / trials.length;
+
+            // Dispersion Check for 0.1m Accuracy Goal
+            const dispersion = Math.max(...trials.map(p =>
+                Math.sqrt((p.x - avgX)**2 + (p.y - avgY)**2)
+            ));
+
+            const statusEl = document.getElementById('survey-status');
+            if (dispersion <= 0.1) {
+                statusEl.innerText = "HIGH CONFIDENCE (±" + dispersion.toFixed(2) + "m)";
+                statusEl.style.color = "#00ffcc";
+            } else {
+                statusEl.innerText = "LOW CONFIDENCE (±" + dispersion.toFixed(2) + "m)";
+                statusEl.style.color = "#ffcc00";
+            }
+
+            return { x: avgX, y: avgY, confidence: dispersion };
         }
 
-        function intersectTwoCircles(c1, c2) {
-            const dx = c2.x - c1.x;
-            const dy = c2.y - c1.y;
-            const d = Math.sqrt(dx * dx + dy * dy);
-            if (d > c1.r + c2.r || d < Math.abs(c1.r - c2.r)) return [];
+        // Geometry Utilities
+        function trilaterate3(p1, p2, p3) {
+            const d = dist(p1, p2);
+            const ex = { x: (p2.x - p1.x) / d, y: (p2.y - p1.y) / d };
+            const i = ex.x * (p3.x - p1.x) + ex.y * (p3.y - p1.y);
+            const ey = {
+                x: (p3.x - p1.x - i * ex.x) / dist({x: p3.x - p1.x - i * ex.x, y: p3.y - p1.y - i * ex.y}, {x:0, y:0}),
+                y: (p3.y - p1.y - i * ex.y) / dist({x: p3.x - p1.x - i * ex.x, y: p3.y - p1.y - i * ex.y}, {x:0, y:0})
+            };
+            const j = ey.x * (p3.x - p1.x) + ey.y * (p3.y - p1.y);
+            const x = (p1.r**2 - p2.r**2 + d**2) / (2 * d);
+            const y = (p1.r**2 - p3.r**2 + i**2 + j**2) / (2 * j) - (i / j) * x;
+            return { x: p1.x + x * ex.x + y * ey.x, y: p1.y + x * ex.y + y * ey.y };
+        }
 
-            const a = (c1.r * c1.r - c2.r * c2.r + d * d) / (2 * d);
-            const h = Math.sqrt(Math.max(0, c1.r * c1.r - a * a));
-            const x2 = c1.x + a * dx / d;
-            const y2 = c1.y + a * dy / d;
-
+        function intersect2(p1, p2) {
+            const d = dist(p1, p2);
+            if (d > p1.r + p2.r || d < Math.abs(p1.r - p2.r)) return [];
+            const a = (p1.r**2 - p2.r**2 + d**2) / (2 * d);
+            const h = Math.sqrt(p1.r**2 - a**2);
+            const x2 = p1.x + a * (p2.x - p1.x) / d;
+            const y2 = p1.y + a * (p2.y - p1.y) / d;
             return [
-                { x: x2 + h * dy / d, y: y2 - h * dx / d },
-                { x: x2 - h * dy / d, y: y2 + h * dx / d }
+                { x: x2 + h * (p2.y - p1.y) / d, y: y2 - h * (p2.x - p1.x) / d },
+                { x: x2 - h * (p2.y - p1.y) / d, y: y2 + h * (p2.x - p1.x) / d }
             ];
         }
 
-        async function startAcousticSurvey() {
-            if (!currentSeatId) return alert("Scan QR first!");
-            ["PILLAR_FL", "PILLAR_FR", "PILLAR_BL", "PILLAR_BR"].forEach(id => {
-                document.getElementById(`led-${id}`).classList.remove('active');
-            });
+        function dist(a, b) { return Math.sqrt((a.x - b.x)**2 + (a.y - b.y)**2); }
 
-            const measurements = await captureChirps();
-
-            if (pillarConfigs[currentSeatId]) {
-                calibrate(measurements);
-            } else {
-                const pos = solveXY(measurements);
-                if (pos) {
-                    document.getElementById('cur-x').innerText = pos.x.toFixed(2);
-                    document.getElementById('cur-y').innerText = pos.y.toFixed(2);
-                    await db.ref(`survey_results/${currentSeatId}`).set({ ...pos, status: "ACOUSTIC", timestamp: Date.now() });
-                    log(`SAVED: Seat ${currentSeatId} at (${pos.x.toFixed(1)}, ${pos.y.toFixed(1)})`);
-                } else {
-                    log("ERROR: Position couldn't be resolved.");
+        function getCombinations(arr, size) {
+            const r = [];
+            const f = (p, a) => {
+                for (let i = 0; i < a.length; i++) {
+                    if (p.length + 1 === size) r.push([...p, a[i]]);
+                    else f([...p, a[i]], a.slice(i + 1));
                 }
-            }
-        }
-
-        function calibrate(measurements) {
-            const me = pillarConfigs[currentSeatId];
-            let totalDelay = 0, count = 0;
-            Object.entries(measurements).forEach(([pid, time]) => {
-                if (pid === currentSeatId) return;
-                const p = pillarConfigs[pid];
-                const dist = Math.sqrt((me.x - p.x)**2 + (me.y - p.y)**2);
-                const theoreticalTime = (dist / speedOfSound) * 1000;
-                totalDelay += (time - theoreticalTime);
-                count++;
-            });
-            if (count > 0) {
-                micDelay = totalDelay / count;
-                document.getElementById('res-delay').innerText = micDelay.toFixed(2);
-                log(`CALIBRATED: Mic delay set to ${micDelay.toFixed(2)}ms`);
-            }
+            };
+            f([], arr);
+            return r;
         }
 
         async function saveManualXY() {
             if (!currentSeatId) return alert("Scan QR first!");
             const x = parseFloat(document.getElementById('man-x').value);
             const y = parseFloat(document.getElementById('man-y').value);
-            await db.ref(`survey_results/${currentSeatId}`).set({ x, y, status: "MANUAL", timestamp: Date.now() });
+            if (isNaN(x) || isNaN(y)) return alert("Please enter valid numeric coordinates.");
+
+            await db.ref(`survey_results/${currentSeatId}`).set({
+                x, y, status: "MANUAL", timestamp: Date.now()
+            });
             log(`MANUAL SAVE: ${currentSeatId} at (${x}, ${y})`);
+        }
+
+        function log(msg) {
+            const box = document.getElementById('log');
+            box.innerHTML += `<div>[${new Date().toLocaleTimeString()}] ${msg}</div>`;
+            box.scrollTop = box.scrollHeight;
         }
     </script>
 </body>
