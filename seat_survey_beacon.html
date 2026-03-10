@@ -35,19 +35,16 @@ survey.
         <div id="freq-display">----</div>
         <div class="coords">X: <span id="pos-x">?</span> | Y: <span id="pos-y">?</span></div>
         <div class="led" id="pulse-led"></div>
-        <div id="status">WIFI CONNECTING...</div>
+        <div id="status">SYNCING WITH SERVER CLOCK...</div>
     </div>
 
     <script>
         // PROTECTED BLOCK: Firebase Configuration
         const firebaseConfig = {
-            apiKey: "YOUR_RESTRICTED_API_KEY",
-            authDomain: "YOUR_PROJECT.firebaseapp.com",
-            databaseURL: "https://YOUR_PROJECT.firebaseio.com",
-            projectId: "YOUR_PROJECT",
-            storageBucket: "YOUR_PROJECT.appspot.com",
-            messagingSenderId: "YOUR_SENDER_ID",
-            appId: "YOUR_APP_ID"
+            apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
+            authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
+            databaseURL: "https://smartphoneorchestra-dwt-default-rtdb.firebaseio.com",
+            projectId: "smartphoneorchestra-dwt"
         };
 
         firebase.initializeApp(firebaseConfig);
@@ -57,58 +54,49 @@ survey.
         const myId = params.get('id') || "PILLAR_FL";
 
         let myConfig = null;
+        let serverOffset = 0;
         let audioCtx = null;
-        const THRESHOLD = 50;
+        const EPOCH_MS = 2000;
 
-        // Listen for the global pillar configuration
+        // Establish Server Offset (NTP-style sync)
+        db.ref(".info/serverTimeOffset").on("value", (snap) => {
+            serverOffset = snap.val() || 0;
+        });
+
         db.ref('pillar_config').on('value', snap => {
             const data = snap.val();
             if (!data || !data.pillars) return;
-
             myConfig = data.pillars.find(p => p.id === myId);
             if (myConfig) {
                 document.getElementById('pillar-label').innerText = myConfig.label;
                 document.getElementById('freq-display').innerText = myConfig.preferred_freq + "Hz";
                 document.getElementById('pos-x').innerText = myConfig.x;
                 document.getElementById('pos-y').innerText = myConfig.y;
-                document.getElementById('status').innerText = "CALIBRATED & READY";
+                document.getElementById('status').innerText = "WAITING FOR START";
             }
         });
 
-        async function initAudio() {
-            if (audioCtx) return;
-            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            const analyser = audioCtx.createAnalyser();
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            const source = audioCtx.createMediaStreamSource(stream);
-            source.connect(analyser);
+        async function startBeacon() {
+            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            if (audioCtx.state === 'suspended') await audioCtx.resume();
 
-            checkChannel(analyser);
+            document.getElementById('status').innerText = "BEACON ACTIVE";
+            scheduleNextChirp();
         }
 
-        function checkChannel(analyser) {
-            const dataArray = new Uint8Array(analyser.frequencyBinCount);
-            analyser.getByteFrequencyData(dataArray);
+        function scheduleNextChirp() {
+            const now = Date.now() + serverOffset;
+            const nextEpoch = Math.floor(now / EPOCH_MS) * EPOCH_MS + EPOCH_MS;
+            const targetTime = nextEpoch + (myConfig.stagger || 0);
+            const delay = targetTime - now;
 
-            if (!myConfig) {
-                setTimeout(() => checkChannel(analyser), 500);
-                return;
-            }
-
-            const bin = Math.round(myConfig.preferred_freq / (audioCtx.sampleRate / analyser.fftSize));
-            const currentVolume = dataArray[bin];
-
-            if (currentVolume < THRESHOLD) {
-                document.getElementById('status').innerText = "CHANNEL CLEAR - CHIRPING";
-                emitChirp();
-                setTimeout(() => checkChannel(analyser), 1800 + Math.random() * 600);
-            } else {
-                document.getElementById('status').innerText = "CHANNEL BUSY - WAITING...";
-                setTimeout(() => checkChannel(analyser), 100);
-            }
+            setTimeout(() => {
+                emitChirp(targetTime);
+                scheduleNextChirp();
+            }, delay);
         }
 
-        function emitChirp() {
+        function emitChirp(timestamp) {
             const osc = audioCtx.createOscillator();
             const gain = audioCtx.createGain();
             const led = document.getElementById('pulse-led');
@@ -126,7 +114,13 @@ survey.
 
             setTimeout(() => led.classList.remove('active'), 150);
 
-            // Register as active in the device registry for Admin visibility
+            // LOG CHIRP TO FIREBASE
+            db.ref(`chirp_log/${myId}`).set({
+                timestamp: timestamp,
+                freq: myConfig.preferred_freq
+            });
+
+            // Registry Heartbeat
             db.ref(`devices/${myId}`).set({
                 seat_id: myId,
                 lastPing: Date.now(),
@@ -134,7 +128,7 @@ survey.
             });
         }
 
-        window.onclick = () => initAudio();
+        window.onclick = () => startBeacon();
     </script>
 </body>
 </html>
