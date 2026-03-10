@@ -1,8 +1,15 @@
 <!DOCTYPE html>
 <!--
-seat_survey.html
+seat_survey_beacon.html
 
-Webapp for "beacons" at the four corners of the theater. Allows crew to scan the QR code on each seat bag to determine and record the XY location in the theater using seat_survey.html webapp.
+Webapp for "beacons" at the four corners of the theater.
+
+Provides audio "chirps" that allows crew to scan the
+QR code on each seat bag to determine and record the
+XY location in the theater using seat_survey.html webapp.
+
+Get all 4 pillars running this software before the seat
+survey.
 
 -->
 <html lang="en">
@@ -16,106 +23,88 @@ Webapp for "beacons" at the four corners of the theater. Allows crew to scan the
         .pillar-card { border: 4px solid #333; padding: 40px; border-radius: 20px; display: inline-block; min-width: 320px; background: #050505; }
         #freq-display { font-size: 5rem; color: #00ff00; margin: 20px 0; font-weight: bold; font-family: monospace; }
         .coords { font-size: 1.5rem; color: #888; margin-bottom: 20px; }
-        #status { font-family: monospace; background: #111; padding: 15px; border-radius: 5px; color: #00ff00; border: 1px solid #222; }
-        .led { width: 30px; height: 30px; border-radius: 50%; background: #300; display: inline-block; margin-top: 30px; transition: 0.1s; }
-        .led.active { background: #00ff00; box-shadow: 0 0 20px #00ff00; }
-        #id-badge { background: #333; padding: 5px 15px; border-radius: 50px; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 2px; }
+        #status { font-family: monospace; color: #444; }
+        .led { width: 40px; height: 40px; background: #200; border-radius: 50%; margin: 20px auto; transition: 0.1s; }
+        .led.active { background: #f00; box-shadow: 0 0 20px #f00; }
     </style>
 </head>
 <body>
 
     <div class="pillar-card">
-        <div id="id-badge">Beacon Unassigned</div>
-        <h1 id="pillar-label">Waiting for Config...</h1>
-        <div id="freq-display">---- Hz</div>
-        <div class="coords" id="coords-display">X: --, Y: --</div>
-        <div id="status">Tap screen to activate audio</div>
-        <div id="pulse-led" class="led"></div>
+        <h2 id="pillar-label">INITIALIZING...</h2>
+        <div id="freq-display">----</div>
+        <div class="coords">X: <span id="pos-x">?</span> | Y: <span id="pos-y">?</span></div>
+        <div class="led" id="pulse-led"></div>
+        <div id="status">WIFI CONNECTING...</div>
     </div>
 
     <script>
+        // PROTECTED BLOCK: Firebase Configuration
         const firebaseConfig = {
-            apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
-            authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
-            databaseURL: "https://smartphoneorchestra-dwt-default-rtdb.firebaseio.com/",
-            projectId: "smartphoneorchestra-dwt",
-            storageBucket: "smartphoneorchestra-dwt.firebasestorage.app",
-            messagingSenderId: "722537253165",
-            appId: "1:722537253165:web:8e8b6495bd508de35b2ba4"
+            apiKey: "YOUR_RESTRICTED_API_KEY",
+            authDomain: "YOUR_PROJECT.firebaseapp.com",
+            databaseURL: "https://YOUR_PROJECT.firebaseio.com",
+            projectId: "YOUR_PROJECT",
+            storageBucket: "YOUR_PROJECT.appspot.com",
+            messagingSenderId: "YOUR_SENDER_ID",
+            appId: "YOUR_APP_ID"
         };
+
         firebase.initializeApp(firebaseConfig);
         const db = firebase.database();
 
-        // 1. Get Identity from URL
-        const urlParams = new URLSearchParams(window.location.search);
-        const myId = urlParams.get('id');
+        const params = new URLSearchParams(window.location.search);
+        const myId = params.get('id') || "PILLAR_FL";
+
         let myConfig = null;
-        let audioCtx, analyser, dataArray;
-        const THRESHOLD = -65;
+        let audioCtx = null;
+        const THRESHOLD = 50;
 
-        if (!myId) {
-            document.body.innerHTML = "<h1>Error: No ?id= parameter found in URL</h1>";
-        } else {
-            document.getElementById('id-badge').innerText = myId;
+        // Listen for the global pillar configuration
+        db.ref('pillar_config').on('value', snap => {
+            const data = snap.val();
+            if (!data || !data.pillars) return;
 
-            // 2. LIVE DATABASE LISTENER
-            // This replaces the old fetch('pillar_config.json') logic
-            db.ref('active_pillars/' + myId).on('value', (snapshot) => {
-                const data = snapshot.val();
-                if (data) {
-                    myConfig = {
-                        id: myId,
-                        freq: data.freq || 1000,
-                        x: data.x || 0,
-                        y: data.y || 0,
-                        label: data.label || myId
-                    };
+            myConfig = data.pillars.find(p => p.id === myId);
+            if (myConfig) {
+                document.getElementById('pillar-label').innerText = myConfig.label;
+                document.getElementById('freq-display').innerText = myConfig.preferred_freq + "Hz";
+                document.getElementById('pos-x').innerText = myConfig.x;
+                document.getElementById('pos-y').innerText = myConfig.y;
+                document.getElementById('status').innerText = "CALIBRATED & READY";
+            }
+        });
 
-                    document.getElementById('pillar-label').innerText = myConfig.label;
-                    document.getElementById('freq-display').innerText = myConfig.freq + " Hz";
-                    document.getElementById('coords-display').innerText = `X: ${myConfig.x}, Y: ${myConfig.y}`;
-
-                    if (!audioCtx) {
-                        document.getElementById('status').innerText = "CONFIG LOADED. TAP TO START CHIRP.";
-                    }
-                } else {
-                    document.getElementById('status').innerText = "ERROR: ID not found in Database.";
-                }
-            });
-        }
-
-        // 3. Audio Logic (Listen-Before-Talk)
-        async function startBeacon() {
-            if (!myConfig) return;
-
+        async function initAudio() {
+            if (audioCtx) return;
             audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const analyser = audioCtx.createAnalyser();
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             const source = audioCtx.createMediaStreamSource(stream);
-
-            analyser = audioCtx.createAnalyser();
-            analyser.fftSize = 4096;
-            dataArray = new Float32Array(analyser.frequencyBinCount);
             source.connect(analyser);
 
-            // Update status to Online in Firebase
-            db.ref(`active_pillars/${myId}/status`).set("ONLINE");
-            checkChannel();
+            checkChannel(analyser);
         }
 
-        function checkChannel() {
-            if (!myConfig) return;
-            analyser.getFloatFrequencyData(dataArray);
+        function checkChannel(analyser) {
+            const dataArray = new Uint8Array(analyser.frequencyBinCount);
+            analyser.getByteFrequencyData(dataArray);
 
-            const bin = Math.round(myConfig.freq / (audioCtx.sampleRate / analyser.fftSize));
+            if (!myConfig) {
+                setTimeout(() => checkChannel(analyser), 500);
+                return;
+            }
+
+            const bin = Math.round(myConfig.preferred_freq / (audioCtx.sampleRate / analyser.fftSize));
             const currentVolume = dataArray[bin];
 
             if (currentVolume < THRESHOLD) {
                 document.getElementById('status').innerText = "CHANNEL CLEAR - CHIRPING";
                 emitChirp();
-                setTimeout(checkChannel, 1800 + Math.random() * 600);
+                setTimeout(() => checkChannel(analyser), 1800 + Math.random() * 600);
             } else {
                 document.getElementById('status').innerText = "CHANNEL BUSY - WAITING...";
-                setTimeout(checkChannel, 100);
+                setTimeout(() => checkChannel(analyser), 100);
             }
         }
 
@@ -124,8 +113,7 @@ Webapp for "beacons" at the four corners of the theater. Allows crew to scan the
             const gain = audioCtx.createGain();
             const led = document.getElementById('pulse-led');
 
-            osc.frequency.setValueAtTime(myConfig.freq, audioCtx.currentTime);
-
+            osc.frequency.setValueAtTime(myConfig.preferred_freq, audioCtx.currentTime);
             gain.gain.setValueAtTime(0, audioCtx.currentTime);
             gain.gain.linearRampToValueAtTime(0.7, audioCtx.currentTime + 0.01);
             gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.12);
@@ -137,12 +125,16 @@ Webapp for "beacons" at the four corners of the theater. Allows crew to scan the
             osc.stop(audioCtx.currentTime + 0.15);
 
             setTimeout(() => led.classList.remove('active'), 150);
-            db.ref(`active_pillars/${myId}/lastPing`).set(Date.now());
+
+            // Register as active in the device registry for Admin visibility
+            db.ref(`devices/${myId}`).set({
+                seat_id: myId,
+                lastPing: Date.now(),
+                status: "ACTIVE_BEACON"
+            });
         }
 
-        document.body.onclick = () => {
-            if (!audioCtx && myConfig) startBeacon();
-        };
+        window.onclick = () => initAudio();
     </script>
 </body>
 </html>
