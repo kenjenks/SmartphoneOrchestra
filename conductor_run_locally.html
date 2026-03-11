@@ -1,92 +1,93 @@
 <!DOCTYPE html>
 <!--
-conductor_run_locally.html
+conductor.html
 
-Webapp for leading the Smarphone Orchestra, sending cues to patro devices over Firebase.
-
-This is run locally from the Stage Manager or Sound Tech laptop. Open the local file in 
-your browser. (Double click on conductor_run_locally.html file in Windows Explorer.)
-
-These files must be in the same folder:
-
-- cues.json
-- pillar_config.json
-- timeline.json
-
-The clock of the laptop provides the timebase for all devices.
-
+Webapp for leading the SmartphoneOrchestra, sending cues
+to patron devices over Firebase.
 -->
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>SM Conductor: Scheduled Trigger</title>
+    <title>SmartphoneOrchestra SM Conductor</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
+
     <style>
-        body { font-family: 'Segoe UI', sans-serif; background: #050505; color: #eee; padding: 20px; overflow: hidden; }
-        .grid { display: grid; grid-template-columns: 1fr 450px; gap: 20px; height: 90vh; }
+        body { margin: 0; background: #1a1a1a; color: #eee; font-family: 'Segoe UI', sans-serif; display: flex; height: 100vh; overflow: hidden; }
 
-        .timeline-panel { background: #111; border: 1px solid #333; padding: 20px; overflow-y: auto; border-radius: 8px; }
-        .control-panel { background: #1a1a1a; border: 1px solid #444; padding: 20px; display: flex; flex-direction: column; border-radius: 8px; }
+        /* Sidebar Controls */
+        #control-panel { width: 350px; background: #252525; border-right: 1px solid #444; padding: 20px; display: flex; flex-direction: column; overflow-y: auto; }
+        .section { margin-bottom: 25px; padding-bottom: 15px; border-bottom: 1px solid #333; }
+        h2 { font-size: 1.1rem; color: #00ffcc; margin-top: 0; text-transform: uppercase; letter-spacing: 1px; }
 
-        h2 { margin-top: 0; color: #4CAF50; text-transform: uppercase; letter-spacing: 1px; font-size: 1.2em; }
+        /* Seat Map GUI */
+        #map-container { flex-grow: 1; position: relative; background: #000; display: flex; align-items: center; justify-content: center; padding: 20px; }
+        #seat-map-canvas { background: #050505; border-radius: 8px; box-shadow: inset 0 0 50px rgba(0,255,204,0.05); }
 
-        #master-clock { font-family: 'Courier New', monospace; font-size: 4em; color: #00ff00; text-align: center; margin: 20px 0; background: #000; padding: 10px; border-radius: 4px; border: 1px solid #222; }
+        /* Buttons & Inputs */
+        button { background: #333; color: #fff; border: 1px solid #555; padding: 10px 15px; border-radius: 4px; cursor: pointer; font-weight: bold; margin-bottom: 5px; width: 100%; }
+        button.primary { background: #00ffcc; color: #000; border: none; }
+        button.primary:hover { background: #00cca3; }
+        button:active { transform: translateY(1px); }
+        .btn-group { display: flex; gap: 10px; }
 
-        .timeline-item { display: flex; justify-content: space-between; padding: 12px; border-bottom: 1px solid #222; font-size: 0.95em; }
-        .timeline-item.next { background: #223322; border: 1px solid #4CAF50; border-radius: 4px; }
-        .timeline-item.past { opacity: 0.4; }
-        .status { font-weight: bold; color: #888; }
-        .next .status { color: #00ff00; animation: blink 1s infinite; }
+        /* Performance Registry UI Block */
+        #performance-registry { font-family: monospace; font-size: 11px; background: #000; padding: 10px; border-radius: 4px; height: 200px; overflow-y: auto; border: 1px solid #333; }
+        .perf-row { display: flex; justify-content: space-between; padding: 2px 0; border-bottom: 1px solid #111; }
+        .perf-row.warning { color: #ffcc00; }
+        .perf-row.critical { color: #ff4444; font-weight: bold; }
 
-        @keyframes blink { 50% { opacity: 0.5; } }
+        /* Audio Feedback */
+        #fft-viz { width: 100%; height: 60px; background: #000; border: 1px solid #333; margin-top: 10px; }
 
-        .big-btn { width: 100%; padding: 25px; font-size: 1.5em; font-weight: bold; cursor: pointer; border: none; border-radius: 8px; margin-bottom: 15px; text-transform: uppercase; transition: transform 0.1s; }
-        .big-btn:active { transform: scale(0.98); }
-        .trigger-btn { background: #4CAF50; color: white; }
-        .stop-btn { background: #f44336; color: white; font-size: 1em; padding: 15px; }
-
-        .stats { margin-top: auto; font-size: 0.85em; color: #666; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-        .stat-box { background: #000; padding: 10px; border-radius: 4px; border: 1px solid #333; }
-        .stat-label { display: block; font-size: 0.8em; text-transform: uppercase; }
-        .stat-val { font-size: 1.2em; color: #aaa; }
+        /* Legend */
+        .legend { display: flex; gap: 10px; font-size: 10px; margin-top: 10px; }
+        .legend-item { display: flex; align-items: center; gap: 5px; }
+        .dot { width: 8px; height: 8px; border-radius: 50%; }
     </style>
 </head>
 <body>
 
-<div class="grid">
-    <div class="timeline-panel">
-        <h2>Show Timeline</h2>
-        <div id="timeline-list">Loading timeline.json...</div>
-    </div>
-
-    <div class="control-panel">
-        <h2>Master Control</h2>
-        <div id="master-clock">00:00:00.000</div>
-
-        <button class="big-btn trigger-btn" onclick="confirmTrigger()">Trigger Next Cue [Space]</button>
-        <button class="big-btn stop-btn" onclick="emergencyStop()">Emergency Stop [K]</button>
-
-        <div class="stats">
-            <div class="stat-box">
-                <span class="stat-label">Bridge Status</span>
-                <span class="stat-val" id="bridge-val">Disconnected</span>
-            </div>
-            <div class="stat-box">
-                <span class="stat-label">Firebase Sync</span>
-                <span class="stat-val" id="sync-val">---</span>
-            </div>
-            <div class="stat-box">
-                <span class="stat-label">Connected Patrons</span>
-                <span class="stat-val" id="patron-val">0</span>
-            </div>
-            <div class="stat-box">
-                <span class="stat-label">Next Cue ID</span>
-                <span class="stat-val" id="next-cue-val">None</span>
+    <div id="control-panel">
+        <div class="section">
+            <h2>System Control</h2>
+            <div id="mic-status">Microphone: <span style="color:#ff4444">OFF</span></div>
+            <button id="start-mic-btn" class="primary">WAKE CONDUCTOR EAR</button>
+            <div class="legend">
+                <div class="legend-item"><div class="dot" style="background:#333"></div>Offline</div>
+                <div class="legend-item"><div class="dot" style="background:#ffcc00"></div>Syncing</div>
+                <div class="legend-item"><div class="dot" style="background:#00ffcc"></div>Happy</div>
             </div>
         </div>
+
+        <div class="section">
+            <h2>Bach Tuning Mode</h2>
+            <p style="font-size: 0.8rem; color: #888;">Jesu, Joy of Man's Desiring</p>
+            <div class="btn-group">
+                <button id="play-bach-btn">PLAY</button>
+                <button id="pause-bach-btn">PAUSE</button>
+            </div>
+            <button id="reset-tuning-btn">RESET ALL STATS</button>
+            <canvas id="fft-viz"></canvas>
+            <div id="detection-log" style="font-size: 10px; color: #00ffcc; margin-top: 5px; height: 40px; overflow: hidden;"></div>
+        </div>
+
+        <div class="section">
+            <h2>Performance Registry</h2>
+            <div id="performance-registry">
+                <div class="perf-row"><span>ID</span><span>JITTER</span><span>STATUS</span></div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Global Cues</h2>
+            <button id="kill-all-btn" style="color: #ff4444;">KILL ALL DEVICES</button>
+        </div>
     </div>
-</div>
+
+    <div id="map-container">
+        <canvas id="seat-map-canvas"></canvas>
+    </div>
 
 <script>
     const firebaseConfig = {
@@ -101,140 +102,229 @@ The clock of the laptop provides the timebase for all devices.
     firebase.initializeApp(firebaseConfig);
     const db = firebase.database();
 
-    let timeline = [];
-    let nextIndex = 0;
+        // --- MASTER STATE ---
+        let seats = [];
+        let deviceData = {};
+        let audioCtx, analyser, dataArray;
+        let isTuningActive = false;
+        let currentMeasure = 0;
+        let bachTimeline = [];
+        let micCoords = { x: 0, y: 0 }; // Tech Table Location
 
-    // --- Float-aware time conversion ---
-    function timeToSecs(hms) {
-        if (!hms) return 0;
-        const a = hms.split(':');
-        // parseFloat ensures milliseconds like :40.909 are preserved
-        return (+a[0]) * 3600 + (+a[1]) * 60 + parseFloat(a[2]);
-    }
+        // --- 1. SEAT MAP GUI ---
+        const canvas = document.getElementById('seat-map-canvas');
+        const ctx = canvas.getContext('2d');
 
-    async function loadConfig() {
-        try {
-            const res = await fetch('timeline.json');
-            timeline = await res.json();
-            renderTimeline();
-        } catch (e) {
-            document.getElementById('timeline-list').innerText = "Error loading timeline.json";
+        async function initSeatMap() {
+            try {
+                const response = await fetch('seat_config.tsv');
+                const data = await response.text();
+                seats = data.split('\n').slice(1).map(row => {
+                    const cols = row.split('\t');
+                    return { id: cols[0], x: parseFloat(cols[1]), y: parseFloat(cols[2]) };
+                }).filter(s => s.id);
+
+                resizeCanvas();
+                renderMap();
+            } catch (e) { console.error("Map Load Error", e); }
         }
-    }
 
-    function renderTimeline() {
-        const list = document.getElementById('timeline-list');
-        list.innerHTML = '';
+        function resizeCanvas() {
+            const container = document.getElementById('map-container');
+            canvas.width = container.clientWidth - 40;
+            canvas.height = container.clientHeight - 40;
+        }
 
-        const now = new Date();
-        const nowSecs = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds() + (now.getMilliseconds() / 1000);
+        function renderMap() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        timeline.forEach((item, i) => {
-            const itemSecs = timeToSecs(item.time);
-            const diff = itemSecs - nowSecs;
+            // Draw Stage Area
+            ctx.strokeStyle = '#333';
+            ctx.strokeRect(canvas.width/4, 20, canvas.width/2, 40);
+            ctx.fillStyle = '#111';
+            ctx.fillRect(canvas.width/4, 20, canvas.width/2, 40);
 
-            const div = document.createElement('div');
-            div.className = `timeline-item ${i === nextIndex ? 'next' : ''} ${i < nextIndex ? 'past' : ''}`;
+            seats.forEach(seat => {
+                const screenX = (seat.x + 20) * (canvas.width / 40);
+                const screenY = (seat.y + 20) * (canvas.height / 40);
 
-            let statusText = "";
-            if (i < nextIndex) {
-                statusText = "EXECUTED";
-            } else {
-                statusText = diff > 0 ? `In ${diff.toFixed(1)}s` : "READY";
+                const status = deviceData[seat.id]?.status || 'OFFLINE';
+                const isLowPerf = deviceData[seat.id]?.performance?.lowPerf;
+
+                ctx.beginPath();
+                ctx.arc(screenX, screenY, 6, 0, Math.PI * 2);
+
+                if (status === 'HAPPY') ctx.fillStyle = '#00ffcc';
+                else if (status === 'SYNCING') ctx.fillStyle = '#ffcc00';
+                else ctx.fillStyle = '#333';
+
+                ctx.fill();
+
+                if (isLowPerf) {
+                    ctx.strokeStyle = '#ff4444';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                }
+
+                ctx.fillStyle = '#888';
+                ctx.font = '8px Arial';
+                ctx.fillText(seat.id, screenX - 6, screenY + 15);
+            });
+        }
+
+        // --- 2. THE CONDUCTOR'S EAR (FFT & FSK DETECTION) ---
+        async function initMicrophone() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const source = audioCtx.createMediaStreamSource(stream);
+                analyser = audioCtx.createAnalyser();
+                analyser.fftSize = 2048;
+                source.connect(analyser);
+
+                dataArray = new Uint8Array(analyser.frequencyBinCount);
+                document.getElementById('mic-status').innerHTML = '<span style="color:#00ffcc">ACTIVE</span>';
+                detectSignature();
+                drawFFT();
+            } catch (e) { alert("Mic Access Required for Calibration"); }
+        }
+
+        // FSK Pattern Detection: 19.5k (Bin X) -> 19.4k (Bin Y) -> 19.5k (Bin X)
+        let patternStep = 0;
+        let lastStepTime = 0;
+
+        function detectSignature() {
+            analyser.getByteFrequencyData(dataArray);
+
+            // Frequencies to Bins (Approx)
+            // Bin = Freq / (SampleRate / FFTSize)
+            const bin195 = Math.round(19500 / (audioCtx.sampleRate / 2048));
+            const bin194 = Math.round(19400 / (audioCtx.sampleRate / 2048));
+
+            const val195 = dataArray[bin195];
+            const val194 = dataArray[bin194];
+            const threshold = 180;
+
+            const now = Date.now();
+
+            if (patternStep === 0 && val195 > threshold) {
+                patternStep = 1; lastStepTime = now;
+            } else if (patternStep === 1 && val194 > threshold && (now - lastStepTime < 50)) {
+                patternStep = 2; lastStepTime = now;
+            } else if (patternStep === 2 && val195 > threshold && (now - lastStepTime < 50)) {
+                // SUCCESS: FSK Signature Detected
+                const tHeard = now + (db.serverOffset || 0);
+                broadcastDetection(tHeard);
+                patternStep = 0;
+                logDetection("FSK Match: " + tHeard);
             }
 
-            div.innerHTML = `
-                <span><strong>${item.time}</strong></span>
-                <span>${item.label}</span>
-                <span class="status">${statusText}</span>
-            `;
-            list.appendChild(div);
-        });
+            // Timeout reset
+            if (now - lastStepTime > 100) patternStep = 0;
 
-        if (timeline[nextIndex]) {
-            document.getElementById('next-cue-val').innerText = timeline[nextIndex].cueLabel;
+            requestAnimationFrame(detectSignature);
         }
-    }
 
-    function confirmTrigger() {
-        if (nextIndex >= timeline.length) return;
+        function broadcastDetection(tHeard) {
+            // In a high-density house, the conductor posts the absolute heard time.
+            // Patron devices subtract their seat-to-mic travel time individually.
+            db.ref('tuning/last_heard').set(tHeard);
+        }
 
-        const cue = timeline[nextIndex];
-        console.log("Triggering:", cue.cueLabel);
+        // --- 3. THE BACH SEQUENCER ---
+        async function loadTuningManifest() {
+            const res = await fetch('tuning_mode.json');
+            const data = await res.json();
+            bachTimeline = data.piano_notes;
+        }
 
-        // Send to Firebase
-        db.ref('show/currentCue').set({
-            label: cue.cueLabel,
-            timestamp: Date.now(),
-            serverTime: firebase.database.ServerValue.TIMESTAMP
-        });
+        function playBachSequence() {
+            isTuningActive = true;
+            let noteIdx = 0;
 
-        nextIndex++;
-        renderTimeline();
-    }
+            const interval = setInterval(() => {
+                if (!isTuningActive) { clearInterval(interval); return; }
 
-    function emergencyStop() {
-        db.ref('show/currentCue').set({ type: 'SYSTEM', action: 'KILL', triggerTime: Date.now() });
-        document.getElementById('countdown-overlay').innerText = "KILLED";
-    }
+                const note = bachTimeline[noteIdx];
+                // Assign a seat to this note (Simple round-robin for calibration)
+                const targetSeat = seats[noteIdx % seats.length];
 
-    // High-frequency UI Heartbeat (50ms for 20fps precision)
-    setInterval(() => {
-        const now = new Date();
-        const ms = String(now.getMilliseconds()).padStart(3, '0');
-        // Update the visual clock with milliseconds
-        document.getElementById('master-clock').innerText = now.toTimeString().split(' ')[0] + "." + ms;
+                db.ref(`tuning/active_poll/${targetSeat.id}`).set(note.url);
 
-        // Push heart-beat to Firebase to keep patron devices in sync
-        db.ref('laptop/clock').set(Date.now());
-        document.getElementById('sync-val').innerText = db.ref(".info/connected") ? "OK" : "LOST";
+                noteIdx++;
+                if (noteIdx >= bachTimeline.length) noteIdx = 0; // Loop Bach
+            }, 500); // 120BPM Quarter Notes
+        }
 
-        // Refresh the timeline countdowns
-        renderTimeline();
-    }, 50);
+        // --- 4. PERFORMANCE REGISTRY & STATUS MONITORING ---
+        function initListeners() {
+            // Monitor All Devices
+            db.ref('devices').on('value', snap => {
+                deviceData = snap.val() || {};
+                renderMap();
+                updatePerformanceRegistry();
+            });
+        }
 
-    // Track patron count
-    db.ref('devices').on('value', snap => {
-        document.getElementById('patron-val').innerText = snap.numChildren() || 0;
-    });
+        function updatePerformanceRegistry() {
+            const registry = document.getElementById('performance-registry');
+            registry.innerHTML = '<div class="perf-row" style="font-weight:bold"><span>ID</span><span>JITTER</span><span>STATUS</span></div>';
 
-    // Keyboard Shortcuts
-    window.onkeydown = (e) => {
-        if (e.code === "Space") { e.preventDefault(); confirmTrigger(); }
-        if (e.key === "k" || e.key === "K") { emergencyStop(); }
-    };
+            Object.keys(deviceData).forEach(id => {
+                const dev = deviceData[id];
+                const row = document.createElement('div');
+                row.className = 'perf-row';
+                if (dev.performance?.lowPerf) row.className += ' critical';
 
+                row.innerHTML = `
+                    <span>${id}</span>
+                    <span>${dev.performance?.jitter || '--'}ms</span>
+                    <span>${dev.status || 'IDLE'}</span>
+                `;
+                registry.appendChild(row);
+            });
+        }
 
-    // ─── OSC/Chataigne bridge listener ───────────────────────────────────────────
-const evtSource = new EventSource('http://localhost:3000/events');
+        // --- UI BINDINGS ---
+        document.getElementById('start-mic-btn').onclick = initMicrophone;
+        document.getElementById('play-bach-btn').onclick = playBachSequence;
+        document.getElementById('pause-bach-btn').onclick = () => isTuningActive = false;
 
-evtSource.onmessage = (e) => {
-    const { label, buffer } = JSON.parse(e.data);
-    if (label === '0.0 SILENCE') {
-        emergencyStop();
-        return;
-    }
-    const idx = timeline.findIndex(t => t.cueLabel === label);
-    if (idx !== -1) {
-        nextIndex = idx;
-        confirmTrigger();
-    } else {
-        console.warn('Bridge: cue label not found in timeline:', label);
-    }
-};
+        document.getElementById('kill-all-btn').onclick = () => {
+            if(confirm("Refresh all patron devices?")) {
+                db.ref('show/currentCue').set({ action: 'KILL', startTime: Date.now() });
+            }
+        };
 
-evtSource.onopen = () => {
-    document.getElementById('bridge-val').innerText = 'BRIDGE: OK';
-    document.getElementById('bridge-val').style.color = '#00ff00';
-};
+        document.getElementById('reset-tuning-btn').onclick = () => {
+            seats.forEach(s => db.ref(`devices/${s.id}/status`).set('CALIBRATING'));
+        };
 
-evtSource.onerror = () => {
-    document.getElementById('bridge-val').innerText = 'BRIDGE: OFFLINE';
-    document.getElementById('bridge-val').style.color = '#ff4444';
-};
+        function logDetection(msg) {
+            const log = document.getElementById('detection-log');
+            log.innerHTML = msg + "<br>" + log.innerHTML;
+        }
 
+        function drawFFT() {
+            const vCtx = document.getElementById('fft-viz').getContext('2d');
+            analyser.getByteFrequencyData(dataArray);
+            vCtx.fillStyle = '#000';
+            vCtx.fillRect(0,0,300,60);
+            vCtx.fillStyle = '#00ffcc';
+            for(let i=0; i<dataArray.length; i++) {
+                vCtx.fillRect(i, 60 - dataArray[i]/4, 1, dataArray[i]/4);
+            }
+            requestAnimationFrame(drawFFT);
+        }
 
-</script>
+        // Initialize
+        window.onload = () => {
+            initSeatMap();
+            initListeners();
+            loadTuningManifest();
+        };
 
+        window.onresize = resizeCanvas;
+    </script>
 </body>
 </html>
