@@ -42,7 +42,10 @@ devicedist.html: Feature List
 - Spatial Light Mapping: Scales screen brightness based on the patron’s
   proximity to the light's originX/Y, allowing for sweeps and pulses.
 
-4. Performance & Reliability
+4. Decentralized Statistical Calibration (for the Bach
+"Jesu, Joy of Man's Desiring" sequence)
+
+5. Performance & Reliability
 - Asset Resilience: Wraps preloading in try/catch blocks to ensure
   a single missing MP3 doesn't crash the entire performer node.
 
@@ -57,191 +60,388 @@ devicedist.html: Feature List
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Smartphone Orchestra: Performer Node</title>
+    <title>Isle of Noises - Patron Device</title>
+
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
+
     <style>
-        body { margin: 0; background: #000; color: #fff; font-family: 'Segoe UI', sans-serif; height: 100vh; display: flex; align-items: center; justify-content: center; text-align: center; overflow: hidden; touch-action: none; }
-        #setup-screen { padding: 20px; max-width: 400px; z-index: 10; }
-        #show-screen { display: none; position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; background: #000; }
-        .btn { padding: 15px 30px; font-size: 1.2rem; background: #444; color: #fff; border: none; border-radius: 5px; cursor: pointer; }
-        .btn:disabled { background: #222; color: #555; }
-        #status { margin-top: 10px; font-size: 0.8rem; color: #888; }
-        #visual-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        body {
+            margin: 0;
+            background: #000;
+            color: #fff;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            touch-action: none;
+        }
+
+        #setup-screen {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            text-align: center;
+            padding: 20px;
+        }
+
+        #status-registry {
+            background: rgba(255,255,255,0.05);
+            border: 1px solid #333;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 30px;
+            width: 80%;
+            max-width: 400px;
+        }
+
+        .status-item {
+            display: flex;
+            justify-content: space-between;
+            margin: 10px 0;
+            font-size: 0.9rem;
+        }
+
+        .indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: inline-block;
+            background: #222;
+            margin-left: 10px;
+        }
+
+        /* Status Colors */
+        .active { background: #00ffcc; box-shadow: 0 0 8px #00ffcc; }
+        .syncing { background: #ffcc00; animation: pulse 1s infinite; }
+        .error { background: #ff4444; }
+        .happy { background: #00ffcc; border: 2px solid #fff; }
+
+        @keyframes pulse { 50% { opacity: 0.4; } }
+
+        #ready-btn {
+            padding: 18px 45px;
+            font-size: 1.1rem;
+            font-weight: bold;
+            border-radius: 50px;
+            border: none;
+            background: #00ffcc;
+            color: #000;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+
+        #ready-btn:disabled { background: #333; color: #666; cursor: not-allowed; }
+        #ready-btn:active { transform: scale(0.95); }
+
+        #show-screen { display: none; height: 100vh; width: 100vw; }
+        canvas { width: 100%; height: 100%; display: block; }
+
+        #performance-overlay {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            font-family: monospace;
+            font-size: 10px;
+            color: #00ffcc;
+            pointer-events: none;
+            opacity: 0.5;
+        }
     </style>
 </head>
 <body>
 
     <div id="setup-screen">
-        <h2 id="seat-display">Locating Seat...</h2>
-        <button id="ready-btn" class="btn" disabled>ENTER ORCHESTRA</button>
-        <div id="status">Syncing with Theater...</div>
+        <h1 id="seat-label">Identifying Seat...</h1>
+
+        <div id="status-registry">
+            <div class="status-item">
+                <span>Identity Resolve</span>
+                <span id="id-ind" class="indicator"></span>
+            </div>
+            <div class="status-item">
+                <span>Clock Synchronization</span>
+                <span id="sync-ind" class="indicator"></span>
+            </div>
+            <div class="status-item">
+                <span>Acoustic Calibration</span>
+                <span id="cal-ind" class="indicator"></span>
+            </div>
+            <div class="status-item">
+                <span>Asset Manifest</span>
+                <span id="asset-ind" class="indicator"></span>
+            </div>
+        </div>
+
+        <button id="ready-btn" disabled>ENTER THE ISLE</button>
+        <p id="system-msg" style="margin-top:20px; font-size: 0.8rem; color: #888;">Waiting for Audio Context...</p>
     </div>
 
     <div id="show-screen">
-        <canvas id="visual-canvas"></canvas>
+        <div id="performance-overlay">FPS: -- | Lag: --ms</div>
+        <canvas id="stage-canvas"></canvas>
     </div>
 
     <script>
+        // --- PROTECTED BLOCK: FIREBASE CONFIGURATION ---
         const firebaseConfig = {
-            apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
-            authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
-            databaseURL: "https://smartphoneorchestra-dwt-default-rtdb.firebaseio.com/",
-            projectId: "smartphoneorchestra-dwt"
+            apiKey: "AIzaSyB...", // Actual Key per Operational SOP
+            authDomain: "tempest-theatre.firebaseapp.com",
+            databaseURL: "https://tempest-theatre-default-rtdb.firebaseio.com",
+            projectId: "tempest-theatre",
+            storageBucket: "tempest-theatre.appspot.com",
+            messagingSenderId: "123456789",
+            appId: "1:12345:web:abcdef"
         };
         firebase.initializeApp(firebaseConfig);
         const db = firebase.database();
 
-        let audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        let myIdentity = { x: 7.7, y: 12.5, seat_id: 'Unknown' };
+        // --- GLOBAL STATE & ARCHITECTURE ---
+        let audioCtx, mySeat = null, serverOffset = 0;
         let bufferCache = {};
-
-        // Light Animation Globals
-        const canvas = document.getElementById('visual-canvas');
-        const ctx = canvas.getContext('2d');
+        let activeAudioCues = [];
         let activeLightCues = [];
-        let animationFrameRequested = false;
 
+        // Calibration & Stats
+        let hardwareLag = 273; // Baseline hardware latency
+        let lagSamples = [];
+        let isHappy = false;
+        let lastPingSent = 0;
+
+        // Performance Watchdog
+        let lastFrameTime = 0;
+        let isLowPerf = false;
+        const FPS_TARGET = 30;
+        const FRAME_DURATION = 1000 / FPS_TARGET; // 33.33ms
+
+        // --- IDENTITY RESOLUTION ---
         async function resolveIdentity() {
-            const params = new URLSearchParams(window.location.search);
-            const seatId = params.get('seat');
-            if (!seatId) return;
+            try {
+                const response = await fetch('seat_config.tsv');
+                const data = await response.text();
+                const rows = data.split('\n').map(r => r.split('\t'));
 
-            const snap = await db.ref('theater/seats').once('value');
-            snap.forEach(child => {
-                if (child.val().seat_id === seatId) {
-                    myIdentity = child.val();
-                    document.getElementById('seat-display').innerText = "Seat " + seatId;
+                // For production, identity is usually URL-param or persistent cookie
+                const urlParams = new URLSearchParams(window.location.search);
+                const seatId = urlParams.get('seat') || 'G12'; // Default for testing
+
+                const config = rows.find(r => r[0] === seatId);
+                if (config) {
+                    mySeat = { id: config[0], x: parseFloat(config[1]), y: parseFloat(config[2]) };
+                    document.getElementById('seat-label').innerText = `Seat ${mySeat.id}`;
+                    document.getElementById('id-ind').className = 'indicator active';
+                    return true;
                 }
+            } catch (e) {
+                console.error("Identity Error:", e);
+                document.getElementById('id-ind').className = 'indicator error';
+            }
+            return false;
+        }
+
+        // --- CLOCK SYNCHRONIZATION ---
+        function syncClock() {
+            const offsetRef = db.ref(".info/serverTimeOffset");
+            offsetRef.on("value", snap => {
+                serverOffset = snap.val();
+                document.getElementById('sync-ind').className = 'indicator active';
             });
         }
 
-        async function preloadAssets() {
-            const snap = await db.ref('show/cues').once('value');
-            const cues = snap.val();
-            for (let key in cues) {
-                const cue = cues[key];
-                if (cue.type === 'AUDIO' && cue.url && !bufferCache[cue.url]) {
-                    try {
-                        const res = await fetch(cue.url);
-                        const data = await res.arrayBuffer();
-                        bufferCache[cue.url] = await audioCtx.decodeAudioData(data);
-                    } catch (e) { console.error("Load failed:", cue.label); }
+        // --- DECENTRALIZED CALIBRATION ENGINE (Bach Logic) ---
+        function processAcousticReturn(tHeard) {
+            if (!lastPingSent) return;
+
+            // Calculate measured lag
+            const measuredLag = tHeard - lastPingSent;
+
+            // Append to rolling buffer (Sample pool of 12)
+            lagSamples.push(measuredLag);
+            if (lagSamples.length > 12) lagSamples.shift();
+
+            // Calculate Standard Deviation
+            if (lagSamples.length >= 6) {
+                const mean = lagSamples.reduce((a, b) => a + b) / lagSamples.length;
+                const variance = lagSamples.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / lagSamples.length;
+                const stdDev = Math.sqrt(variance);
+
+                hardwareLag = mean; // Update working lag estimate
+
+                if (stdDev < 5 && !isHappy) {
+                    isHappy = true;
+                    document.getElementById('cal-ind').className = 'indicator active happy';
+                    db.ref(`devices/${mySeat.id}/status`).set('HAPPY');
+                } else if (!isHappy) {
+                    document.getElementById('cal-ind').className = 'indicator syncing';
                 }
             }
-            document.getElementById('status').innerText = "Orchestra Ready";
         }
 
-        // Global Light Loop: Blends all active cues
-        function updateLights() {
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            ctx.globalCompositeOperation = 'lighter'; // Additive blending (R+R, G+G, B+B)
+        // --- AUDIO ENGINE: SPATIAL WASH & RAMPING ---
+        async function playSpatialCue(cue) {
+            if (!bufferCache[cue.file]) return;
 
-            const now = Date.now();
-            activeLightCues = activeLightCues.filter(c => now < c.endTime);
+            const source = audioCtx.createBufferSource();
+            source.buffer = bufferCache[cue.file];
 
-            activeLightCues.forEach(cue => {
-                const elapsed = now - cue.startTime;
-                const progress = elapsed / cue.duration;
+            const gainNode = audioCtx.createGain();
+            gainNode.gain.setValueAtTime(0, audioCtx.currentTime); // Start silent
 
-                // Linear fade out
-                const fadeIntensity = Math.max(0, 1 - progress);
+            source.connect(gainNode).connect(audioCtx.destination);
 
-                // Spatial Intensity
-                let spatialMult = 1.0;
-                if (cue.originX !== undefined) {
-                    const dist = Math.sqrt(Math.pow(myIdentity.x - cue.originX, 2) + Math.pow(myIdentity.y - cue.originY, 2));
-                    spatialMult = Math.max(0, 1 - (dist / (cue.radius || 15)));
+            const scheduledStart = cue.startTime - serverOffset - hardwareLag;
+            const startTime = Math.max(audioCtx.currentTime, (scheduledStart / 1000));
+
+            // Prime decoder (Silent warm-up)
+            const silentSource = audioCtx.createBufferSource();
+            silentSource.start(0);
+
+            source.start(startTime);
+
+            // Register for frame-by-frame updates
+            activeAudioCues.push({
+                ...cue,
+                source,
+                gainNode,
+                localStartTime: Date.now() + (startTime * 1000) - audioCtx.currentTime * 1000
+            });
+        }
+
+        // --- THE UNIFIED 30FPS RENDER LOOP ---
+        function frame(now) {
+            const delta = now - lastFrameTime;
+
+            // Throttle to 30fps
+            if (delta < FRAME_DURATION) {
+                requestAnimationFrame(frame);
+                return;
+            }
+
+            // Performance Watchdog Logic
+            if (delta > 50) { // If a frame takes > 50ms (dropping significantly below 30fps)
+                isLowPerf = true;
+                db.ref(`devices/${mySeat.id}/performance`).update({ lowPerf: true, jitter: delta });
+            }
+
+            lastFrameTime = now;
+            const serverNow = Date.now() + serverOffset;
+
+            // 1. Update Spatial Audio (The "Wash")
+            activeAudioCues.forEach((cue, index) => {
+                const elapsed = (serverNow - cue.startTime) / cue.duration;
+                const t = Math.max(0, Math.min(1, elapsed));
+
+                // Sine-based Ease-In-Out (SlowFastSlow)
+                const easedT = -(Math.cos(Math.PI * t) - 1) / 2;
+
+                // Interpolate Movement
+                const curX = cue.originX + (cue.destX - cue.originX) * easedT;
+                const curY = cue.originY + (cue.destY - cue.originY) * easedT;
+
+                // Calculate Distance vs Radius
+                const dist = Math.sqrt(Math.pow(mySeat.x - curX, 2) + Math.pow(mySeat.y - curY, 2));
+                let intensity = 0;
+
+                if (dist < cue.radius) {
+                    // Linear Rolloff
+                    intensity = 1 - (dist / cue.radius);
                 }
 
-                ctx.globalAlpha = fadeIntensity * spatialMult;
-                ctx.fillStyle = cue.color || '#ffffff';
+                // Apply Gain with anti-click ramp (15ms)
+                cue.gainNode.gain.setTargetAtTime(intensity * (cue.volume || 1), audioCtx.currentTime, 0.015);
+
+                // Remove finished cues
+                if (t >= 1) activeAudioCues.splice(index, 1);
+            });
+
+            // 2. Update Visuals (Only if not in Low Performance mode)
+            if (!isLowPerf) {
+                updateVisuals(serverNow);
+            } else {
+                // Clear canvas to black to save CPU
+                const ctx = document.getElementById('stage-canvas').getContext('2d');
+                ctx.fillStyle = '#000';
+                ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
+            }
+
+            requestAnimationFrame(frame);
+        }
+
+        function updateVisuals(serverNow) {
+            const canvas = document.getElementById('stage-canvas');
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            activeLightCues.forEach((cue, index) => {
+                const elapsed = (serverNow - cue.startTime) / cue.duration;
+                const t = Math.max(0, Math.min(1, elapsed));
+
+                if (t >= 1) {
+                    activeLightCues.splice(index, 1);
+                    return;
+                }
+
+                // Draw spatial wash based on intensity
+                const state = calculateSpatialState(cue, serverNow);
+                ctx.fillStyle = `rgba(${cue.rgb}, ${state.intensity})`;
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
             });
-
-            if (activeLightCues.length > 0) {
-                requestAnimationFrame(updateLights);
-            } else {
-                animationFrameRequested = false;
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-            }
         }
 
-        async function playSpatialCue(cue) {
-            // --- PILLAR & AUDIO FILTERING ---
-            if (cue.type === 'AUDIO') {
-                const isPillar = myIdentity.seat_id.startsWith("PILLAR");
-                const isPillarCue = cue.label.startsWith("PILLAR_MASTER");
-                if (isPillar && cue.label !== myIdentity.seat_id.replace("PILLAR_", "PILLAR_MASTER_")) return;
-                if (!isPillar && isPillarCue) return;
-            }
+        // Helper for spatial logic shared between audio/visual
+        function calculateSpatialState(cue, serverNow) {
+            const elapsed = (serverNow - cue.startTime) / cue.duration;
+            const t = Math.max(0, Math.min(1, elapsed));
+            const easedT = -(Math.cos(Math.PI * t) - 1) / 2;
+            const curX = cue.originX + (cue.destX - cue.originX) * easedT;
+            const curY = cue.originY + (cue.destY - cue.originY) * easedT;
+            const dist = Math.sqrt(Math.pow(mySeat.x - curX, 2) + Math.pow(mySeat.y - curY, 2));
+            const intensity = (dist < cue.radius) ? (1 - (dist / cue.radius)) : 0;
+            return { intensity, x: curX, y: curY };
+        }
 
-            const now = Date.now();
-            const scheduledTime = cue.scheduledTime || now;
-            const delay = (scheduledTime - now) / 1000;
+        // --- ASSET MANAGEMENT ---
+        async function preloadAssets() {
+            try {
+                const response = await fetch('cues.json');
+                const cues = await response.json();
 
-            // --- AUDIO LOGIC ---
-            if (cue.type === 'AUDIO' && cue.url) {
-                if (!bufferCache[cue.url]) {
-                    const res = await fetch(cue.url);
-                    const data = await res.arrayBuffer();
-                    bufferCache[cue.url] = await audioCtx.decodeAudioData(data);
-                }
-                const buffer = bufferCache[cue.url];
-
-                // Silent Hardware Warm-up (decoder priming)
-                const warmUp = audioCtx.createBufferSource();
-                const warmUpGain = audioCtx.createGain();
-                warmUp.buffer = buffer;
-                warmUpGain.gain.value = 0;
-                warmUp.connect(warmUpGain);
-                warmUpGain.connect(audioCtx.destination);
-                warmUp.start(0, 0, 0.1);
-
-                // Spatial Volume calculation
-                let volume = 1.0;
-                if (cue.originX !== undefined) {
-                    const dist = Math.sqrt(Math.pow(myIdentity.x - cue.originX, 2) + Math.pow(myIdentity.y - cue.originY, 2));
-                    if (cue.rolloff === 'linear') volume = Math.max(0, 1 - (dist / (cue.radius || 10)));
-                }
-
-                const source = audioCtx.createBufferSource();
-                const gainNode = audioCtx.createGain();
-                source.buffer = buffer;
-                gainNode.gain.setValueAtTime(volume, audioCtx.currentTime + Math.max(0, delay));
-                source.connect(gainNode);
-                gainNode.connect(audioCtx.destination);
-                source.start(audioCtx.currentTime + Math.max(0, delay));
-            }
-
-            // --- ADDITIVE LIGHT LOGIC ---
-            if (cue.type === 'LIGHT') {
-                const duration = cue.elapsedT ? cue.elapsedT * 1000 : 3000;
-
-                setTimeout(() => {
-                    canvas.width = window.innerWidth;
-                    canvas.height = window.innerHeight;
-
-                    activeLightCues.push({
-                        ...cue,
-                        startTime: Date.now(),
-                        endTime: Date.now() + duration,
-                        duration: duration
-                    });
-
-                    if (!animationFrameRequested) {
-                        animationFrameRequested = true;
-                        requestAnimationFrame(updateLights);
+                const loadTasks = Object.keys(cues).map(async key => {
+                    const cue = cues[key];
+                    if (cue.type === 'AUDIO') {
+                        const res = await fetch(cue.file);
+                        const arrayBuf = await res.arrayBuffer();
+                        bufferCache[cue.file] = await audioCtx.decodeAudioData(arrayBuf);
                     }
-                }, Math.max(0, scheduledTime - Date.now()));
+                });
+
+                await Promise.all(loadTasks);
+                document.getElementById('asset-ind').className = 'indicator active';
+                return true;
+            } catch (e) {
+                console.error("Asset Load Failure:", e);
+                document.getElementById('asset-ind').className = 'indicator error';
             }
+            return false;
         }
 
+        // --- EVENT HANDLERS ---
         document.getElementById('ready-btn').onclick = async () => {
+            // Wake Audio Hardware
+            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             if (audioCtx.state === 'suspended') await audioCtx.resume();
+
             document.getElementById('setup-screen').style.display = 'none';
             document.getElementById('show-screen').style.display = 'block';
 
+            const canvas = document.getElementById('stage-canvas');
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+
+            // Start Render Loop
+            requestAnimationFrame(frame);
+
+            // 1. Listen for Show Cues
             db.ref('show/currentCue').on('value', snap => {
                 const cue = snap.val();
                 if (cue) {
@@ -249,13 +449,54 @@ devicedist.html: Feature List
                     playSpatialCue(cue);
                 }
             });
+
+            // 2. Listen for Calibration Broadcast (Conductor Mic)
+            db.ref('tuning/last_heard').on('value', snap => {
+                const tHeard = snap.val();
+                if (tHeard) processAcousticReturn(tHeard);
+            });
+
+            // 3. Listen for Personal Calibration Polling (Bach Sequence)
+            db.ref(`tuning/active_poll/${mySeat.id}`).on('value', snap => {
+                const noteAsset = snap.val();
+                if (noteAsset) {
+                    lastPingSent = Date.now() + serverOffset;
+                    // Trigger note with ultrasound overlay (already baked into MP3)
+                    playSpatialCue({
+                        file: noteAsset,
+                        startTime: lastPingSent,
+                        duration: 1000,
+                        originX: mySeat.x,
+                        originY: mySeat.y,
+                        radius: 1, // Fixed to device
+                        rolloff: 'none'
+                    });
+                }
+            });
         };
 
         window.onload = async () => {
-            await resolveIdentity();
-            await preloadAssets();
-            document.getElementById('ready-btn').disabled = false;
+            syncClock();
+            const idOk = await resolveIdentity();
+
+            // Audio Context initialization requires user gesture,
+            // so we wait for ready-btn.
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const assetsOk = await preloadAssets();
+
+            if (idOk && assetsOk) {
+                document.getElementById('ready-btn').disabled = false;
+                document.getElementById('system-msg').innerText = "System Ready. Please Enter.";
+            }
         };
+
+        // Resize Canvas on orientation change
+        window.onresize = () => {
+            const canvas = document.getElementById('stage-canvas');
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        };
+
     </script>
 </body>
 </html>
