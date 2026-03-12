@@ -261,6 +261,13 @@ devicedist.html: Feature List
         let pendingPulseDetections = []; // Track pulses waiting for conductor response
         let calibratedLag = null; // Final calibrated one-way lag
         let fluteUrl = null; // URL of the encoded flute MP3
+        let testPulseUrl = null; // URL of the test pulse MP3
+        let pillarUrls = { // URLs for the four pillar positions
+            FL: null,
+            FR: null,
+            BL: null,
+            BR: null
+        };
 
         // Individual seat test state
         let pendingTestPulse = null; // Track individual seat test
@@ -389,6 +396,118 @@ devicedist.html: Feature List
             }
         }
 
+        // --- NEW: LOAD TUNING ASSET URLS from tuning_mode.json ---
+        async function loadTuningAssetUrls() {
+            try {
+                const tuningSnap = await db.ref('tuning_mode').once('value');
+                const tuningData = tuningSnap.val();
+
+                if (!tuningData) {
+                    console.warn("No tuning_mode data found in Firebase");
+                    return;
+                }
+
+                // Try to get URLs from the new assets structure first
+                if (tuningData.assets) {
+                    // Flute URL
+                    if (tuningData.assets.flute) {
+                        fluteUrl = tuningData.assets.flute;
+                        console.log(`🎵 Flute URL loaded: ${fluteUrl.split('/').pop()}`);
+                    }
+
+                    // Test pulse URL
+                    if (tuningData.assets.test_pulse) {
+                        testPulseUrl = tuningData.assets.test_pulse;
+                        console.log(`🔊 Test pulse URL loaded: ${testPulseUrl.split('/').pop()}`);
+                    }
+
+                    // Pillar URLs
+                    if (tuningData.assets.pillars) {
+                        const pillars = tuningData.assets.pillars;
+                        if (pillars.FL) {
+                            pillarUrls.FL = pillars.FL;
+                            console.log(`🏛️ Pillar FL URL loaded: ${pillars.FL.split('/').pop()}`);
+                        }
+                        if (pillars.FR) {
+                            pillarUrls.FR = pillars.FR;
+                            console.log(`🏛️ Pillar FR URL loaded: ${pillars.FR.split('/').pop()}`);
+                        }
+                        if (pillars.BL) {
+                            pillarUrls.BL = pillars.BL;
+                            console.log(`🏛️ Pillar BL URL loaded: ${pillars.BL.split('/').pop()}`);
+                        }
+                        if (pillars.BR) {
+                            pillarUrls.BR = pillars.BR;
+                            console.log(`🏛️ Pillar BR URL loaded: ${pillars.BR.split('/').pop()}`);
+                        }
+                    }
+                }
+
+                // Fallback to metadata structure (backward compatibility)
+                if (tuningData.metadata) {
+                    if (!fluteUrl && tuningData.metadata.source_audio_url) {
+                        fluteUrl = tuningData.metadata.source_audio_url;
+                        console.log(`🎵 Flute URL (legacy) loaded: ${fluteUrl.split('/').pop()}`);
+                    }
+
+                    if (!testPulseUrl && tuningData.metadata.test_pulse_url) {
+                        testPulseUrl = tuningData.metadata.test_pulse_url;
+                        console.log(`🔊 Test pulse URL (legacy) loaded: ${testPulseUrl.split('/').pop()}`);
+                    }
+
+                    // Legacy pillar URLs from metadata.source_audio_*
+                    if (!pillarUrls.FL && tuningData.metadata.source_audio_FL) {
+                        pillarUrls.FL = tuningData.metadata.source_audio_FL;
+                        console.log(`🏛️ Pillar FL URL (legacy) loaded`);
+                    }
+                    if (!pillarUrls.FR && tuningData.metadata.source_audio_FR) {
+                        pillarUrls.FR = tuningData.metadata.source_audio_FR;
+                        console.log(`🏛️ Pillar FR URL (legacy) loaded`);
+                    }
+                    if (!pillarUrls.BL && tuningData.metadata.source_audio_BL) {
+                        pillarUrls.BL = tuningData.metadata.source_audio_BL;
+                        console.log(`🏛️ Pillar BL URL (legacy) loaded`);
+                    }
+                    if (!pillarUrls.BR && tuningData.metadata.source_audio_BR) {
+                        pillarUrls.BR = tuningData.metadata.source_audio_BR;
+                        console.log(`🏛️ Pillar BR URL (legacy) loaded`);
+                    }
+                }
+
+                // Preload tuning assets if they're not already in the timeline preload
+                if (fluteUrl && !bufferCache[fluteUrl]) {
+                    preloadTuningAsset(fluteUrl);
+                }
+                if (testPulseUrl && !bufferCache[testPulseUrl]) {
+                    preloadTuningAsset(testPulseUrl);
+                }
+                for (const [pos, url] of Object.entries(pillarUrls)) {
+                    if (url && !bufferCache[url]) {
+                        preloadTuningAsset(url);
+                    }
+                }
+
+            } catch (e) {
+                console.error("Failed to load tuning asset URLs:", e);
+            }
+        }
+
+        // --- LOAD PILLAR POSITIONS ---
+        async function loadPillarPositions() {
+            try {
+                const snap = await db.ref('pillar_config/pillars').once('value');
+                const pillars = snap.val();
+                if (pillars && Array.isArray(pillars)) {
+                    pillars.forEach(p => {
+                        pillarPositions[p.id] = { x: p.x, y: p.y };
+                    });
+                    console.log(`📌 Loaded ${Object.keys(pillarPositions).length} pillar positions`);
+                }
+            } catch (e) {
+                console.warn("Could not load pillar positions:", e);
+            }
+        }
+
         // --- CLOCK SYNCHRONIZATION ---
         function syncClock() {
             const offsetRef = db.ref(".info/serverTimeOffset");
@@ -453,8 +572,8 @@ devicedist.html: Feature List
                     calibrationMode = true;
                     currentTuningSchedule = schedule;
 
-                    // Store flute URL from schedule
-                    if (schedule.fluteUrl) {
+                    // Store flute URL from schedule (if not already loaded from tuning_mode)
+                    if (schedule.fluteUrl && !fluteUrl) {
                         fluteUrl = schedule.fluteUrl;
                     }
 
@@ -477,7 +596,7 @@ devicedist.html: Feature List
                     calibrationMode = false;
                     currentTuningSchedule = null;
                     assignedNotes = [];
-                    fluteUrl = null;
+                    // Don't clear fluteUrl - keep it for potential future use
                 }
             });
 
@@ -501,7 +620,7 @@ devicedist.html: Feature List
                 const res = await fetch(url);
                 const arrayBuf = await res.arrayBuffer();
                 bufferCache[url] = await audioCtx.decodeAudioData(arrayBuf);
-                console.log(`✅ Preloaded tuning asset: ${url}`);
+                console.log(`✅ Preloaded tuning asset: ${url.split('/').pop()}`);
             } catch (e) {
                 console.error("Failed to preload tuning asset:", e);
             }
@@ -689,7 +808,7 @@ devicedist.html: Feature List
                             // Store spatial info for render loop
                             originX: pillarPos.x,
                             originY: pillarPos.y,
-                            radius: 30, // Pillars have large radius
+                            radius: 0.3, // Pillars have well-defined position
                             rolloff: 'none',
                             type: 'pillar'
                         }, delayMs);
@@ -847,6 +966,9 @@ devicedist.html: Feature List
         // --- INDIVIDUAL SEAT TEST HANDLER ---
         function handleSeatTest(cue, startTime) {
             console.log(`🔊 Received seat test for ${mySeat.id}`);
+
+            // Use the test pulse URL from tuning_mode if available
+            const testUrl = testPulseUrl || cue.file;
 
             // conductor.html uses startMs:100 to skip the silence, so the pulse plays immediately
             const pulseTime = cue.startTime;
@@ -1125,7 +1247,7 @@ devicedist.html: Feature List
                         duration: 1000,
                         originX: mySeat.x,
                         originY: mySeat.y,
-                        radius: 1,
+                        radius: 0.3,
                         rolloff: 'none'
                     });
                 }
@@ -1155,6 +1277,7 @@ devicedist.html: Feature List
         window.onload = async () => {
             syncClock();
             await loadPillarPositions(); // Load pillar positions
+            await loadTuningAssetUrls(); // Load tuning asset URLs from database
 
             audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
