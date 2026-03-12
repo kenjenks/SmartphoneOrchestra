@@ -13,7 +13,7 @@ Features:
 - Seat map visualization with status indicators
 
 Note: All configuration uploads (seat_config.tsv, tuning_mode.json,
-pillar_config.json, visual_timeline.json) are handled by admin.html
+pillar_config.json, movement manifests) are handled by admin.html
 -->
 <html lang="en">
 <head>
@@ -63,9 +63,10 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         .progress-bar-fill { height: 10px; background: #00ffcc; border-radius: 5px; width: 0%; transition: width 0.3s; }
         .stats-row { display: flex; justify-content: space-between; font-size: 0.8rem; margin-top: 5px; }
 
-        /* Timeline display */
-        #timeline-status { font-size: 0.9rem; background: #111; padding: 10px; border-radius: 4px; margin-top: 10px; border-left: 3px solid #00ffcc; }
-        .timeline-loaded { color: #00ffcc; font-weight: bold; }
+        /* Movement selection */
+        .movement-selector { margin: 10px 0; }
+        .movement-btn { background: #222; text-align: left; padding: 8px; margin: 2px 0; }
+        .movement-btn.active { background: #00ffcc; color: #000; border-left: 4px solid #fff; }
     </style>
 </head>
 <body>
@@ -87,10 +88,18 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         <!-- SHOW CONTROL SECTION -->
         <div class="section">
             <h2>🎭 Show Control</h2>
-            <div id="timeline-status">
-                <span>Timeline: </span>
-                <span id="timeline-loaded-status" class="timeline-loaded">Not Loaded</span>
+
+            <!-- Movement selection -->
+            <div class="movement-selector" id="movement-selector">
+                <div style="color:#888; font-size:0.8rem; margin-bottom:5px;">Select Movement:</div>
+                <div id="movement-buttons"></div>
             </div>
+
+            <div id="timeline-status" style="background: #111; padding: 10px; border-radius: 4px; margin: 10px 0;">
+                <div>Current: <span id="current-movement-name">None</span></div>
+                <div>Pillars: <span id="pillar-count">0</span>/4 loaded</div>
+            </div>
+
             <button class="go-button" id="go-button" disabled>🚀 GO (1s Buffer)</button>
         </div>
 
@@ -179,14 +188,15 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
     let spiralPath = [];
     let activeDevices = [];
 
-    // Timeline state
-    let currentTimeline = null;
+    // Movement state
+    let movements = [];
+    let currentMovement = null;
     let serverOffset = 0;
 
-    // Pillar URLs (loaded from Firebase)
+    // Pillar URLs (loaded from movement manifest)
     let PILLAR_URLS = {};
 
-    // Tuning URLs (loaded from Firebase)
+    // Tuning URLs (loaded from tuning_mode.json)
     let FLUTE_URL = "";
     let TEST_PULSE_URL = "";
 
@@ -250,43 +260,103 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         }
     }
 
-    async function loadPillarConfig() {
+    async function loadMovements() {
         try {
-            const configSnap = await db.ref('pillar_config').once('value');
-            const configData = configSnap.val();
+            // Load the show manifest which contains references to all movements
+            const showSnap = await db.ref('show').once('value');
+            const showData = showSnap.val();
 
-            if (configData && configData.pillars) {
-                // Convert pillar array to URL object
-                configData.pillars.forEach(pillar => {
-                    if (pillar.id && pillar.url) {
-                        const key = pillar.id.replace('PILLAR_', '');
-                        PILLAR_URLS[key] = pillar.url;
-                    }
-                });
-                logDetection(`Loaded ${Object.keys(PILLAR_URLS).length} pillar URLs`);
+            if (showData && showData.movements) {
+                movements = showData.movements;
+
+                // Render movement buttons
+                renderMovementButtons();
+
+                // Auto-select first movement if available
+                if (movements.length > 0) {
+                    await selectMovement(0);
+                }
+
+                logDetection(`Loaded ${movements.length} movements`);
+            } else {
+                logDetection("No movements found in show data");
             }
         } catch (e) {
-            logDetection("Error loading pillar config: " + e.message);
+            logDetection("Error loading movements: " + e.message);
         }
     }
 
-    async function loadShowTimeline() {
-        try {
-            const timelineSnap = await db.ref('show').once('value');
-            const timelineData = timelineSnap.val();
+    function renderMovementButtons() {
+        const container = document.getElementById('movement-buttons');
+        container.innerHTML = '';
 
-            if (timelineData && timelineData.movements) {
-                currentTimeline = timelineData;
-                document.getElementById('timeline-loaded-status').innerText =
-                    `"${timelineData.show_title || 'Unnamed'}" (${timelineData.movements.length} movements)`;
-                document.getElementById('go-button').disabled = false;
-                logDetection(`Loaded show timeline: ${timelineData.show_title || 'Unnamed'}`);
-            } else {
-                document.getElementById('timeline-loaded-status').innerText = 'Not Loaded';
-                document.getElementById('go-button').disabled = true;
+        movements.forEach((movement, index) => {
+            const btn = document.createElement('button');
+            btn.className = 'movement-btn';
+            if (currentMovement && currentMovement.name === movement.name) {
+                btn.classList.add('active');
             }
-        } catch (e) {
-            logDetection("Error loading show timeline: " + e.message);
+            btn.innerHTML = `${movement.emoji || '🎵'} ${movement.name}`;
+            btn.onclick = () => selectMovement(index);
+            container.appendChild(btn);
+        });
+    }
+
+    async function selectMovement(index) {
+        const movement = movements[index];
+        if (!movement) return;
+
+        // Update UI
+        document.querySelectorAll('.movement-btn').forEach((btn, i) => {
+            if (i === index) btn.classList.add('active');
+            else btn.classList.remove('active');
+        });
+
+        document.getElementById('current-movement-name').innerText = movement.name;
+
+        // Load the movement manifest from Firebase
+        if (movement.manifest_path) {
+            try {
+                const manifestSnap = await db.ref(movement.manifest_path).once('value');
+                const manifest = manifestSnap.val();
+
+                if (manifest) {
+                    currentMovement = {
+                        ...movement,
+                        manifest: manifest
+                    };
+
+                    // Load pillar URLs from manifest
+                    if (manifest.audio_assets_pillars) {
+                        PILLAR_URLS = {};
+
+                        // Map pillar positions to URLs
+                        // Expected format: audio_assets_pillars.front_left, .front_right, etc.
+                        if (manifest.audio_assets_pillars.front_left) {
+                            PILLAR_URLS.FL = manifest.audio_assets_pillars.front_left;
+                        }
+                        if (manifest.audio_assets_pillars.front_right) {
+                            PILLAR_URLS.FR = manifest.audio_assets_pillars.front_right;
+                        }
+                        if (manifest.audio_assets_pillars.back_left) {
+                            PILLAR_URLS.BL = manifest.audio_assets_pillars.back_left;
+                        }
+                        if (manifest.audio_assets_pillars.back_right) {
+                            PILLAR_URLS.BR = manifest.audio_assets_pillars.back_right;
+                        }
+
+                        const pillarCount = Object.keys(PILLAR_URLS).length;
+                        document.getElementById('pillar-count').innerText = pillarCount;
+
+                        logDetection(`Loaded ${pillarCount} pillar URLs from ${movement.name}`);
+                    }
+
+                    // Enable GO button if we have a valid manifest
+                    document.getElementById('go-button').disabled = false;
+                }
+            } catch (e) {
+                logDetection(`Error loading manifest for ${movement.name}: ${e.message}`);
+            }
         }
     }
 
@@ -519,24 +589,25 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
 
     // --- 3. SHOW CONTROL (GO BUTTON) ---
     document.getElementById('go-button').onclick = async () => {
-        if (!currentTimeline) {
-            alert("No timeline loaded. Please upload via admin.html");
+        if (!currentMovement || !currentMovement.manifest) {
+            alert("No movement selected or manifest not loaded");
             return;
         }
 
         // Calculate start time with 1 second buffer
         const startTime = Date.now() + 1000; // 1 second buffer
 
-        // Send GO signal
+        // Send GO signal with the current movement's timeline
         await db.ref('show/currentCue').set({
             action: 'GO',
             startTime: startTime,
             bufferMs: 1000,
             triggerTime: startTime,
-            timeline: currentTimeline
+            movement: currentMovement.name,
+            timeline: currentMovement.manifest.timeline || {}
         });
 
-        logDetection(`🚀 GO signal sent with ${startTime} start time`);
+        logDetection(`🚀 GO signal sent for "${currentMovement.name}" at ${startTime}`);
     };
 
     // --- 4. DYNAMIC TUNING ENGINE ---
@@ -615,7 +686,10 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
     }
 
     async function startPillars(startTime) {
-        if (Object.keys(PILLAR_URLS).length === 0) return;
+        if (Object.keys(PILLAR_URLS).length === 0) {
+            logDetection("No pillar URLs loaded - skipping pillar playback");
+            return;
+        }
 
         const pillarStartTime = startTime - 1000;
 
@@ -636,6 +710,8 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
                 }
             });
         }
+
+        logDetection(`Started ${Object.keys(PILLAR_URLS).length} pillars`);
     }
 
     async function startTuningMovement() {
@@ -884,9 +960,8 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
     window.onload = async () => {
         // Load all configurations uploaded by admin.html
         await loadSeatConfig();
-        await loadPillarConfig();
         await loadTuningConfig();
-        await loadShowTimeline();
+        await loadMovements(); // This now loads movement manifests with pillar URLs
 
         initListeners();
         
