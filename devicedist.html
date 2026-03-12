@@ -1159,14 +1159,17 @@ devicedist.html: Feature List
             }
         }
 
-        // --- INDIVIDUAL SEAT TEST HANDLER (uses direct playback) ---
+        // --- INDIVIDUAL SEAT TEST HANDLER (uses test pulse URL from tuning_mode) ---
         function handleSeatTest(cue, startTime) {
             console.log(`🔊 Received seat test for ${mySeat.id}`);
 
-            // Use the test pulse URL from tuning_mode if available
-            const testUrl = testPulseUrl || cue.file;
+            // Use the test pulse URL from tuning_mode
+            const url = testPulseUrl;
+            if (!url) {
+                console.error('handleSeatTest: No test pulse URL available from tuning_mode');
+                return;
+            }
 
-            // conductor.html uses startMs:100 to skip the silence, so the pulse plays immediately
             const pulseTime = cue.startTime;
 
             const now = Date.now() + serverOffset;
@@ -1182,6 +1185,10 @@ devicedist.html: Feature List
                     };
 
                     lastPingSent = playTime;
+
+                    // Play the test pulse audio
+                    playTestPulse(url, pulseTime);
+
                     flashScreenForPulse();
                     console.log(`📡 Test pulse played at ${playTime}`);
 
@@ -1190,6 +1197,31 @@ devicedist.html: Feature List
 
                 activeTimeouts.push(timeoutId);
             }
+        }
+
+        // --- PLAY TEST PULSE (separate function for clarity) ---
+        async function playTestPulse(url, scheduledTime) {
+            // Load on-demand if not preloaded
+            if (!bufferCache[url]) {
+                console.warn(`⚠️ Test pulse not preloaded, fetching: ${url.split('/').pop()}`);
+                try {
+                    const res = await fetch(url);
+                    const arrayBuf = await res.arrayBuffer();
+                    bufferCache[url] = await audioCtx.decodeAudioData(arrayBuf);
+                } catch (e) {
+                    console.error(`Failed to fetch test pulse ${url}:`, e);
+                    return;
+                }
+            }
+
+            const source = audioCtx.createBufferSource();
+            source.buffer = bufferCache[url];
+
+            const gainNode = audioCtx.createGain();
+            gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime);
+
+            source.connect(gainNode).connect(audioCtx.destination);
+            source.start(0);
         }
 
         // --- TUNING PLAYBACK MONITOR ---
@@ -1395,35 +1427,30 @@ devicedist.html: Feature List
             overlay.innerHTML = `FPS: ${fps} | Lag: ${lag} | Cues: ${cueCount} | ${isHappy ? '✅' : '🔄'}`;
         }
 
-        // --- LEGACY: Direct playback for non-warmed cues (seat tests, tuning) ---
-        async function playSpatialCueDirect(cue) {
-            // For pillar devices, verify this is a master mix
-            if (mySeat.id.startsWith('PILLAR_') && cue.type !== 'pillar') {
-                console.log(`🔇 Pillar device filtering out non-pillar cue: ${cue.label}`);
-                return;
-            }
+        // --- DIRECT PLAYBACK FOR TUNING MOVEMENT (uses fluteUrl from tuning_mode) ---
+        async function playTuningMovement(cue) {
+            console.log("🎵 Starting tuning movement with flute:", fluteUrl);
 
-            const url = cue.audio_url || cue.file;
-            if (!url) {
-                console.error('playSpatialCueDirect: no audio_url', cue);
+            if (!fluteUrl) {
+                console.error("No flute URL available for tuning movement");
                 return;
             }
 
             // Load on-demand if not preloaded
-            if (!bufferCache[url]) {
-                console.warn(`⚠️ Not preloaded, fetching: ${url.split('/').pop()}`);
+            if (!bufferCache[fluteUrl]) {
+                console.warn(`⚠️ Flute not preloaded, fetching: ${fluteUrl.split('/').pop()}`);
                 try {
-                    const res = await fetch(url);
+                    const res = await fetch(fluteUrl);
                     const arrayBuf = await res.arrayBuffer();
-                    bufferCache[url] = await audioCtx.decodeAudioData(arrayBuf);
+                    bufferCache[fluteUrl] = await audioCtx.decodeAudioData(arrayBuf);
                 } catch (e) {
-                    console.error(`Failed to fetch ${url}:`, e);
+                    console.error(`Failed to fetch flute ${fluteUrl}:`, e);
                     return;
                 }
             }
 
             const source = audioCtx.createBufferSource();
-            source.buffer = bufferCache[url];
+            source.buffer = bufferCache[fluteUrl];
 
             const gainNode = audioCtx.createGain();
 
@@ -1434,8 +1461,8 @@ devicedist.html: Feature List
             // Connect and start
             source.connect(gainNode).connect(audioCtx.destination);
 
-            // Set target gain
-            gainNode.gain.setTargetAtTime(cue.gain || 1.0, startTime, 0.015);
+            // Set target gain (will be updated by monitorTuningPlayback)
+            gainNode.gain.setTargetAtTime(1.0, startTime, 0.015);
 
             source.start(startTime);
 
@@ -1448,10 +1475,8 @@ devicedist.html: Feature List
                 localStartTime: Date.now() + (startTime * 1000) - audioCtx.currentTime * 1000
             });
 
-            // Light sequence if present
-            if (cue.lsq_url) {
-                scheduleLightSequence(cue);
-            }
+            // Start monitoring for note assignments
+            monitorTuningPlayback(cue, source, startTime);
         }
 
         // --- EVENT HANDLERS ---
@@ -1481,9 +1506,9 @@ devicedist.html: Feature List
                         // Handle movement start signal with full timeline
                         handleMovementStart(cue);
                     } else if (cue.type === 'TUNING_MOVEMENT') {
-                        // Handle tuning movement - play the flute MP3
+                        // Handle tuning movement - use the flute URL from tuning_mode
                         calibrationMode = true;
-                        playSpatialCueDirect(cue);
+                        playTuningMovement(cue);
                     }
                 }
             });
@@ -1499,15 +1524,8 @@ devicedist.html: Feature List
                 const noteAsset = snap.val();
                 if (noteAsset) {
                     lastPingSent = Date.now() + serverOffset;
-                    playSpatialCueDirect({
-                        file: noteAsset,
-                        startTime: lastPingSent,
-                        duration: 1000,
-                        originX: mySeat.x,
-                        originY: mySeat.y,
-                        radius: 0.3,
-                        rolloff: 'none'
-                    });
+                    // This is legacy - we now use tuning_mode URLs
+                    console.warn("Received legacy active_poll, ignoring");
                 }
             });
 
@@ -1535,7 +1553,7 @@ devicedist.html: Feature List
         window.onload = async () => {
             syncClock();
             await loadPillarPositions();
-            await loadTuningAssetUrls();
+            await loadTuningAssetUrls(); // Load tuning asset URLs from database
 
             audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
