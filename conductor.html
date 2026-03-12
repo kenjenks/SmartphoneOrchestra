@@ -117,6 +117,8 @@ pillar_config.json, movement manifests) are handled by admin.html
                 <button id="stop-tuning-btn" style="background:#600; border-color:#a00;">⏹️ STOP</button>
             </div>
 
+            <button id="load-default-pillars-btn" class="secondary" style="margin-top: 5px;">🏛️ Load Default Pillar URLs</button>
+
             <div id="note-timing-status" style="font-size: 0.7rem; color: #888; margin-top: 5px;">
                 Using tuning_mode.json from admin
             </div>
@@ -193,12 +195,20 @@ pillar_config.json, movement manifests) are handled by admin.html
     let currentMovement = null;
     let serverOffset = 0;
 
-    // Pillar URLs (loaded from movement manifest)
+    // Pillar URLs - FIXED: Now loaded from movement manifest, not pillar_config.json
     let PILLAR_URLS = {};
 
     // Tuning URLs (loaded from tuning_mode.json)
     let FLUTE_URL = "";
     let TEST_PULSE_URL = "";
+
+    // Default pillar URLs for tuning mode (fallback if no movement selected)
+    const DEFAULT_PILLAR_URLS = {
+        FL: "https://static.wixstatic.com/mp3/9178d1_9aba02e74fc344808064f364bb505086.mp3",
+        FR: "https://static.wixstatic.com/mp3/9178d1_08a292cbcee448d7b83e464d6a94b377.mp3",
+        BL: "https://static.wixstatic.com/mp3/9178d1_8987080abdb14616a0e9562387923614.mp3",
+        BR: "https://static.wixstatic.com/mp3/9178d1_8b53f52bbce6406ebacae8288777bad5.mp3"
+    };
 
     // --- CLOCK SYNC ---
     const offsetRef = db.ref(".info/serverTimeOffset");
@@ -240,14 +250,17 @@ pillar_config.json, movement manifests) are handled by admin.html
                     measure: note.measure,
                     id: note.id,
                     pitch: note.pitch
-                    // REMOVED: url field - not needed
                 }));
 
-                // Load flute URL from movement manifest or config
-                // This should be a CDN URL to the encoded flute MP3
+                // Load flute URL from tuning_mode.json metadata
                 if (configData.metadata && configData.metadata.source_audio) {
                     // Convert filename to CDN URL - adjust based on your hosting
                     FLUTE_URL = `https://static.wixstatic.com/mp3/${configData.metadata.source_audio}`;
+                }
+
+                // Load test pulse URL if present
+                if (configData.metadata && configData.metadata.test_pulse) {
+                    TEST_PULSE_URL = `https://static.wixstatic.com/mp3/${configData.metadata.test_pulse}`;
                 }
 
                 logDetection(`Loaded ${noteTimings.length} notes from tuning config`);
@@ -328,12 +341,11 @@ pillar_config.json, movement manifests) are handled by admin.html
                         manifest: manifest
                     };
 
-                    // Load pillar URLs from manifest
+                    // FIXED: Load pillar URLs from manifest.audio_assets_pillars
                     if (manifest.audio_assets_pillars) {
                         PILLAR_URLS = {};
 
                         // Map pillar positions to URLs
-                        // Expected format: audio_assets_pillars.front_left, .front_right, etc.
                         if (manifest.audio_assets_pillars.front_left) {
                             PILLAR_URLS.FL = manifest.audio_assets_pillars.front_left;
                         }
@@ -351,6 +363,8 @@ pillar_config.json, movement manifests) are handled by admin.html
                         document.getElementById('pillar-count').innerText = pillarCount;
 
                         logDetection(`Loaded ${pillarCount} pillar URLs from ${movement.name}`);
+                    } else {
+                        logDetection(`No pillar URLs found in ${movement.name} manifest`);
                     }
 
                     // Enable GO button if we have a valid manifest
@@ -360,6 +374,14 @@ pillar_config.json, movement manifests) are handled by admin.html
                 logDetection(`Error loading manifest for ${movement.name}: ${e.message}`);
             }
         }
+    }
+
+    // FIXED: Function to load default pillar URLs for tuning mode
+    function loadDefaultPillarUrls() {
+        PILLAR_URLS = { ...DEFAULT_PILLAR_URLS };
+        const pillarCount = Object.keys(PILLAR_URLS).length;
+        document.getElementById('pillar-count').innerText = pillarCount;
+        logDetection(`Loaded ${pillarCount} default pillar URLs for tuning`);
     }
 
     // --- 1. SEAT MAP GUI ---
@@ -675,7 +697,6 @@ pillar_config.json, movement manifests) are handled by admin.html
                 originX: device ? device.x : 7.75,
                 originY: device ? device.y : 12.5,
                 pulsePositionMs: note.startMs + (note.durationMs / 2)
-                // REMOVED: url field
             });
         });
 
@@ -688,9 +709,15 @@ pillar_config.json, movement manifests) are handled by admin.html
     }
 
     async function startPillars(startTime) {
+        // FIXED: Check if we have pillar URLs, if not try to load defaults
         if (Object.keys(PILLAR_URLS).length === 0) {
-            logDetection("No pillar URLs loaded - skipping pillar playback");
-            return;
+            logDetection("No pillar URLs loaded - attempting to load defaults");
+            loadDefaultPillarUrls();
+
+            if (Object.keys(PILLAR_URLS).length === 0) {
+                logDetection("ERROR: No pillar URLs available - skipping pillar playback");
+                return;
+            }
         }
 
         const pillarStartTime = startTime - 1000;
@@ -743,6 +770,12 @@ pillar_config.json, movement manifests) are handled by admin.html
 
         tuningSchedule = distributeNotes(deviceOrder);
         tuningStartTime = Date.now() + 3000;
+
+        // FIXED: Ensure we have pillar URLs before starting
+        if (Object.keys(PILLAR_URLS).length === 0) {
+            logDetection("No pillar URLs from movement, loading defaults");
+            loadDefaultPillarUrls();
+        }
 
         await startPillars(tuningStartTime);
 
@@ -903,6 +936,10 @@ pillar_config.json, movement manifests) are handled by admin.html
     };
     document.getElementById('start-tuning-btn').onclick = startTuningMovement;
     document.getElementById('stop-tuning-btn').onclick = stopTuning;
+    document.getElementById('load-default-pillars-btn').onclick = () => {
+        loadDefaultPillarUrls();
+        logDetection("Default pillar URLs loaded");
+    };
     document.getElementById('kill-all-btn').onclick = () => {
         if(confirm("Refresh all patron devices?")) {
             db.ref('show/currentCue').set({ action: 'KILL', triggerTime: Date.now() });
@@ -963,7 +1000,7 @@ pillar_config.json, movement manifests) are handled by admin.html
         // Load all configurations uploaded by admin.html
         await loadSeatConfig();
         await loadTuningConfig();
-        await loadMovements(); // This now loads movement manifests with pillar URLs
+        await loadMovements();
 
         initListeners();
         
