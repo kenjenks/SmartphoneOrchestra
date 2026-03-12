@@ -1429,10 +1429,39 @@ devicedist.html: Feature List
 
         // --- DIRECT PLAYBACK FOR TUNING MOVEMENT (uses fluteUrl from tuning_mode) ---
         async function playTuningMovement(cue) {
-            console.log("🎵 Starting tuning movement with flute:", fluteUrl);
+            console.log("🎵 Starting tuning movement with cue:", cue);
+            console.log("🎵 Flute URL:", fluteUrl);
+            console.log("🎵 Current values:", {
+                cueStartTime: cue.startTime,
+                serverOffset: serverOffset,
+                hardwareLag: hardwareLag,
+                audioCtxCurrentTime: audioCtx.currentTime
+            });
 
             if (!fluteUrl) {
                 console.error("No flute URL available for tuning movement");
+                return;
+            }
+
+            // Calculate timing with validation
+            if (!cue.startTime || isNaN(cue.startTime)) {
+                console.error("Invalid cue.startTime:", cue.startTime);
+                return;
+            }
+
+            const scheduledStart = cue.startTime - (serverOffset || 0) - (hardwareLag || 0);
+            console.log("Scheduled start (ms):", scheduledStart);
+
+            if (isNaN(scheduledStart)) {
+                console.error("scheduledStart is NaN");
+                return;
+            }
+
+            const startTime = Math.max(audioCtx.currentTime, scheduledStart / 1000);
+            console.log("Final startTime (seconds):", startTime);
+
+            if (isNaN(startTime) || !isFinite(startTime)) {
+                console.error("Invalid startTime:", startTime);
                 return;
             }
 
@@ -1454,15 +1483,16 @@ devicedist.html: Feature List
 
             const gainNode = audioCtx.createGain();
 
-            // Calculate timing
-            const scheduledStart = cue.startTime - serverOffset - hardwareLag;
-            const startTime = Math.max(audioCtx.currentTime, (scheduledStart / 1000));
-
             // Connect and start
             source.connect(gainNode).connect(audioCtx.destination);
 
-            // Set target gain (will be updated by monitorTuningPlayback)
-            gainNode.gain.setTargetAtTime(1.0, startTime, 0.015);
+            // Set target gain with validated time
+            try {
+                gainNode.gain.setTargetAtTime(1.0, startTime, 0.015);
+            } catch (e) {
+                console.error("Error in setTargetAtTime:", e, "startTime:", startTime);
+                return;
+            }
 
             source.start(startTime);
 
@@ -1476,7 +1506,11 @@ devicedist.html: Feature List
             });
 
             // Start monitoring for note assignments
-            monitorTuningPlayback(cue, source, startTime);
+            if (currentTuningSchedule && assignedNotes.length > 0) {
+                monitorTuningPlayback(cue, source, startTime);
+            } else {
+                console.log("No notes assigned to this device");
+            }
         }
 
         // --- EVENT HANDLERS ---
