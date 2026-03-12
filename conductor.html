@@ -1,9 +1,13 @@
+
 <!DOCTYPE html>
 <!--
 conductor.html
 
 Webapp for leading the SmartphoneOrchestra, sending cues
 to patron devices over Firebase.
+
+Includes Dynamic Tuning Mode for Bach "Jesu, Joy of Man's Desiring"
+with real-time device discovery and spiral path generation.
 -->
 <html lang="en">
 <head>
@@ -22,7 +26,7 @@ to patron devices over Firebase.
 
         /* Seat Map GUI */
         #map-container { flex-grow: 1; position: relative; background: #000; display: flex; align-items: center; justify-content: center; padding: 20px; }
-        #seat-map-canvas { background: #050505; border-radius: 8px; box-shadow: inset 0 0 50px rgba(0,255,204,0.05); }
+        #seat-map-canvas { background: #050505; border-radius: 8px; box-shadow: inset 0 0 50px rgba(0,255,204,0.05); cursor: pointer; }
 
         /* Buttons & Inputs */
         button { background: #333; color: #fff; border: 1px solid #555; padding: 10px 15px; border-radius: 4px; cursor: pointer; font-weight: bold; margin-bottom: 5px; width: 100%; }
@@ -44,6 +48,12 @@ to patron devices over Firebase.
         .legend { display: flex; gap: 10px; font-size: 10px; margin-top: 10px; }
         .legend-item { display: flex; align-items: center; gap: 5px; }
         .dot { width: 8px; height: 8px; border-radius: 50%; }
+
+        /* Tuning Progress */
+        #tuning-progress { margin-top: 15px; background: #1a1a1a; padding: 10px; border-radius: 4px; border-left: 3px solid #00ffcc; }
+        .progress-bar-container { width: 100%; height: 10px; background: #333; border-radius: 5px; margin: 5px 0; }
+        .progress-bar-fill { height: 10px; background: #00ffcc; border-radius: 5px; width: 0%; transition: width 0.3s; }
+        .stats-row { display: flex; justify-content: space-between; font-size: 0.8rem; margin-top: 5px; }
     </style>
 </head>
 <body>
@@ -57,17 +67,46 @@ to patron devices over Firebase.
                 <div class="legend-item"><div class="dot" style="background:#333"></div>Offline</div>
                 <div class="legend-item"><div class="dot" style="background:#ffcc00"></div>Syncing</div>
                 <div class="legend-item"><div class="dot" style="background:#00ffcc"></div>Happy</div>
+                <div class="legend-item"><div class="dot" style="background:#ff4444"></div>Dead</div>
             </div>
         </div>
 
+        <!-- DYNAMIC TUNING MODE - Replaces old Bach Tuning Mode -->
         <div class="section">
-            <h2>Bach Tuning Mode</h2>
-            <p style="font-size: 0.8rem; color: #888;">Jesu, Joy of Man's Desiring</p>
-            <div class="btn-group">
-                <button id="play-bach-btn">PLAY</button>
-                <button id="pause-bach-btn">PAUSE</button>
+            <h2>🎯 Dynamic Tuning: Jesu, Joy</h2>
+            <div id="device-count-display" style="display: flex; justify-content: space-between; background: #1a1a1a; padding: 8px; border-radius: 4px; margin-bottom: 10px;">
+                <span>Active Devices:</span>
+                <span id="device-count-value" style="font-weight: bold; color: #00ffcc;">0</span>
             </div>
-            <button id="reset-tuning-btn">RESET ALL STATS</button>
+
+            <div class="btn-group">
+                <button id="refresh-devices-btn" class="secondary">🔄 Refresh List</button>
+                <button id="start-tuning-btn" class="primary">▶️ START TUNING</button>
+                <button id="stop-tuning-btn" style="background:#600; border-color:#a00;">⏹️ STOP</button>
+            </div>
+
+            <button id="load-note-timing-btn" class="secondary" style="margin-top: 5px;">📂 Load Note Timing JSON</button>
+            <input type="file" id="note-timing-input" style="display:none" accept=".json">
+
+            <div id="note-timing-status" style="font-size: 0.7rem; color: #888; margin-top: 5px;">
+                No timing file loaded
+            </div>
+
+            <div id="tuning-progress" style="display: none;">
+                <div style="display: flex; justify-content: space-between;">
+                    <span>Calibration:</span>
+                    <span id="happy-percent">0%</span>
+                </div>
+                <div class="progress-bar-container">
+                    <div id="happy-progress-bar" class="progress-bar-fill" style="width: 0%;"></div>
+                </div>
+                <div class="stats-row">
+                    <span>✅ Happy: <span id="happy-count">0</span></span>
+                    <span>🔄 Syncing: <span id="syncing-count">0</span></span>
+                    <span>❌ Dead: <span id="dead-count">0</span></span>
+                </div>
+            </div>
+
             <canvas id="fft-viz"></canvas>
             <div id="detection-log" style="font-size: 10px; color: #00ffcc; margin-top: 5px; height: 40px; overflow: hidden;"></div>
         </div>
@@ -90,6 +129,8 @@ to patron devices over Firebase.
     </div>
 
 <script>
+    // PROTECTED BLOCK: Firebase Configuration
+    // Security restricted to authorized domains in Google Cloud Console
     const firebaseConfig = {
         apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
         authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
@@ -99,232 +140,673 @@ to patron devices over Firebase.
         messagingSenderId: "722537253165",
         appId: "1:722537253165:web:8e8b6495bd508de35b2ba4"
     };
+
     firebase.initializeApp(firebaseConfig);
     const db = firebase.database();
 
-        // --- MASTER STATE ---
-        let seats = [];
-        let deviceData = {};
-        let audioCtx, analyser, dataArray;
-        let isTuningActive = false;
-        let currentMeasure = 0;
-        let bachTimeline = [];
-        let micCoords = { x: 0, y: 0 }; // Tech Table Location
+    // --- MASTER STATE ---
+    let seats = [];
+    let deviceData = {};
+    let audioCtx, analyser, dataArray;
+    let isTuningActive = false;
+    let currentMeasure = 0;
+    let micCoords = { x: 0, y: 0 }; // Tech Table Location
 
-        // --- 1. SEAT MAP GUI ---
-        const canvas = document.getElementById('seat-map-canvas');
-        const ctx = canvas.getContext('2d');
+    // Tuning-specific state
+    let noteTimings = [];
+    let tuningSchedule = null;
+    let tuningStartTime = 0;
+    let spiralPath = [];
+    let activeDevices = [];
 
-        async function initSeatMap() {
-            try {
+    // Pillar URLs
+    const PILLAR_URLS = {
+        FL: "https://static.wixstatic.com/mp3/9178d1_9aba02e74fc344808064f364bb505086.mp3",
+        FR: "https://static.wixstatic.com/mp3/9178d1_08a292cbcee448d7b83e464d6a94b377.mp3",
+        BL: "https://static.wixstatic.com/mp3/9178d1_8987080abdb14616a0e9562387923614.mp3",
+        BR: "https://static.wixstatic.com/mp3/9178d1_8b53f52bbce6406ebacae8288777bad5.mp3"
+    };
+    const FLUTE_URL = "https://static.wixstatic.com/mp3/9178d1_29aa9ddc87f0405588c6d1b5b18ff382.mp3";
+
+    // --- 1. SEAT MAP GUI ---
+    const canvas = document.getElementById('seat-map-canvas');
+    const ctx = canvas.getContext('2d');
+
+    async function initSeatMap() {
+        try {
+            // First try to get seat config from Firebase (uploaded by admin.html)
+            const configSnap = await db.ref('seat_config').once('value');
+            const configData = configSnap.val();
+
+            if (configData && configData.seats) {
+                seats = configData.seats;
+                console.log(`📋 Loaded ${seats.length} seats from Firebase`);
+            } else {
+                // Fallback to local TSV for development
                 const response = await fetch('seat_config.tsv');
                 const data = await response.text();
-                seats = data.split('\n').slice(1).map(row => {
+                const rows = data.split('\n').slice(1).map(row => {
                     const cols = row.split('\t');
-                    return { id: cols[0], x: parseFloat(cols[1]), y: parseFloat(cols[2]) };
-                }).filter(s => s.id);
+                    return {
+                        id: cols[0],
+                        x: parseFloat(cols[1] || cols[2]), // Handle different TSV formats
+                        y: parseFloat(cols[2] || cols[3])
+                    };
+                }).filter(s => s.id && !isNaN(s.x) && !isNaN(s.y));
+                seats = rows;
+            }
 
-                resizeCanvas();
-                renderMap();
-            } catch (e) { console.error("Map Load Error", e); }
+            resizeCanvas();
+            renderMap();
+        } catch (e) {
+            console.error("Map Load Error", e);
         }
+    }
 
-        function resizeCanvas() {
-            const container = document.getElementById('map-container');
-            canvas.width = container.clientWidth - 40;
-            canvas.height = container.clientHeight - 40;
-        }
+    function resizeCanvas() {
+        const container = document.getElementById('map-container');
+        canvas.width = container.clientWidth - 40;
+        canvas.height = container.clientHeight - 40;
+        renderMap();
+    }
 
-        function renderMap() {
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
+    function renderMap() {
+        if (!ctx || seats.length === 0) return;
 
-            // Draw Stage Area
-            ctx.strokeStyle = '#333';
-            ctx.strokeRect(canvas.width/4, 20, canvas.width/2, 40);
-            ctx.fillStyle = '#111';
-            ctx.fillRect(canvas.width/4, 20, canvas.width/2, 40);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-            seats.forEach(seat => {
-                const screenX = (seat.x + 20) * (canvas.width / 40);
-                const screenY = (seat.y + 20) * (canvas.height / 40);
+        // Find min/max for scaling
+        const xValues = seats.map(s => s.x);
+        const yValues = seats.map(s => s.y);
+        const minX = Math.min(...xValues) - 1;
+        const maxX = Math.max(...xValues) + 1;
+        const minY = Math.min(...yValues) - 1;
+        const maxY = Math.max(...yValues) + 1;
 
-                const status = deviceData[seat.id]?.status || 'OFFLINE';
-                const isLowPerf = deviceData[seat.id]?.performance?.lowPerf;
+        const scaleX = canvas.width / (maxX - minX);
+        const scaleY = canvas.height / (maxY - minY);
+        const scale = Math.min(scaleX, scaleY) * 0.9;
 
-                ctx.beginPath();
-                ctx.arc(screenX, screenY, 6, 0, Math.PI * 2);
+        const offsetX = (canvas.width - (maxX - minX) * scale) / 2 - minX * scale;
+        const offsetY = (canvas.height - (maxY - minY) * scale) / 2 - minY * scale;
 
-                if (status === 'HAPPY') ctx.fillStyle = '#00ffcc';
-                else if (status === 'SYNCING') ctx.fillStyle = '#ffcc00';
-                else ctx.fillStyle = '#333';
+        // Draw Stage Area (front of house)
+        ctx.strokeStyle = '#333';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(minX * scale + offsetX, minY * scale + offsetY,
+                      (maxX - minX) * scale, 30);
+        ctx.fillStyle = '#111';
+        ctx.fillRect(minX * scale + offsetX, minY * scale + offsetY,
+                    (maxX - minX) * scale, 30);
+        ctx.fillStyle = '#666';
+        ctx.font = '10px Arial';
+        ctx.fillText('STAGE', minX * scale + offsetX + 10, minY * scale + offsetY + 20);
 
-                ctx.fill();
+        // Draw each seat
+        seats.forEach(seat => {
+            const screenX = seat.x * scale + offsetX;
+            const screenY = seat.y * scale + offsetY;
 
-                if (isLowPerf) {
-                    ctx.strokeStyle = '#ff4444';
-                    ctx.lineWidth = 2;
-                    ctx.stroke();
-                }
+            // Skip if outside visible area
+            if (screenX < 0 || screenX > canvas.width || screenY < 0 || screenY > canvas.height) return;
 
+            const deviceInfo = deviceData[seat.id];
+            const status = deviceInfo?.status || 'OFFLINE';
+            const isPillar = seat.id.startsWith('PILLAR_');
+
+            // Determine color based on status
+            if (isPillar) {
+                ctx.fillStyle = '#8844cc'; // Purple for pillars
+            } else if (status === 'HAPPY') {
+                ctx.fillStyle = '#00ffcc';
+            } else if (status === 'CALIBRATING' || status === 'SYNCING') {
+                ctx.fillStyle = '#ffcc00';
+            } else if (deviceInfo && deviceInfo.lastSeen && (Date.now() - deviceInfo.lastSeen > 15000)) {
+                ctx.fillStyle = '#ff4444'; // Dead device
+            } else {
+                ctx.fillStyle = '#333';
+            }
+
+            ctx.beginPath();
+            ctx.arc(screenX, screenY, isPillar ? 8 : 5, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Highlight if in current tuning path
+            if (tuningSchedule && tuningSchedule.deviceOrder && tuningSchedule.deviceOrder.includes(seat.id)) {
+                ctx.strokeStyle = '#ffcc00';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            }
+
+            // Draw seat label for first few rows
+            if (seat.y < 10) {
                 ctx.fillStyle = '#888';
                 ctx.font = '8px Arial';
-                ctx.fillText(seat.id, screenX - 6, screenY + 15);
-            });
-        }
-
-        // --- 2. THE CONDUCTOR'S EAR (FFT & FSK DETECTION) ---
-        async function initMicrophone() {
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-                const source = audioCtx.createMediaStreamSource(stream);
-                analyser = audioCtx.createAnalyser();
-                analyser.fftSize = 2048;
-                source.connect(analyser);
-
-                dataArray = new Uint8Array(analyser.frequencyBinCount);
-                document.getElementById('mic-status').innerHTML = '<span style="color:#00ffcc">ACTIVE</span>';
-                detectSignature();
-                drawFFT();
-            } catch (e) { alert("Mic Access Required for Calibration"); }
-        }
-
-        // FSK Pattern Detection: 19.5k (Bin X) -> 19.4k (Bin Y) -> 19.5k (Bin X)
-        let patternStep = 0;
-        let lastStepTime = 0;
-
-        function detectSignature() {
-            analyser.getByteFrequencyData(dataArray);
-
-            // Frequencies to Bins (Approx)
-            // Bin = Freq / (SampleRate / FFTSize)
-            const bin195 = Math.round(19500 / (audioCtx.sampleRate / 2048));
-            const bin194 = Math.round(19400 / (audioCtx.sampleRate / 2048));
-
-            const val195 = dataArray[bin195];
-            const val194 = dataArray[bin194];
-            const threshold = 180;
-
-            const now = Date.now();
-
-            if (patternStep === 0 && val195 > threshold) {
-                patternStep = 1; lastStepTime = now;
-            } else if (patternStep === 1 && val194 > threshold && (now - lastStepTime < 50)) {
-                patternStep = 2; lastStepTime = now;
-            } else if (patternStep === 2 && val195 > threshold && (now - lastStepTime < 50)) {
-                // SUCCESS: FSK Signature Detected
-                const tHeard = now + (db.serverOffset || 0);
-                broadcastDetection(tHeard);
-                patternStep = 0;
-                logDetection("FSK Match: " + tHeard);
+                ctx.fillText(seat.id, screenX - 10, screenY - 10);
             }
+        });
+    }
 
-            // Timeout reset
-            if (now - lastStepTime > 100) patternStep = 0;
+    // --- 2. THE CONDUCTOR'S EAR (FFT & FSK DETECTION) ---
+    async function initMicrophone() {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const source = audioCtx.createMediaStreamSource(stream);
+            analyser = audioCtx.createAnalyser();
+            analyser.fftSize = 2048;
+            source.connect(analyser);
 
+            dataArray = new Uint8Array(analyser.frequencyBinCount);
+            document.getElementById('mic-status').innerHTML = '<span style="color:#00ffcc">ACTIVE</span>';
+            detectSignature();
+            drawFFT();
+        } catch (e) {
+            alert("Mic Access Required for Calibration");
+            document.getElementById('mic-status').innerHTML = '<span style="color:#ff4444">ERROR</span>';
+        }
+    }
+
+    // FSK Pattern Detection: 19.5k -> 19.4k -> 19.5k
+    let patternStep = 0;
+    let lastStepTime = 0;
+
+    function detectSignature() {
+        if (!analyser || !dataArray) {
             requestAnimationFrame(detectSignature);
+            return;
         }
 
-        function broadcastDetection(tHeard) {
-            // In a high-density house, the conductor posts the absolute heard time.
-            // Patron devices subtract their seat-to-mic travel time individually.
-            db.ref('tuning/last_heard').set(tHeard);
+        analyser.getByteFrequencyData(dataArray);
+
+        // Frequencies to Bins (Approx)
+        const bin195 = Math.round(19500 / (audioCtx.sampleRate / 2048));
+        const bin194 = Math.round(19400 / (audioCtx.sampleRate / 2048));
+
+        // Ensure bins are within range
+        if (bin195 >= dataArray.length || bin194 >= dataArray.length) {
+            requestAnimationFrame(detectSignature);
+            return;
         }
 
-        // --- 3. THE BACH SEQUENCER ---
-        async function loadTuningManifest() {
-            const res = await fetch('tuning_mode.json');
-            const data = await res.json();
-            bachTimeline = data.piano_notes;
+        const val195 = dataArray[bin195];
+        const val194 = dataArray[bin194];
+        const threshold = 180;
+
+        const now = Date.now();
+
+        if (patternStep === 0 && val195 > threshold) {
+            patternStep = 1;
+            lastStepTime = now;
+        } else if (patternStep === 1 && val194 > threshold && (now - lastStepTime < 50)) {
+            patternStep = 2;
+            lastStepTime = now;
+        } else if (patternStep === 2 && val195 > threshold && (now - lastStepTime < 50)) {
+            // SUCCESS: FSK Signature Detected
+            const tHeard = now + (serverOffset || 0);
+            broadcastDetection(tHeard);
+            patternStep = 0;
+            logDetection("FSK Match: " + tHeard);
         }
 
-        function playBachSequence() {
-            isTuningActive = true;
-            let noteIdx = 0;
+        // Timeout reset
+        if (now - lastStepTime > 100) patternStep = 0;
 
-            const interval = setInterval(() => {
-                if (!isTuningActive) { clearInterval(interval); return; }
+        requestAnimationFrame(detectSignature);
+    }
 
-                const note = bachTimeline[noteIdx];
-                // Assign a seat to this note (Simple round-robin for calibration)
-                const targetSeat = seats[noteIdx % seats.length];
+    function broadcastDetection(tHeard) {
+        // In a high-density house, the conductor posts the absolute heard time.
+        // Patron devices subtract their seat-to-mic travel time individually.
+        db.ref('tuning/last_heard').set(tHeard);
+    }
 
-                db.ref(`tuning/active_poll/${targetSeat.id}`).set(note.url);
+    // --- 3. DYNAMIC TUNING ENGINE ---
 
-                noteIdx++;
-                if (noteIdx >= bachTimeline.length) noteIdx = 0; // Loop Bach
-            }, 500); // 120BPM Quarter Notes
-        }
-
-        // --- 4. PERFORMANCE REGISTRY & STATUS MONITORING ---
-        function initListeners() {
-            // Monitor All Devices
-            db.ref('devices').on('value', snap => {
-                deviceData = snap.val() || {};
-                renderMap();
-                updatePerformanceRegistry();
-            });
-        }
-
-        function updatePerformanceRegistry() {
-            const registry = document.getElementById('performance-registry');
-            registry.innerHTML = '<div class="perf-row" style="font-weight:bold"><span>ID</span><span>JITTER</span><span>STATUS</span></div>';
-
-            Object.keys(deviceData).forEach(id => {
-                const dev = deviceData[id];
-                const row = document.createElement('div');
-                row.className = 'perf-row';
-                if (dev.performance?.lowPerf) row.className += ' critical';
-
-                row.innerHTML = `
-                    <span>${id}</span>
-                    <span>${dev.performance?.jitter || '--'}ms</span>
-                    <span>${dev.status || 'IDLE'}</span>
-                `;
-                registry.appendChild(row);
-            });
-        }
-
-        // --- UI BINDINGS ---
-        document.getElementById('start-mic-btn').onclick = initMicrophone;
-        document.getElementById('play-bach-btn').onclick = playBachSequence;
-        document.getElementById('pause-bach-btn').onclick = () => isTuningActive = false;
-
-        document.getElementById('kill-all-btn').onclick = () => {
-            if(confirm("Refresh all patron devices?")) {
-                db.ref('show/currentCue').set({ action: 'KILL', startTime: Date.now() });
-            }
+    // Load note timing from JSON file (generated by bach_butcher.py)
+    function setupNoteTimingLoader() {
+        document.getElementById('load-note-timing-btn').onclick = () => {
+            document.getElementById('note-timing-input').click();
         };
 
-        document.getElementById('reset-tuning-btn').onclick = () => {
-            seats.forEach(s => db.ref(`devices/${s.id}/status`).set('CALIBRATING'));
-        };
+        document.getElementById('note-timing-input').onchange = (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
 
-        function logDetection(msg) {
-            const log = document.getElementById('detection-log');
-            log.innerHTML = msg + "<br>" + log.innerHTML;
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                try {
+                    const data = JSON.parse(event.target.result);
+                    if (data.piano_notes) {
+                        noteTimings = data.piano_notes.map((note, index) => ({
+                            index: index,
+                            startMs: note.ms_offset,
+                            durationMs: 500, // Default duration if not specified
+                            measure: note.measure,
+                            id: note.id
+                        }));
+                        document.getElementById('note-timing-status').innerHTML =
+                            `✅ Loaded ${noteTimings.length} notes from ${file.name}`;
+                        console.log(`📋 Loaded ${noteTimings.length} note timings`);
+                    } else {
+                        alert("Invalid timing file: missing 'piano_notes' array");
+                    }
+                } catch (err) {
+                    alert("Error parsing JSON: " + err.message);
+                }
+            };
+            reader.readAsText(file);
+        };
+    }
+
+    // Refresh active devices from Firebase
+    async function refreshActiveDevices() {
+        const snapshot = await db.ref('devices').once('value');
+        const devices = snapshot.val() || {};
+
+        activeDevices = [];
+        const now = Date.now();
+
+        Object.entries(devices).forEach(([id, data]) => {
+            // Include all devices (pillars and patrons) - we'll filter later
+            if (data.lastSeen && (now - data.lastSeen < 30000)) { // Active in last 30 seconds
+                activeDevices.push({
+                    id: id,
+                    x: data.x || 0,
+                    y: data.y || 0,
+                    status: data.status || 'unknown',
+                    lastSeen: data.lastSeen,
+                    isPillar: id.startsWith('PILLAR_')
+                });
+            }
+        });
+
+        document.getElementById('device-count-value').innerText = activeDevices.length;
+        console.log(`🎯 Found ${activeDevices.length} active devices`);
+        return activeDevices;
+    }
+
+    // Create spiral path ordering of devices (excluding pillars for the flute path)
+    function createSpiralPath(devices) {
+        // Filter out pillars for the flute path (pillars play continuously)
+        const patronDevices = devices.filter(d => !d.id.startsWith('PILLAR_'));
+
+        if (patronDevices.length === 0) return [];
+        if (patronDevices.length === 1) return [patronDevices[0].id];
+
+        // Calculate center of mass
+        const centerX = patronDevices.reduce((sum, d) => sum + d.x, 0) / patronDevices.length;
+        const centerY = patronDevices.reduce((sum, d) => sum + d.y, 0) / patronDevices.length;
+
+        // Add polar coordinates
+        const withPolar = patronDevices.map(d => ({
+            ...d,
+            distance: Math.sqrt(Math.pow(d.x - centerX, 2) + Math.pow(d.y - centerY, 2)),
+            angle: Math.atan2(d.y - centerY, d.x - centerX)
+        }));
+
+        // Sort by distance (spiral outward)
+        const sorted = withPolar.sort((a, b) => a.distance - b.distance);
+
+        return sorted.map(d => d.id);
+    }
+
+    // Distribute notes among devices in spiral order
+    function distributeNotes(deviceOrder) {
+        if (deviceOrder.length === 0 || noteTimings.length === 0) return null;
+
+        const schedule = [];
+        const deviceCount = deviceOrder.length;
+
+        noteTimings.forEach((note, index) => {
+            const deviceIndex = index % deviceCount;
+            const deviceId = deviceOrder[deviceIndex];
+            const device = activeDevices.find(d => d.id === deviceId);
+
+            schedule.push({
+                noteIndex: index,
+                startMs: note.startMs,
+                durationMs: note.durationMs || 500,
+                deviceId: deviceId,
+                originX: device ? device.x : 7.75,
+                originY: device ? device.y : 12.5
+            });
+        });
+
+        return {
+            deviceOrder: deviceOrder,
+            notes: schedule,
+            totalNotes: noteTimings.length,
+            deviceCount: deviceCount
+        };
+    }
+
+    // Start pillars playing (continuous fabric)
+    async function startPillars(startTime) {
+        const pillarStartTime = startTime - 1000; // Start 1 second early
+
+        for (const [position, url] of Object.entries(PILLAR_URLS)) {
+            await db.ref('show/currentCue').set({
+                type: "AUDIO",
+                file: url,
+                originX: position === 'FL' || position === 'BL' ? 0 : 15.5,
+                originY: position === 'FL' || position === 'FR' ? 0 : 25,
+                radius: 30,
+                rolloff: "none",
+                triggerTime: pillarStartTime,
+                scheduledTime: pillarStartTime,
+                duration: 60000,
+                metadata: {
+                    purpose: "tuning_fabric",
+                    pillar: position
+                }
+            });
+        }
+    }
+
+    // Start the tuning movement
+    async function startTuningMovement() {
+        if (noteTimings.length === 0) {
+            alert("Please load note timing JSON file first");
+            return;
         }
 
-        function drawFFT() {
-            const vCtx = document.getElementById('fft-viz').getContext('2d');
-            analyser.getByteFrequencyData(dataArray);
-            vCtx.fillStyle = '#000';
-            vCtx.fillRect(0,0,300,60);
-            vCtx.fillStyle = '#00ffcc';
-            for(let i=0; i<dataArray.length; i++) {
-                vCtx.fillRect(i, 60 - dataArray[i]/4, 1, dataArray[i]/4);
+        // Get fresh device list
+        await refreshActiveDevices();
+
+        if (activeDevices.length === 0) {
+            alert("No active devices found!");
+            return;
+        }
+
+        // Create spiral path (patron devices only for flute)
+        const deviceOrder = createSpiralPath(activeDevices);
+
+        if (deviceOrder.length === 0) {
+            alert("No patron devices found for flute path");
+            return;
+        }
+
+        // Distribute notes
+        tuningSchedule = distributeNotes(deviceOrder);
+
+        // Calculate start time (3 seconds from now)
+        tuningStartTime = Date.now() + 3000;
+
+        // Start pillars
+        await startPillars(tuningStartTime);
+
+        // Publish schedule to Firebase
+        await db.ref('tuning/current').set({
+            status: 'ACTIVE',
+            fluteUrl: FLUTE_URL,
+            pillars: PILLAR_URLS,
+            schedule: tuningSchedule.notes,
+            deviceOrder: deviceOrder,
+            startTime: tuningStartTime,
+            totalNotes: tuningSchedule.totalNotes,
+            deviceCount: tuningSchedule.deviceCount,
+            generatedAt: Date.now(),
+            activeDevices: activeDevices.map(d => ({
+                id: d.id,
+                x: d.x,
+                y: d.y,
+                isPillar: d.isPillar
+            }))
+        });
+
+        // Send the master cue
+        await db.ref('show/currentCue').set({
+            type: "TUNING_MOVEMENT",
+            file: FLUTE_URL,
+            triggerTime: tuningStartTime,
+            scheduledTime: tuningStartTime,
+            duration: noteTimings[noteTimings.length-1].startMs + 1000,
+            metadata: {
+                purpose: "tuning_movement",
+                scheduleRef: "tuning/current"
             }
+        });
+
+        isTuningActive = true;
+
+        // Show progress UI
+        document.getElementById('tuning-progress').style.display = 'block';
+
+        log(`🎯 Tuning started: ${deviceOrder.length} devices, ${noteTimings.length} notes`);
+        renderMap();
+    }
+
+    // Stop tuning
+    async function stopTuning() {
+        await db.ref('show/currentCue').set({
+            action: 'KILL',
+            triggerTime: Date.now()
+        });
+
+        await db.ref('tuning/current').remove();
+
+        isTuningActive = false;
+        tuningSchedule = null;
+
+        document.getElementById('tuning-progress').style.display = 'none';
+
+        log("⏹️ Tuning stopped");
+    }
+
+    // Individual seat test (silent ultrasonic pulse)
+    async function testSeat(seatId) {
+        const seat = seats.find(s => s.id === seatId);
+        if (!seat) return;
+
+        const pulseTime = Date.now() + 1000;
+
+        await db.ref('show/currentCue').set({
+            type: "AUDIO",
+            file: FLUTE_URL,
+            startMs: 0,
+            durationMs: 50,
+            originX: seat.x,
+            originY: seat.y,
+            radius: 0.2,
+            rolloff: "linear",
+            triggerTime: pulseTime,
+            scheduledTime: pulseTime,
+            metadata: {
+                purpose: "seat_test",
+                seatId: seatId
+            }
+        });
+
+        log(`🔊 Test pulse sent to ${seatId}`);
+    }
+
+    // --- 4. PERFORMANCE REGISTRY & STATUS MONITORING ---
+    let serverOffset = 0;
+
+    function initListeners() {
+        // Clock sync
+        const offsetRef = db.ref(".info/serverTimeOffset");
+        offsetRef.on("value", snap => {
+            serverOffset = snap.val() || 0;
+        });
+
+        // Monitor All Devices
+        db.ref('devices').on('value', snap => {
+            deviceData = snap.val() || {};
+
+            // Update counts for display
+            updateCalibrationStats();
+            renderMap();
+            updatePerformanceRegistry();
+        });
+
+        // Monitor tuning status for dead device detection
+        setInterval(() => {
+            if (isTuningActive) {
+                updateCalibrationStats();
+            }
+        }, 2000);
+    }
+
+    function updateCalibrationStats() {
+        const now = Date.now();
+        let happy = 0, syncing = 0, dead = 0;
+
+        Object.entries(deviceData).forEach(([id, data]) => {
+            if (id.startsWith('PILLAR_')) return; // Skip pillars for stats
+
+            if (data.status === 'HAPPY') {
+                happy++;
+            } else if (data.status === 'CALIBRATING' || data.status === 'SYNCING') {
+                syncing++;
+            }
+
+            if (data.lastSeen && (now - data.lastSeen > 15000)) {
+                dead++;
+            }
+        });
+
+        const total = happy + syncing;
+        const percent = total > 0 ? Math.round((happy / total) * 100) : 0;
+
+        document.getElementById('happy-count').innerText = happy;
+        document.getElementById('syncing-count').innerText = syncing;
+        document.getElementById('dead-count').innerText = dead;
+        document.getElementById('happy-percent').innerText = percent + '%';
+        document.getElementById('happy-progress-bar').style.width = percent + '%';
+    }
+
+    function updatePerformanceRegistry() {
+        const registry = document.getElementById('performance-registry');
+        registry.innerHTML = '<div class="perf-row" style="font-weight:bold"><span>ID</span><span>JITTER</span><span>STATUS</span></div>';
+
+        Object.keys(deviceData).slice(0, 20).forEach(id => { // Limit to 20 for display
+            const dev = deviceData[id];
+            const row = document.createElement('div');
+            row.className = 'perf-row';
+
+            const lastSeen = dev.lastSeen ? Date.now() - dev.lastSeen : null;
+            if (lastSeen && lastSeen > 15000) row.className += ' critical';
+            else if (dev.performance?.lowPerf) row.className += ' warning';
+
+            row.innerHTML = `
+                <span>${id.substring(0, 8)}...</span>
+                <span>${dev.performance?.jitter || '--'}ms</span>
+                <span>${dev.status || 'IDLE'}</span>
+            `;
+            registry.appendChild(row);
+        });
+    }
+
+    // --- UI BINDINGS ---
+    document.getElementById('start-mic-btn').onclick = initMicrophone;
+
+    document.getElementById('refresh-devices-btn').onclick = async () => {
+        await refreshActiveDevices();
+        renderMap();
+    };
+
+    document.getElementById('start-tuning-btn').onclick = startTuningMovement;
+    document.getElementById('stop-tuning-btn').onclick = stopTuning;
+
+    document.getElementById('kill-all-btn').onclick = () => {
+        if(confirm("Refresh all patron devices?")) {
+            db.ref('show/currentCue').set({ action: 'KILL', triggerTime: Date.now() });
+            log("COMMAND: Global Kill Signal sent.");
+        }
+    };
+
+    // Click on seat map to test individual seat
+    canvas.addEventListener('click', (e) => {
+        if (!isTuningActive) return;
+
+        const rect = canvas.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+
+        // Find closest seat
+        let closestSeat = null;
+        let minDist = Infinity;
+
+        seats.forEach(seat => {
+            // Scale coordinates (same as renderMap)
+            const xValues = seats.map(s => s.x);
+            const yValues = seats.map(s => s.y);
+            const minX = Math.min(...xValues) - 1;
+            const maxX = Math.max(...xValues) + 1;
+            const minY = Math.min(...yValues) - 1;
+            const maxY = Math.max(...yValues) + 1;
+
+            const scaleX = canvas.width / (maxX - minX);
+            const scaleY = canvas.height / (maxY - minY);
+            const scale = Math.min(scaleX, scaleY) * 0.9;
+
+            const offsetX = (canvas.width - (maxX - minX) * scale) / 2 - minX * scale;
+            const offsetY = (canvas.height - (maxY - minY) * scale) / 2 - minY * scale;
+
+            const screenX = seat.x * scale + offsetX;
+            const screenY = seat.y * scale + offsetY;
+
+            const dist = Math.sqrt(Math.pow(mouseX - screenX, 2) + Math.pow(mouseY - screenY, 2));
+            if (dist < minDist) {
+                minDist = dist;
+                closestSeat = seat;
+            }
+        });
+
+        if (closestSeat && minDist < 20) {
+            testSeat(closestSeat.id);
+        }
+    });
+
+    function logDetection(msg) {
+        const log = document.getElementById('detection-log');
+        log.innerHTML = msg + "<br>" + log.innerHTML;
+        if (log.children.length > 3) log.removeChild(log.lastChild);
+    }
+
+    function drawFFT() {
+        if (!analyser || !dataArray) {
             requestAnimationFrame(drawFFT);
+            return;
         }
 
-        // Initialize
-        window.onload = () => {
-            initSeatMap();
-            initListeners();
-            loadTuningManifest();
-        };
+        const vCtx = document.getElementById('fft-viz').getContext('2d');
+        analyser.getByteFrequencyData(dataArray);
+        vCtx.fillStyle = '#000';
+        vCtx.fillRect(0,0,300,60);
+        vCtx.fillStyle = '#00ffcc';
 
-        window.onresize = resizeCanvas;
-    </script>
+        // Draw only the relevant frequency range (around 19.5kHz)
+        const startBin = Math.round(19000 / (audioCtx.sampleRate / 2048));
+        const endBin = Math.round(20000 / (audioCtx.sampleRate / 2048));
+
+        for(let i = startBin; i < endBin && i < dataArray.length; i++) {
+            const x = (i - startBin) * (300 / (endBin - startBin));
+            vCtx.fillRect(x, 60 - dataArray[i]/4, 2, dataArray[i]/4);
+        }
+
+        requestAnimationFrame(drawFFT);
+    }
+
+    function log(msg) {
+        const box = document.getElementById('detection-log');
+        box.innerHTML = `[${new Date().toLocaleTimeString()}] ${msg}<br>` + box.innerHTML;
+        if (box.children.length > 3) box.removeChild(box.lastChild);
+    }
+
+    // Initialize
+    window.onload = () => {
+        initSeatMap();
+        initListeners();
+        setupNoteTimingLoader();
+    };
+
+    window.onresize = () => {
+        resizeCanvas();
+        renderMap();
+    };
+</script>
 </body>
 </html>
