@@ -169,6 +169,9 @@ with real-time device discovery and spiral path generation.
     // UPDATED: New encoded flute URL with pulses at note centers
     const FLUTE_URL = "https://static.wixstatic.com/mp3/9178d1_711f9f02c8664c2c9dc1522bd7b49111.mp3";
 
+    // NEW: Standalone test pulse URL (silent ultrasonic pulse)
+    const TEST_PULSE_URL = "https://static.wixstatic.com/mp3/9178d1_f6b058d4fd0e496a8f18ab1a3bc4d88e.mp3";
+
     // --- 1. SEAT MAP GUI ---
     const canvas = document.getElementById('seat-map-canvas');
     const ctx = canvas.getContext('2d');
@@ -646,6 +649,7 @@ with real-time device discovery and spiral path generation.
     }
 
     // Individual seat test (silent ultrasonic pulse)
+    // UPDATED: Uses dedicated test pulse MP3
     async function testSeat(seatId) {
         const seat = seats.find(s => s.id === seatId);
         if (!seat) return;
@@ -654,9 +658,9 @@ with real-time device discovery and spiral path generation.
 
         await db.ref('show/currentCue').set({
             type: "AUDIO",
-            file: FLUTE_URL,
-            startMs: 0,
-            durationMs: 50,
+            file: TEST_PULSE_URL,  // Use dedicated silent test pulse
+            startMs: 100,           // Skip first 100ms of silence
+            durationMs: 50,         // Just the 50ms pulse
             originX: seat.x,
             originY: seat.y,
             radius: 0.2,
@@ -665,12 +669,11 @@ with real-time device discovery and spiral path generation.
             scheduledTime: pulseTime,
             metadata: {
                 purpose: "seat_test",
-                seatId: seatId,
-                pulsePosition: "start" // For test, use start of file
+                seatId: seatId
             }
         });
 
-        log(`🔊 Test pulse sent to ${seatId}`);
+        log(`🔊 Silent test pulse sent to ${seatId}`);
     }
 
     // --- 4. PERFORMANCE REGISTRY & STATUS MONITORING ---
@@ -831,7 +834,4 @@ with real-time device discovery and spiral path generation.
         vCtx.fillStyle = '#00ffcc';
 
         // Draw only the relevant frequency range (around 19.5kHz)
-        const startBin = Math.round(19000 / (audioCtx.sampleRate / 2048));
-        const endBin = Math.round(20000 / (audioCtx.sampleRate / 2048));
-
-        for(let i = startBin; i
+        const startBin = Math.round(19000 / (audioCtx.sampleRate /
