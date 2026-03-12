@@ -620,10 +620,15 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         const devices = snapshot.val() || {};
 
         activeDevices = [];
-        const now = Date.now();
+
+        // Get server time offset
+        const offsetSnap = await db.ref('.info/serverTimeOffset').once('value');
+        const serverOffset = offsetSnap.val() || 0;
+        const now = Date.now() + serverOffset;  // This gives you UTC time
 
         Object.entries(devices).forEach(([id, data]) => {
-            if (data.lastSeen && (now - data.lastSeen < 30000)) {
+            // Compare using UTC timestamps
+            if (data.lastSeen && (Math.abs(now - data.lastSeen) < 30000)) {
                 activeDevices.push({
                     id: id,
                     x: data.x || 0,
@@ -854,6 +859,8 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             renderMap();
             updatePerformanceRegistry();
         });
+
+        refreshActiveDevices();
 
         setInterval(() => {
             if (isTuningActive) {
