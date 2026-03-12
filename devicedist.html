@@ -49,7 +49,12 @@ devicedist.html: Feature List
 - One-Way Lag Calculation: Compares pulse playback time with heard time
 - Local Storage: Maintains calibrated lag value for precise synchronization
 
-5. Performance & Reliability
+5. Movement Control
+- GO Signal Handler: Processes movement start commands with buffer timing
+- Timeline Execution: Executes scheduled cues from movement manifests
+- Movement Buffer: Respects movement-specific buffer times (typically 1.0s)
+
+6. Performance & Reliability
 - Asset Resilience: Wraps preloading in try/catch blocks to ensure
   a single missing MP3 doesn't crash the entire performer node.
 
@@ -151,6 +156,20 @@ devicedist.html: Feature List
             pointer-events: none;
             opacity: 0.5;
         }
+
+        #movement-indicator {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            font-family: monospace;
+            font-size: 10px;
+            color: #ffcc00;
+            background: rgba(0,0,0,0.7);
+            padding: 4px 8px;
+            border-radius: 4px;
+            border-left: 2px solid #00ffcc;
+            pointer-events: none;
+        }
     </style>
 </head>
 <body>
@@ -183,6 +202,7 @@ devicedist.html: Feature List
 
     <div id="show-screen">
         <div id="performance-overlay">FPS: -- | Lag: --ms</div>
+        <div id="movement-indicator">Standby</div>
         <canvas id="stage-canvas"></canvas>
     </div>
 
@@ -221,6 +241,13 @@ devicedist.html: Feature List
 
         // Individual seat test state
         let pendingTestPulse = null; // Track individual seat test
+
+        // Movement state
+        let currentMovement = null;
+        let movementStartTime = 0;
+        let movementBuffer = 1.0; // Default 1 second buffer
+        let scheduledCues = []; // Queue of upcoming cues
+        let movementTimer = null;
 
         // Performance Watchdog
         let lastFrameTime = 0;
@@ -379,9 +406,96 @@ devicedist.html: Feature List
             });
         }
 
+        // --- MOVEMENT HANDLER (GO Signal) ---
+        function handleMovementStart(cue) {
+            if (!cue.startTime || !cue.movement || !cue.timeline) {
+                console.error("Invalid GO signal: missing required fields");
+                return;
+            }
+
+            // Clear any existing movement
+            if (movementTimer) {
+                clearTimeout(movementTimer);
+                movementTimer = null;
+            }
+
+            // Clear scheduled cues
+            scheduledCues = [];
+
+            // Set movement state
+            currentMovement = cue.movement;
+            movementStartTime = cue.startTime;
+            movementBuffer = cue.bufferMs / 1000 || 1.0; // Convert to seconds, default 1.0
+
+            // Update UI
+            document.getElementById('movement-indicator').innerText = `🎭 ${currentMovement} (buffer: ${movementBuffer}s)`;
+
+            console.log(`🎬 Movement "${currentMovement}" starting at ${new Date(movementStartTime).toISOString()} with ${movementBuffer}s buffer`);
+
+            // Schedule all cues from the timeline
+            if (cue.timeline) {
+                scheduleTimelineCues(cue.timeline);
+            }
+        }
+
+        function scheduleTimelineCues(timeline) {
+            const now = Date.now() + serverOffset;
+
+            Object.entries(timeline).forEach(([cueId, cueData]) => {
+                // Calculate when this cue should play relative to movement start
+                // Cue times in manifest are offsets from movement start (in ms)
+                const cueOffset = cueData.startTime || 0; // Offset in ms
+                const absoluteStartTime = movementStartTime + cueOffset;
+
+                // Calculate delay until this cue should play
+                const delayMs = absoluteStartTime - now - (hardwareLag);
+
+                if (delayMs > 0) {
+                    // Schedule the cue
+                    setTimeout(() => {
+                        playSpatialCue({
+                            ...cueData,
+                            startTime: absoluteStartTime,
+                            cueId: cueId
+                        });
+                    }, delayMs);
+
+                    // Store in scheduled cues list for reference
+                    scheduledCues.push({
+                        cueId: cueId,
+                        startTime: absoluteStartTime,
+                        data: cueData
+                    });
+
+                    console.log(`📅 Scheduled cue ${cueId} at +${cueOffset}ms (in ${Math.round(delayMs)}ms)`);
+                } else if (delayMs > -1000) {
+                    // Cue is in the past but within 1 second - play immediately
+                    console.log(`⚡ Playing cue ${cueId} immediately (was ${Math.round(-delayMs)}ms late)`);
+                    playSpatialCue({
+                        ...cueData,
+                        startTime: absoluteStartTime,
+                        cueId: cueId
+                    });
+                }
+            });
+
+            // Sort scheduled cues for reference
+            scheduledCues.sort((a, b) => a.startTime - b.startTime);
+        }
+
         // --- AUDIO ENGINE: SPATIAL WASH & RAMPING ---
         async function playSpatialCue(cue) {
-            if (!bufferCache[cue.file]) return;
+            if (!bufferCache[cue.file]) {
+                // Try to preload on-demand if not cached
+                try {
+                    const res = await fetch(cue.file);
+                    const arrayBuf = await res.arrayBuffer();
+                    bufferCache[cue.file] = await audioCtx.decodeAudioData(arrayBuf);
+                } catch (e) {
+                    console.error(`Failed to load cue file ${cue.file}:`, e);
+                    return;
+                }
+            }
 
             const source = audioCtx.createBufferSource();
             source.buffer = bufferCache[cue.file];
@@ -419,7 +533,6 @@ devicedist.html: Feature List
             }
         }
 
-        // --- INDIVIDUAL SEAT TEST HANDLER ---
         // --- INDIVIDUAL SEAT TEST HANDLER ---
         function handleSeatTest(cue, startTime) {
             console.log(`🔊 Received seat test for ${mySeat.id}`);
@@ -530,6 +643,13 @@ devicedist.html: Feature List
 
             lastFrameTime = now;
             const serverNow = Date.now() + serverOffset;
+
+            // Update movement indicator with countdown if movement is pending
+            if (currentMovement && movementStartTime > serverNow) {
+                const secondsToStart = ((movementStartTime - serverNow) / 1000).toFixed(1);
+                document.getElementById('movement-indicator').innerText =
+                    `🎭 ${currentMovement} (T-${secondsToStart}s)`;
+            }
 
             // 1. Update Spatial Audio (The "Wash")
             activeAudioCues.forEach((cue, index) => {
@@ -693,8 +813,19 @@ devicedist.html: Feature List
             db.ref('show/currentCue').on('value', snap => {
                 const cue = snap.val();
                 if (cue) {
-                    if (cue.action === 'KILL') location.reload();
-                    playSpatialCue(cue);
+                    if (cue.action === 'KILL') {
+                        location.reload();
+                    } else if (cue.action === 'GO') {
+                        // Handle movement start signal
+                        handleMovementStart(cue);
+                    } else if (cue.type === 'TUNING_MOVEMENT') {
+                        // Handle tuning movement specially
+                        calibrationMode = true;
+                        playSpatialCue(cue);
+                    } else {
+                        // Regular audio/visual cue
+                        playSpatialCue(cue);
+                    }
                 }
             });
 
