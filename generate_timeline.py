@@ -16,6 +16,7 @@
 
 import json
 import os
+import math
 
 
 def generate_multi_movement_timeline(manifest_path='show_manifest.json', default_inst_path='instrument_config.json'):
@@ -34,37 +35,119 @@ def generate_multi_movement_timeline(manifest_path='show_manifest.json', default
 
         for mov_entry in show_manifest.get("movements", []):
             m_file = mov_entry.get("manifest_file")
-            # USE MOVEMENT-SPECIFIC CONFIG IF PROVIDED, ELSE USE DEFAULT
             inst_path = mov_entry.get("instrument_config", default_inst_path)
 
-            if not os.path.exists(m_file) or not os.path.exists(inst_path):
-                print(f"Skipping {m_file}: Missing manifest or config ({inst_path})")
+            if not os.path.exists(m_file):
+                print(f"Warning: Movement manifest {m_file} not found. Skipping.")
                 continue
 
             with open(m_file, 'r') as f:
                 m_data = json.load(f)
 
-            with open(inst_path, 'r') as f:
-                inst_config = json.load(f)
+            # Load instrument config for this movement (spatial parameters live here)
+            inst_config = {}
+            if os.path.exists(inst_path):
+                with open(inst_path, 'r') as f:
+                    inst_config = json.load(f)
+                print(f"  Loaded instrument config: {inst_path}")
+            else:
+                print(f"  Warning: Instrument config {inst_path} not found. Using defaults.")
 
-            sections = inst_config.get("sections", [])
-            audio_map = m_data.get("audio_assets", {})
-            lsq_map = m_data.get("visual_assets", {})
+            sections = inst_config.get("sections", {})
+            dynamic_map = inst_config.get("dynamic_map", {})
 
             movement_assets = []
 
-            for section_key in sections:
+            # --- PROCESS STANDARD INSTRUMENT ASSETS ---
+            audio_map = m_data.get("audio_assets", {})
+            visual_map = m_data.get("visual_assets", {})
+
+            for section_key in audio_map.keys():
                 audio_url = audio_map.get(section_key)
-                lsq_url = lsq_map.get(section_key)
+                lsq_url = visual_map.get(section_key)
+
+                # Get spatial parameters from instrument config
+                spatial = sections.get(section_key, {})
+
+                # Default values if not specified in config
+                default_origin = [7.7, 12.5]  # Center of house
+
+                # Parse color - could be hex string or RGB array
+                color = spatial.get("color", "#ffffff")
+                if isinstance(color, list) and len(color) == 3:
+                    # Convert RGB array to hex
+                    color = f"#{color[0]:02x}{color[1]:02x}{color[2]:02x}"
 
                 if audio_url and lsq_url:
-                    # The assets now inherit the properties (like color)
-                    # from the movement's specific instrument_config
-                    movement_assets.append({
+                    asset = {
                         "id": section_key,
                         "lsq_url": lsq_url,
-                        "audio_url": audio_url
+                        "audio_url": audio_url,
+                        "type": "instrument"
+                    }
+
+                    # Add spatial parameters for distance calculation
+                    if "originX" in spatial:
+                        asset["originX"] = spatial["originX"]
+                    if "originY" in spatial:
+                        asset["originY"] = spatial["originY"]
+                    if "radius" in spatial:
+                        asset["radius"] = spatial["radius"]
+                    if "rolloff" in spatial:
+                        asset["rolloff"] = spatial["rolloff"]
+                    if color:
+                        asset["color"] = color
+
+                    movement_assets.append(asset)
+                    print(f"    Added instrument {section_key} with spatial params")
+
+            # --- PROCESS PILLAR ASSETS (no spatial params — they self-identify) ---
+            pillar_audio_map = m_data.get("audio_assets_pillars", {})
+            for pillar_id, pillar_url in pillar_audio_map.items():
+                if pillar_url:
+                    # Pillars have no spatial params - they ignore distance calc entirely
+                    # Their position comes from pillar_config.json, read by devices at runtime
+                    movement_assets.append({
+                        "id": pillar_id,
+                        "lsq_url": None,  # Pillars do not use LSQ files
+                        "audio_url": pillar_url,
+                        "type": "pillar"
+                        # No spatial params — pillars use their own position from pillar_config
                     })
+                    print(f"    Added pillar {pillar_id}")
+
+            # --- PROCESS LIGHT-ONLY ASSETS (if any) ---
+            light_only = m_data.get("light_assets", {})
+            for light_id, light_data in light_only.items():
+                # Get spatial parameters from instrument config
+                spatial = sections.get(light_id, {})
+
+                asset = {
+                    "id": light_id,
+                    "lsq_url": light_data.get("lsq_url"),
+                    "audio_url": None,
+                    "type": "light_only"
+                }
+
+                # Add spatial parameters
+                if "originX" in spatial:
+                    asset["originX"] = spatial["originX"]
+                if "originY" in spatial:
+                    asset["originY"] = spatial["originY"]
+                if "radius" in spatial:
+                    asset["radius"] = spatial["radius"]
+
+                # Light color
+                color = spatial.get("color", light_data.get("color", "#ffffff"))
+                if isinstance(color, list) and len(color) == 3:
+                    color = f"#{color[0]:02x}{color[1]:02x}{color[2]:02x}"
+                asset["color"] = color
+
+                movement_assets.append(asset)
+                print(f"    Added light-only {light_id}")
+
+            # Calculate total duration from the longest LSQ file (optional)
+            # This could be enhanced by reading LSQ file lengths if needed
 
             movement_obj = {
                 "movement_id": mov_entry.get("movement_id"),
@@ -82,15 +165,34 @@ def generate_multi_movement_timeline(manifest_path='show_manifest.json', default
             }
 
             final_timeline["movements"].append(movement_obj)
-            print(f"Added Movement: {mov_entry['movement_name']} using {inst_path}")
+            print(f"  Added Movement: {mov_entry['movement_name']} with {len(movement_assets)} total assets.")
 
-        with open('visual_timeline.json', 'w') as f:
+        # Write the final timeline
+        output_file = 'visual_timeline.json'
+        with open(output_file, 'w') as f:
             json.dump(final_timeline, f, indent=2)
 
-        print("\nSUCCESS: Multi-config timeline generated.")
+        print(f"\n✅ SUCCESS: Multi-config timeline with spatial parameters generated.")
+        print(f"   Output: {output_file}")
+        print(f"   Movements: {len(final_timeline['movements'])}")
+
+        # Summary of spatial data included
+        total_instruments = 0
+        total_pillars = 0
+        for mov in final_timeline['movements']:
+            for cue in mov['cues']:
+                for asset in cue['assets']:
+                    if asset.get('type') == 'pillar':
+                        total_pillars += 1
+                    else:
+                        total_instruments += 1
+        print(f"   Instruments with spatial data: {total_instruments}")
+        print(f"   Pillars (fixed position): {total_pillars}")
 
     except Exception as e:
-        print(f"CRITICAL ERROR: {str(e)}")
+        print(f"❌ CRITICAL ERROR: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 if __name__ == "__main__":
