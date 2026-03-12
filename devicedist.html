@@ -44,6 +44,10 @@ devicedist.html: Feature List
 
 4. Decentralized Statistical Calibration (for the Bach
 "Jesu, Joy of Man's Desiring" sequence)
+- Ultrasonic Pulse Detection via Firebase: Listens for conductor's
+  detection timestamps at tuning/last_heard
+- One-Way Lag Calculation: Compares pulse playback time with heard time
+- Local Storage: Maintains calibrated lag value for precise synchronization
 
 5. Performance & Reliability
 - Asset Resilience: Wraps preloading in try/catch blocks to ensure
@@ -203,10 +207,20 @@ devicedist.html: Feature List
         let activeLightCues = [];
 
         // Calibration & Stats
-        let hardwareLag = 273; // Baseline hardware latency
+        let hardwareLag = 273; // Baseline hardware latency (will be updated via calibration)
         let lagSamples = [];
         let isHappy = false;
         let lastPingSent = 0;
+
+        // Ultrasonic Calibration State
+        let calibrationMode = false;
+        let currentTuningSchedule = null;
+        let assignedNotes = []; // Notes assigned to this device during tuning
+        let pendingPulseDetections = []; // Track pulses waiting for conductor response
+        let calibratedLag = null; // Final calibrated one-way lag
+
+        // Individual seat test state
+        let pendingTestPulse = null; // Track individual seat test
 
         // Performance Watchdog
         let lastFrameTime = 0;
@@ -252,8 +266,13 @@ devicedist.html: Feature List
         function processAcousticReturn(tHeard) {
             if (!lastPingSent) return;
 
-            // Calculate measured lag
+            // Calculate measured one-way lag (time from pulse play to conductor hearing)
+            // This includes both hardware delay AND acoustic travel time
             const measuredLag = tHeard - lastPingSent;
+
+            // Store the calibrated value
+            calibratedLag = measuredLag;
+            hardwareLag = measuredLag; // Update working lag estimate
 
             // Append to rolling buffer (Sample pool of 12)
             lagSamples.push(measuredLag);
@@ -265,16 +284,99 @@ devicedist.html: Feature List
                 const variance = lagSamples.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / lagSamples.length;
                 const stdDev = Math.sqrt(variance);
 
-                hardwareLag = mean; // Update working lag estimate
-
                 if (stdDev < 5 && !isHappy) {
                     isHappy = true;
                     document.getElementById('cal-ind').className = 'indicator active happy';
                     db.ref(`devices/${mySeat.id}/status`).set('HAPPY');
+
+                    // Store calibrated lag in Firebase for monitoring
+                    db.ref(`devices/${mySeat.id}/calibration`).update({
+                        lag: calibratedLag,
+                        samples: lagSamples.length,
+                        stdDev: stdDev,
+                        calibratedAt: Date.now() + serverOffset
+                    });
                 } else if (!isHappy) {
                     document.getElementById('cal-ind').className = 'indicator syncing';
                 }
             }
+
+            // Update overlay with current lag
+            updatePerformanceOverlay();
+
+            // Clear any pending test pulse
+            pendingTestPulse = null;
+        }
+
+        // --- TUNING SCHEDULE HANDLER ---
+        function initTuningListener() {
+            // Listen for tuning schedule
+            db.ref('tuning/current').on('value', snap => {
+                const schedule = snap.val();
+                if (schedule && schedule.status === 'ACTIVE') {
+                    calibrationMode = true;
+                    currentTuningSchedule = schedule;
+
+                    // Find notes assigned to this device
+                    if (schedule.schedule) {
+                        assignedNotes = schedule.schedule.filter(note => note.deviceId === mySeat.id);
+                        console.log(`🎯 Device assigned ${assignedNotes.length} notes for tuning`);
+                    }
+
+                    // Preload the flute audio if not already cached
+                    if (schedule.fluteUrl && !bufferCache[schedule.fluteUrl]) {
+                        preloadTuningAsset(schedule.fluteUrl);
+                    }
+                } else {
+                    calibrationMode = false;
+                    currentTuningSchedule = null;
+                    assignedNotes = [];
+                }
+            });
+
+            // Listen for conductor's pulse detections
+            db.ref('tuning/last_heard').on('value', snap => {
+                const tHeard = snap.val();
+                if (tHeard) {
+                    // Check if this detection matches any of our pending pulses
+                    processPendingDetections(tHeard);
+
+                    // Also check if it matches a pending individual test
+                    if (pendingTestPulse && Math.abs(tHeard - pendingTestPulse.playTime) < 1000) {
+                        processAcousticReturn(tHeard);
+                    }
+                }
+            });
+        }
+
+        async function preloadTuningAsset(url) {
+            try {
+                const res = await fetch(url);
+                const arrayBuf = await res.arrayBuffer();
+                bufferCache[url] = await audioCtx.decodeAudioData(arrayBuf);
+                console.log(`✅ Preloaded tuning asset: ${url}`);
+            } catch (e) {
+                console.error("Failed to preload tuning asset:", e);
+            }
+        }
+
+        function processPendingDetections(tHeard) {
+            // Look for pending pulses that haven't been matched
+            const now = Date.now() + serverOffset;
+
+            pendingPulseDetections = pendingPulseDetections.filter(pending => {
+                // Only consider pulses from last 5 seconds
+                if (now - pending.playTime > 5000) return false;
+
+                // Check if this detection could be for our pulse
+                // The conductor broadcasts immediately upon detection
+                if (Math.abs(tHeard - pending.playTime) < 1000) { // Within 1 second window
+                    lastPingSent = pending.playTime;
+                    processAcousticReturn(tHeard);
+                    return false; // Remove from pending
+                }
+                return true; // Keep in pending
+            });
         }
 
         // --- AUDIO ENGINE: SPATIAL WASH & RAMPING ---
@@ -292,7 +394,7 @@ devicedist.html: Feature List
             const scheduledStart = cue.startTime - serverOffset - hardwareLag;
             const startTime = Math.max(audioCtx.currentTime, (scheduledStart / 1000));
 
-            // Prime decoder (Silent warm-up)
+            // Prime decoder (Silent warm-up) - always do this for all audio
             const silentSource = audioCtx.createBufferSource();
             silentSource.start(0);
 
@@ -305,6 +407,112 @@ devicedist.html: Feature List
                 gainNode,
                 localStartTime: Date.now() + (startTime * 1000) - audioCtx.currentTime * 1000
             });
+
+            // Special handling for individual seat tests
+            if (cue.metadata && cue.metadata.purpose === 'seat_test' && cue.metadata.seatId === mySeat.id) {
+                handleSeatTest(cue, startTime);
+            }
+
+            // Special handling for tuning mode - track pulse playback time
+            if (calibrationMode && cue.metadata && cue.metadata.purpose === 'tuning_movement') {
+                trackTuningPulse(cue, startTime);
+            }
+        }
+
+        // --- INDIVIDUAL SEAT TEST HANDLER ---
+        function handleSeatTest(cue, startTime) {
+            console.log(`🔊 Received seat test for ${mySeat.id}`);
+
+            // The test pulse MP3 has the ultrasonic FSK at a specific position
+            // From bach_barber.py, the test pulse is: 100ms silence + 50ms FSK + 100ms silence
+            // The FSK pattern is at position 100ms (after the initial silence)
+            const pulsePositionMs = 100; // Position of the ultrasonic FSK in the test MP3
+
+            // Calculate when the pulse actually plays
+            const pulseTime = cue.startTime + pulsePositionMs;
+
+            // Schedule the pulse tracking
+            const now = Date.now() + serverOffset;
+            const delayMs = pulseTime - now - hardwareLag;
+
+            if (delayMs > 0) {
+                setTimeout(() => {
+                    // This is when the ultrasonic pulse actually plays
+                    const playTime = Date.now() + serverOffset;
+
+                    // Store as pending test pulse
+                    pendingTestPulse = {
+                        playTime: playTime,
+                        cueId: cue.metadata?.seatId
+                    };
+
+                    // Also set lastPingSent for the calibration engine
+                    lastPingSent = playTime;
+
+                    // Flash the screen for visual feedback
+                    flashScreenForPulse();
+
+                    console.log(`📡 Test pulse played at ${playTime}`);
+                }, delayMs);
+            }
+        }
+
+        function trackTuningPulse(cue, startTime) {
+            // For tuning, we need to know when the pulse at the center of the note plays
+            // The pulse is at the center of each note (see bach_barber.py)
+
+            // Calculate when the center of the note occurs
+            const pulsePositionMs = cue.metadata?.pulsePositionMs || 0;
+            if (pulsePositionMs > 0) {
+                const pulseTime = cue.startTime + pulsePositionMs;
+
+                // Check if this note is assigned to this device
+                const isAssigned = assignedNotes.some(note =>
+                    Math.abs(note.startMs - pulsePositionMs) < 50 &&
+                    note.deviceId === mySeat.id
+                );
+
+                if (isAssigned) {
+                    // Schedule a callback at the pulse time
+                    const now = Date.now() + serverOffset;
+                    const delayMs = pulseTime - now - hardwareLag;
+
+                    if (delayMs > 0) {
+                        setTimeout(() => {
+                            // This is when the ultrasonic pulse actually plays
+                            const playTime = Date.now() + serverOffset;
+                            lastPingSent = playTime;
+
+                            // Add to pending detections
+                            pendingPulseDetections.push({
+                                playTime: playTime,
+                                noteId: cue.metadata?.noteId
+                            });
+
+                            // Flash the screen for visual feedback
+                            flashScreenForPulse();
+
+                            console.log(`📡 Tuning pulse played at ${playTime}`);
+                        }, delayMs);
+                    }
+                }
+            }
+        }
+
+        function flashScreenForPulse() {
+            // Visual feedback that this device played a pulse
+            // Use the same illumination pattern as other notes
+            const canvas = document.getElementById('stage-canvas');
+            const ctx = canvas.getContext('2d');
+
+            // White flash
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Fade out over 100ms
+            setTimeout(() => {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+            }, 100);
         }
 
         // --- THE UNIFIED 30FPS RENDER LOOP ---
@@ -345,6 +553,41 @@ devicedist.html: Feature List
                 if (dist < cue.radius) {
                     // Linear Rolloff
                     intensity = 1 - (dist / cue.radius);
+                }
+
+                // Special handling for tuning mode - only play if this device is assigned to the current note
+                if (calibrationMode && cue.metadata?.purpose === 'tuning_movement') {
+                    // For tuning, we need to check if this moment corresponds to an assigned note
+                    const currentTimeMs = serverNow - cue.startTime;
+                    const isNoteTime = assignedNotes.some(note =>
+                        Math.abs(currentTimeMs - note.startMs) < note.durationMs / 2
+                    );
+
+                    if (!isNoteTime) {
+                        intensity = 0; // Mute if not this device's note
+                    } else {
+                        // Ramp up/down for the note
+                        const note = assignedNotes.find(n =>
+                            Math.abs(currentTimeMs - n.startMs) < n.durationMs / 2
+                        );
+                        if (note) {
+                            const noteProgress = (currentTimeMs - note.startMs) / note.durationMs;
+                            // Raised cosine ramp for smooth entry/exit
+                            intensity *= (1 - Math.cos(noteProgress * Math.PI)) / 2;
+                        }
+                    }
+                }
+
+                // Special handling for test pulses - play at full volume only at the pulse moment
+                if (cue.metadata?.purpose === 'seat_test' && cue.metadata?.seatId === mySeat.id) {
+                    const currentTimeMs = serverNow - cue.startTime;
+                    // The ultrasonic pulse is at 100ms into the file (50ms duration)
+                    if (currentTimeMs >= 100 && currentTimeMs <= 150) {
+                        // Full volume during the pulse
+                        intensity = 1.0;
+                    } else {
+                        intensity = 0; // Silent otherwise
+                    }
                 }
 
                 // Apply Gain with anti-click ramp (15ms)
@@ -425,6 +668,14 @@ devicedist.html: Feature List
             return false;
         }
 
+        // --- PERFORMANCE OVERLAY UPDATE ---
+        function updatePerformanceOverlay() {
+            const overlay = document.getElementById('performance-overlay');
+            const fps = Math.round(1000 / (performance.now() - lastFrameTime));
+            const lag = calibratedLag ? `${calibratedLag}ms` : '--';
+            overlay.innerHTML = `FPS: ${fps} | Lag: ${lag} | ${isHappy ? '✅' : '🔄'}`;
+        }
+
         // --- EVENT HANDLERS ---
         document.getElementById('ready-btn').onclick = async () => {
             // Wake Audio Hardware
@@ -473,6 +724,9 @@ devicedist.html: Feature List
                     });
                 }
             });
+
+            // 4. Initialize tuning schedule listener
+            initTuningListener();
         };
 
         window.onload = async () => {
