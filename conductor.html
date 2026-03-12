@@ -5,8 +5,13 @@ conductor.html
 Webapp for leading the SmartphoneOrchestra, sending cues
 to patron devices over Firebase.
 
-Includes Dynamic Tuning Mode for Bach "Jesu, Joy of Man's Desiring"
-with real-time device discovery and spiral path generation.
+Includes:
+- Dynamic Tuning Mode for Bach "Jesu, Joy of Man's Desiring"
+  with real-time device discovery and spiral path generation
+- Ultrasonic FSK detection (19.5kHz-19.4kHz-19.5kHz)
+- Individual seat testing
+- Show control with GO button and timeline management
+- Performance registry and device monitoring
 -->
 <html lang="en">
 <head>
@@ -24,77 +29,135 @@ with real-time device discovery and spiral path generation.
         h2 { font-size: 1.1rem; color: #00ffcc; margin-top: 0; text-transform: uppercase; letter-spacing: 1px; }
 
         /* Seat Map GUI */
-        #map-container { flex-grow: 1; position: relative; background: #111; display: flex; align-items: center; justify-content: center; overflow: hidden; }
-        canvas { background: #111; cursor: crosshair; }
+        #map-container { flex-grow: 1; position: relative; background: #000; display: flex; align-items: center; justify-content: center; padding: 20px; }
+        #seat-map-canvas { background: #050505; border-radius: 8px; box-shadow: inset 0 0 50px rgba(0,255,204,0.05); cursor: pointer; }
 
-        .btn {
-            background: #444; color: white; border: none; padding: 10px 15px;
-            margin: 5px 0; cursor: pointer; border-radius: 4px; font-weight: bold;
-            transition: background 0.2s; width: 100%; text-align: left;
-        }
-        .btn:hover { background: #555; }
-        .btn:disabled { opacity: 0.3; cursor: not-allowed; }
-        .btn-primary { background: #00887a; }
-        .btn-primary:hover { background: #00a896; }
-        .btn-danger { background: #880e0e; }
+        /* Buttons & Inputs */
+        button { background: #333; color: #fff; border: 1px solid #555; padding: 10px 15px; border-radius: 4px; cursor: pointer; font-weight: bold; margin-bottom: 5px; width: 100%; }
+        button.primary { background: #00ffcc; color: #000; border: none; }
+        button.primary:hover { background: #00cca3; }
+        button:active { transform: translateY(1px); }
+        button.go-button { background: #00ff00; color: #000; font-size: 1.2rem; padding: 15px; margin-top: 10px; }
+        button.go-button:hover { background: #00cc00; }
+        .btn-group { display: flex; gap: 10px; }
 
-        #detection-log {
-            height: 150px; background: #000; font-family: monospace;
-            font-size: 0.85rem; padding: 10px; overflow-y: auto; border: 1px solid #333;
-            color: #00ffcc;
-        }
+        /* Performance Registry UI Block */
+        #performance-registry { font-family: monospace; font-size: 11px; background: #000; padding: 10px; border-radius: 4px; height: 200px; overflow-y: auto; border: 1px solid #333; }
+        .perf-row { display: flex; justify-content: space-between; padding: 2px 0; border-bottom: 1px solid #111; }
+        .perf-row.warning { color: #ffcc00; }
+        .perf-row.critical { color: #ff4444; font-weight: bold; }
 
-        .status-dot { height: 10px; width: 10px; border-radius: 50%; display: inline-block; margin-right: 8px; }
-        .status-active { background: #00ff00; box-shadow: 0 0 5px #00ff00; }
-        .status-stale { background: #ffcc00; }
-        .status-off { background: #555; }
+        /* Audio Feedback */
+        #fft-viz { width: 100%; height: 60px; background: #000; border: 1px solid #333; margin-top: 10px; }
 
-        #bach-status { font-size: 0.8rem; margin-top: 5px; color: #888; }
+        /* Legend */
+        .legend { display: flex; gap: 10px; font-size: 10px; margin-top: 10px; }
+        .legend-item { display: flex; align-items: center; gap: 5px; }
+        .dot { width: 8px; height: 8px; border-radius: 50%; }
+
+        /* Tuning Progress */
+        #tuning-progress { margin-top: 15px; background: #1a1a1a; padding: 10px; border-radius: 4px; border-left: 3px solid #00ffcc; }
+        .progress-bar-container { width: 100%; height: 10px; background: #333; border-radius: 5px; margin: 5px 0; }
+        .progress-bar-fill { height: 10px; background: #00ffcc; border-radius: 5px; width: 0%; transition: width 0.3s; }
+        .stats-row { display: flex; justify-content: space-between; font-size: 0.8rem; margin-top: 5px; }
+
+        /* Timeline display */
+        #timeline-preview { font-size: 0.8rem; max-height: 150px; overflow-y: auto; background: #111; padding: 5px; border-radius: 4px; margin-top: 10px; }
+        .timeline-item { padding: 2px 0; border-bottom: 1px solid #222; }
     </style>
 </head>
 <body>
 
     <div id="control-panel">
         <div class="section">
-            <h2>System Health</h2>
+            <h2>System Control</h2>
             <div id="connection-status"><span class="status-dot status-off"></span>Firebase Disconnected</div>
-            <div id="mic-status"><span class="status-dot status-off"></span>Mic Offline</div>
-            <canvas id="fft-viz" width="300" height="60" style="margin-top:10px; border:1px solid #444;"></canvas>
+            <div id="mic-status">Microphone: <span style="color:#ff4444">OFF</span></div>
+            <button id="start-mic-btn" class="primary">WAKE CONDUCTOR EAR</button>
+            <div class="legend">
+                <div class="legend-item"><div class="dot" style="background:#333"></div>Offline</div>
+                <div class="legend-item"><div class="dot" style="background:#ffcc00"></div>Syncing</div>
+                <div class="legend-item"><div class="dot" style="background:#00ffcc"></div>Happy</div>
+                <div class="legend-item"><div class="dot" style="background:#ff4444"></div>Dead</div>
+            </div>
         </div>
 
+        <!-- SHOW CONTROL SECTION -->
         <div class="section">
-            <h2>Performance Registry</h2>
+            <h2>🎭 Show Control</h2>
             <button class="btn btn-primary" id="load-config-btn">Load Seat Map (TSV)</button>
             <div id="registry-stats" style="margin-top:10px; font-size: 0.9rem;">
                 Seats Loaded: <span id="count-seats">0</span><br>
                 Active Devices: <span id="count-active">0</span>
             </div>
-        </div>
-
-        <div class="section">
-            <h2>Bach Tuning Movement</h2>
-            <button class="btn" id="load-bach-btn">Load Tuning Manifest</button>
-            <div id="bach-status">Ready to initialize.</div>
-            <div style="display: flex; gap: 5px; margin-top: 10px;">
-                <button class="btn btn-primary" id="play-bach-btn" disabled>Play Bach</button>
-                <button class="btn btn-danger" id="pause-bach-btn" disabled>Pause</button>
+            
+            <button class="go-button" id="go-button">🚀 GO (1s Buffer)</button>
+            
+            <div style="margin-top: 10px;">
+                <label>Timeline JSON:</label>
+                <input type="file" id="timeline-input" accept=".json" style="width: 100%; margin: 5px 0;">
             </div>
-            <button class="btn" id="reset-tuning-btn" style="margin-top:10px; font-size: 0.8rem;">Reset All Latencies</button>
+            
+            <div id="timeline-preview">
+                No timeline loaded
+            </div>
+        </div>
+
+        <!-- DYNAMIC TUNING MODE -->
+        <div class="section">
+            <h2>🎯 Dynamic Tuning: Jesu, Joy</h2>
+            <div id="device-count-display" style="display: flex; justify-content: space-between; background: #1a1a1a; padding: 8px; border-radius: 4px; margin-bottom: 10px;">
+                <span>Active Devices:</span>
+                <span id="device-count-value" style="font-weight: bold; color: #00ffcc;">0</span>
+            </div>
+
+            <div class="btn-group">
+                <button id="refresh-devices-btn" class="secondary">🔄 Refresh List</button>
+                <button id="start-tuning-btn" class="primary">▶️ START TUNING</button>
+                <button id="stop-tuning-btn" style="background:#600; border-color:#a00;">⏹️ STOP</button>
+            </div>
+
+            <button id="load-note-timing-btn" class="secondary" style="margin-top: 5px;">📂 Load Note Timing JSON</button>
+            <input type="file" id="note-timing-input" style="display:none" accept=".json">
+
+            <div id="note-timing-status" style="font-size: 0.7rem; color: #888; margin-top: 5px;">
+                No timing file loaded
+            </div>
+
+            <div id="tuning-progress" style="display: none;">
+                <div style="display: flex; justify-content: space-between;">
+                    <span>Calibration:</span>
+                    <span id="happy-percent">0%</span>
+                </div>
+                <div class="progress-bar-container">
+                    <div id="happy-progress-bar" class="progress-bar-fill" style="width: 0%;"></div>
+                </div>
+                <div class="stats-row">
+                    <span>✅ Happy: <span id="happy-count">0</span></span>
+                    <span>🔄 Syncing: <span id="syncing-count">0</span></span>
+                    <span>❌ Dead: <span id="dead-count">0</span></span>
+                </div>
+            </div>
+
+            <canvas id="fft-viz"></canvas>
+            <div id="detection-log" style="font-size: 10px; color: #00ffcc; margin-top: 5px; height: 40px; overflow: hidden;"></div>
         </div>
 
         <div class="section">
-            <h2>Global Commands</h2>
-            <button class="btn btn-danger" id="kill-all-btn">Emergency Reset (Refresh All)</button>
+            <h2>Performance Registry</h2>
+            <div id="performance-registry">
+                <div class="perf-row"><span>ID</span><span>JITTER</span><span>STATUS</span></div>
+            </div>
         </div>
 
         <div class="section">
-            <h2>Detection Log</h2>
-            <div id="detection-log">System initialized...</div>
+            <h2>Global Cues</h2>
+            <button id="kill-all-btn" style="color: #ff4444;">KILL ALL DEVICES</button>
         </div>
     </div>
 
     <div id="map-container">
-        <canvas id="seat-map"></canvas>
+        <canvas id="seat-map-canvas"></canvas>
     </div>
 
 <script>
@@ -110,196 +173,753 @@ with real-time device discovery and spiral path generation.
         appId: "1:722537253165:web:8e8b6495bd508de35b2ba4"
     };
 
-        firebase.initializeApp(firebaseConfig);
-        const db = firebase.database();
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
 
-        // --- STATE MANAGEMENT ---
-        let seats = [];
-        let activeDevices = {};
-        let tuningManifest = null;
-        let isBachPlaying = false;
-        let audioCtx, analyser, dataArray;
+    // --- MASTER STATE ---
+    let seats = [];
+    let deviceData = {};
+    let audioCtx, analyser, dataArray;
+    let isTuningActive = false;
+    let currentMeasure = 0;
+    let micCoords = { x: 0, y: 0 }; // Tech Table Location
 
-        // FSK State Machine Constants
-        const FREQ_HIGH = 19500;
-        const FREQ_LOW = 19400;
-        const SAMPLE_RATE = 44100;
+    // Tuning-specific state
+    let noteTimings = [];
+    let tuningSchedule = null;
+    let tuningStartTime = 0;
+    let spiralPath = [];
+    let activeDevices = [];
 
-        // --- SEAT MAP LOGIC ---
-        async function loadSeatConfig() {
-            try {
-                // Fetching from Firebase Hosting root
-                const response = await fetch('/seat_config.tsv');
-                const text = await response.text();
-                seats = text.split('\n').slice(1).map(line => {
-                    const [id, x, y, section] = line.split('\t');
-                    return { id, x: parseFloat(x), y: parseFloat(y), section };
-                }).filter(s => s.id);
+    // Timeline state
+    let currentTimeline = null;
+    let serverOffset = 0;
 
-                document.getElementById('count-seats').innerText = seats.length;
-                drawMap();
-                logDetection(`Loaded ${seats.length} seats from TSV.`);
-            } catch (e) {
-                logDetection("Error loading seat_config.tsv: " + e.message);
-            }
-        }
+    // Pillar URLs
+    const PILLAR_URLS = {
+        FL: "https://static.wixstatic.com/mp3/9178d1_9aba02e74fc344808064f364bb505086.mp3",
+        FR: "https://static.wixstatic.com/mp3/9178d1_08a292cbcee448d7b83e464d6a94b377.mp3",
+        BL: "https://static.wixstatic.com/mp3/9178d1_8987080abdb14616a0e9562387923614.mp3",
+        BR: "https://static.wixstatic.com/mp3/9178d1_8b53f52bbce6406ebacae8288777bad5.mp3"
+    };
 
-        function drawMap() {
-            const canvas = document.getElementById('seat-map');
-            const ctx = canvas.getContext('2d');
-            canvas.width = window.innerWidth - 350;
-            canvas.height = window.innerHeight;
+    // UPDATED: New encoded flute URL with pulses at note centers
+    const FLUTE_URL = "https://static.wixstatic.com/mp3/9178d1_711f9f02c8664c2c9dc1522bd7b49111.mp3";
 
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
+    // NEW: Standalone test pulse URL (silent ultrasonic pulse)
+    const TEST_PULSE_URL = "https://static.wixstatic.com/mp3/9178d1_f6b058d4fd0e496a8f18ab1a3bc4d88e.mp3";
 
-            const padding = 50;
-            const minX = Math.min(...seats.map(s => s.x));
-            const maxX = Math.max(...seats.map(s => s.x));
-            const minY = Math.min(...seats.map(s => s.y));
-            const maxY = Math.max(...seats.map(s => s.y));
+    // --- CLOCK SYNC ---
+    const offsetRef = db.ref(".info/serverTimeOffset");
+    offsetRef.on("value", snap => {
+        serverOffset = snap.val() || 0;
+    });
 
-            seats.forEach(seat => {
-                const screenX = padding + (seat.x - minX) / (maxX - minX) * (canvas.width - padding * 2);
-                const screenY = padding + (seat.y - minY) / (maxY - minY) * (canvas.height - padding * 2);
+    // --- 1. SEAT MAP GUI ---
+    const canvas = document.getElementById('seat-map-canvas');
+    const ctx = canvas.getContext('2d');
 
-                const status = activeDevices[seat.id] ? activeDevices[seat.id].status : 'OFFLINE';
+    async function loadSeatConfig() {
+        try {
+            // First try to get seat config from Firebase (uploaded by admin.html)
+            const configSnap = await db.ref('seat_config').once('value');
+            const configData = configSnap.val();
 
-                ctx.beginPath();
-                ctx.arc(screenX, screenY, 6, 0, Math.PI * 2);
-
-                if (status === 'READY') ctx.fillStyle = '#00ffcc';
-                else if (status === 'CALIBRATING') ctx.fillStyle = '#ffcc00';
-                else ctx.fillStyle = '#333';
-
-                ctx.fill();
-
-                if (seat.id.startsWith('PILLAR')) {
-                    ctx.strokeStyle = '#fff';
-                    ctx.lineWidth = 2;
-                    ctx.stroke();
-                }
-
-                ctx.fillStyle = '#666';
-                ctx.font = '8px Arial';
-                ctx.fillText(seat.id, screenX - 10, screenY + 15);
-            });
-        }
-
-        // --- BACH TUNING ORCHESTRATOR ---
-        async function loadBachManifest() {
-            try {
-                const response = await fetch('/tuning_mode.json');
-                tuningManifest = await response.json();
-
-                document.getElementById('bach-status').innerHTML =
-                    `Manifest Loaded: ${tuningManifest.piano_notes.length} notes.<br>` +
-                    `Unique Assets: ${tuningManifest.metadata.unique_assets}`;
-
-                document.getElementById('play-bach-btn').disabled = false;
-                logDetection("Bach Manifest loaded successfully.");
-            } catch (e) {
-                logDetection("Error loading tuning_mode.json: " + e.message);
-            }
-        }
-
-        async function syncBachToDatabase() {
-            if (!tuningManifest) return;
-
-            // Get currently active devices (including seeds)
-            const activeSeatIds = Object.keys(activeDevices).filter(id => activeDevices[id].status !== 'OFFLINE');
-
-            // Separate Pillars from Patrons
-            const pillars = activeSeatIds.filter(id => id.startsWith('PILLAR_'));
-            const patrons = activeSeatIds.filter(id => !id.startsWith('PILLAR_'));
-
-            logDetection(`Orchestrating for ${patrons.length} patrons and ${pillars.length} pillars.`);
-
-            const timeline = {};
-            const startTime = Date.now() + 2000; // 2 second lead time
-
-            // 1. Assign Pillar Beds (Continuous Strings)
-            pillars.forEach(id => {
-                // Map ID (PILLAR_FR) to registry keys
-                let key = '';
-                if (id.includes('_FR')) key = 'front_right';
-                if (id.includes('_FL')) key = 'front_left';
-                if (id.includes('_BR')) key = 'back_right';
-                if (id.includes('_BL')) key = 'back_left';
-
-                if (tuningManifest.pillars[key]) {
-                    timeline[`cue_${id}_bed`] = {
-                        targetSeat: id,
-                        url: tuningManifest.pillars[key],
-                        startTime: startTime,
-                        action: 'PLAY_LOOP',
-                        type: 'AUDIO'
-                    };
-                }
-            });
-
-            // 2. Distribute Flute Melody (Massacred Notes)
-            if (patrons.length > 0) {
-                tuningManifest.piano_notes.forEach((note, index) => {
-                    // DEGENERATE CASE HANDLED: % operator cycles through available devices
-                    const targetId = patrons[index % patrons.length];
-
-                    timeline[`note_${index}`] = {
-                        targetSeat: targetId,
-                        url: note.url,
-                        startTime: startTime + note.ms_offset,
-                        action: 'PLAY_ONCE',
-                        type: 'AUDIO',
-                        noteId: note.id
-                    };
-                });
+            if (configData && configData.seats) {
+                seats = configData.seats;
+                console.log(`📋 Loaded ${seats.length} seats from Firebase`);
             } else {
-                logDetection("WARNING: No patron/seed devices active for melody.");
+                // Fallback to local TSV for development
+                const response = await fetch('seat_config.tsv');
+                const data = await response.text();
+                const rows = data.split('\n').slice(1).map(row => {
+                    const cols = row.split('\t');
+                    return {
+                        id: cols[0],
+                        x: parseFloat(cols[1] || cols[2]),
+                        y: parseFloat(cols[2] || cols[3])
+                    };
+                }).filter(s => s.id && !isNaN(s.x) && !isNaN(s.y));
+                seats = rows;
             }
 
-            // Upload the Movement to the RTDB
-            await db.ref('show/timeline').set(timeline);
-            await db.ref('show/currentCue').set({
-                action: 'START_BACH',
-                startTime: startTime,
-                totalNotes: tuningManifest.piano_notes.length
-            });
+            document.getElementById('count-seats').innerText = seats.length;
+            resizeCanvas();
+            renderMap();
+            logDetection(`Loaded ${seats.length} seats from TSV.`);
+        } catch (e) {
+            logDetection("Error loading seat_config.tsv: " + e.message);
+        }
+    }
 
-            isBachPlaying = true;
-            document.getElementById('pause-bach-btn').disabled = false;
+    function resizeCanvas() {
+        const container = document.getElementById('map-container');
+        canvas.width = container.clientWidth - 40;
+        canvas.height = container.clientHeight - 40;
+        renderMap();
+    }
+
+    function renderMap() {
+        if (!ctx || seats.length === 0) return;
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Find min/max for scaling
+        const xValues = seats.map(s => s.x);
+        const yValues = seats.map(s => s.y);
+        const minX = Math.min(...xValues) - 1;
+        const maxX = Math.max(...xValues) + 1;
+        const minY = Math.min(...yValues) - 1;
+        const maxY = Math.max(...yValues) + 1;
+
+        const scaleX = canvas.width / (maxX - minX);
+        const scaleY = canvas.height / (maxY - minY);
+        const scale = Math.min(scaleX, scaleY) * 0.9;
+
+        const offsetX = (canvas.width - (maxX - minX) * scale) / 2 - minX * scale;
+        const offsetY = (canvas.height - (maxY - minY) * scale) / 2 - minY * scale;
+
+        // Draw Stage Area (front of house)
+        ctx.strokeStyle = '#333';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(minX * scale + offsetX, minY * scale + offsetY,
+                      (maxX - minX) * scale, 30);
+        ctx.fillStyle = '#111';
+        ctx.fillRect(minX * scale + offsetX, minY * scale + offsetY,
+                    (maxX - minX) * scale, 30);
+        ctx.fillStyle = '#666';
+        ctx.font = '10px Arial';
+        ctx.fillText('STAGE', minX * scale + offsetX + 10, minY * scale + offsetY + 20);
+
+        // Draw each seat
+        seats.forEach(seat => {
+            const screenX = seat.x * scale + offsetX;
+            const screenY = seat.y * scale + offsetY;
+
+            // Skip if outside visible area
+            if (screenX < 0 || screenX > canvas.width || screenY < 0 || screenY > canvas.height) return;
+
+            const deviceInfo = deviceData[seat.id];
+            const status = deviceInfo?.status || 'OFFLINE';
+            const isPillar = seat.id.startsWith('PILLAR_');
+
+            // Determine color based on status
+            if (isPillar) {
+                ctx.fillStyle = '#8844cc'; // Purple for pillars
+            } else if (status === 'HAPPY') {
+                ctx.fillStyle = '#00ffcc';
+            } else if (status === 'CALIBRATING' || status === 'SYNCING') {
+                ctx.fillStyle = '#ffcc00';
+            } else if (deviceInfo && deviceInfo.lastSeen && (Date.now() - deviceInfo.lastSeen > 15000)) {
+                ctx.fillStyle = '#ff4444'; // Dead device
+            } else {
+                ctx.fillStyle = '#333';
+            }
+
+            ctx.beginPath();
+            ctx.arc(screenX, screenY, isPillar ? 8 : 5, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Highlight if in current tuning path
+            if (tuningSchedule && tuningSchedule.deviceOrder && tuningSchedule.deviceOrder.includes(seat.id)) {
+                ctx.strokeStyle = '#ffcc00';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            }
+
+            // Draw seat label for first few rows
+            if (seat.y < 10) {
+                ctx.fillStyle = '#888';
+                ctx.font = '8px Arial';
+                ctx.fillText(seat.id, screenX - 10, screenY - 10);
+            }
+        });
+    }
+
+    // --- 2. THE CONDUCTOR'S EAR (FFT & FSK DETECTION) ---
+    async function initMicrophone() {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const source = audioCtx.createMediaStreamSource(stream);
+            analyser = audioCtx.createAnalyser();
+            analyser.fftSize = 2048;
+            source.connect(analyser);
+
+            dataArray = new Uint8Array(analyser.frequencyBinCount);
+            document.getElementById('mic-status').innerHTML = '<span style="color:#00ffcc">ACTIVE</span>';
+            detectSignature();
+            drawFFT();
+        } catch (e) {
+            alert("Mic Access Required for Calibration");
+            document.getElementById('mic-status').innerHTML = '<span style="color:#ff4444">ERROR</span>';
+        }
+    }
+
+    // FSK Pattern Detection: 19.5k -> 19.4k -> 19.5k
+    let patternStep = 0;
+    let lastStepTime = 0;
+    let detectionWindow = [];
+    const DETECTION_WINDOW_SIZE = 10;
+
+    function detectSignature() {
+        if (!analyser || !dataArray) {
+            requestAnimationFrame(detectSignature);
+            return;
         }
 
-        // --- AUDIO ENGINE ---
-        async function initMicrophone() {
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-                analyser = audioCtx.createAnalyser();
-                analyser.fftSize = 2048;
-                const source = audioCtx.createMediaStreamSource(stream);
-                source.connect(analyser);
-                dataArray = new Uint8Array(analyser.frequencyBinCount);
+        analyser.getByteFrequencyData(dataArray);
 
-                document.getElementById('mic-status').innerHTML = '<span class="status-dot status-active"></span>Mic Listening';
-                drawFFT();
-                logDetection("Microphone initialized for FSK detection.");
-            } catch (e) {
-                logDetection("Mic Access Denied: " + e.message);
+        // Frequencies to Bins (Approx)
+        const bin195 = Math.round(19500 / (audioCtx.sampleRate / 2048));
+        const bin194 = Math.round(19400 / (audioCtx.sampleRate / 2048));
+
+        // Ensure bins are within range
+        if (bin195 >= dataArray.length || bin194 >= dataArray.length) {
+            requestAnimationFrame(detectSignature);
+            return;
+        }
+
+        const val195 = dataArray[bin195];
+        const val194 = dataArray[bin194];
+        const threshold = 160;
+
+        const now = Date.now();
+
+        // Add to detection window
+        detectionWindow.push({
+            time: now,
+            val195: val195,
+            val194: val194
+        });
+
+        if (detectionWindow.length > DETECTION_WINDOW_SIZE) {
+            detectionWindow.shift();
+        }
+
+        // Look for the pattern within the detection window
+        let found195a = false;
+        let found194 = false;
+        let found195b = false;
+        let patternTime = null;
+
+        for (let i = 0; i < detectionWindow.length; i++) {
+            const sample = detectionWindow[i];
+
+            if (sample.val195 > threshold) {
+                if (!found195a) {
+                    found195a = true;
+                } else if (found194 && !found195b) {
+                    found195b = true;
+                    patternTime = sample.time;
+                }
+            } else if (sample.val194 > threshold) {
+                if (found195a && !found194) {
+                    found194 = true;
+                }
             }
         }
 
-        function drawFFT() {
-            const vCtx = document.getElementById('fft-viz').getContext('2d');
-            analyser.getByteFrequencyData(dataArray);
-            vCtx.fillStyle = '#000';
-            vCtx.fillRect(0,0,300,60);
-            vCtx.fillStyle = '#00ffcc';
-            for(let i=0; i<dataArray.length; i++) {
-                vCtx.fillRect(i, 60 - dataArray[i]/4, 1, dataArray[i]/4);
-            }
+        // If we found the complete pattern
+        if (found195a && found194 && found195b && patternTime) {
+            const tHeard = patternTime + serverOffset;
+            broadcastDetection(tHeard);
+            logDetection(`FSK Match at ${tHeard}`);
+
+            // Clear detection window to avoid double-counting
+            detectionWindow = [];
+        }
+
+        // Simple state machine for real-time feedback
+        if (val195 > threshold && patternStep === 0) {
+            patternStep = 1;
+            lastStepTime = now;
+        } else if (val194 > threshold && patternStep === 1 && (now - lastStepTime < 100)) {
+            patternStep = 2;
+            lastStepTime = now;
+        } else if (val195 > threshold && patternStep === 2 && (now - lastStepTime < 100)) {
+            patternStep = 0;
+        }
+
+        // Timeout reset
+        if (now - lastStepTime > 150) patternStep = 0;
+
+        requestAnimationFrame(detectSignature);
+    }
+
+    function broadcastDetection(tHeard) {
+        db.ref('tuning/last_heard').set(tHeard);
+    }
+
+    function drawFFT() {
+        if (!analyser || !dataArray) {
             requestAnimationFrame(drawFFT);
+            return;
         }
 
-        // --- FIREBASE LISTENERS ---
+        const vCtx = document.getElementById('fft-viz').getContext('2d');
+        analyser.getByteFrequencyData(dataArray);
+        vCtx.fillStyle = '#000';
+        vCtx.fillRect(0,0,300,60);
+        vCtx.fillStyle = '#00ffcc';
+
+        // Draw only the relevant frequency range (around 19.5kHz)
+        const startBin = Math.round(19000 / (audioCtx.sampleRate / 2048));
+        const endBin = Math.round(20000 / (audioCtx.sampleRate / 2048));
+        
+        for(let i = startBin; i < endBin && i < dataArray.length; i++) {
+            const x = (i - startBin) * (300 / (endBin - startBin));
+            vCtx.fillRect(x, 60 - dataArray[i]/4, 2, dataArray[i]/4);
+        }
+        
+        requestAnimationFrame(drawFFT);
+    }
+
+    // --- 3. SHOW CONTROL (GO BUTTON & TIMELINE) ---
+    document.getElementById('timeline-input').onchange = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            try {
+                currentTimeline = JSON.parse(event.target.result);
+                updateTimelinePreview();
+                logDetection(`Loaded timeline: ${file.name}`);
+            } catch (err) {
+                alert("Error parsing timeline JSON: " + err.message);
+            }
+        };
+        reader.readAsText(file);
+    };
+
+    function updateTimelinePreview() {
+        const preview = document.getElementById('timeline-preview');
+        if (!currentTimeline) {
+            preview.innerHTML = 'No timeline loaded';
+            return;
+        }
+
+        let html = '';
+        const cueCount = Object.keys(currentTimeline).length;
+        html += `<div>📋 ${cueCount} cues loaded</div>`;
+        
+        // Show first 5 cues as preview
+        Object.entries(currentTimeline).slice(0, 5).forEach(([key, cue]) => {
+            html += `<div class="timeline-item">${key}: ${cue.action || 'PLAY'} at ${cue.startTime || 0}ms</div>`;
+        });
+        
+        if (cueCount > 5) {
+            html += `<div>... and ${cueCount - 5} more</div>`;
+        }
+        
+        preview.innerHTML = html;
+    }
+
+    document.getElementById('go-button').onclick = async () => {
+        if (!currentTimeline) {
+            alert("Please load a timeline JSON file first");
+            return;
+        }
+
+        // Calculate start time with 1 second buffer
+        const startTime = Date.now() + 1000; // 1 second buffer
+
+        // Upload timeline to Firebase with adjusted timings
+        const adjustedTimeline = {};
+        Object.entries(currentTimeline).forEach(([key, cue]) => {
+            adjustedTimeline[key] = {
+                ...cue,
+                startTime: startTime + (cue.startTime || 0),
+                triggerTime: startTime + (cue.triggerTime || 0)
+            };
+        });
+
+        await db.ref('show/timeline').set(adjustedTimeline);
+        
+        // Send GO signal
+        await db.ref('show/currentCue').set({
+            action: 'GO',
+            startTime: startTime,
+            bufferMs: 1000,
+            triggerTime: startTime
+        });
+
+        logDetection(`🚀 GO signal sent with ${startTime} start time`);
+    };
+
+    // --- 4. DYNAMIC TUNING ENGINE ---
+    function setupNoteTimingLoader() {
+        document.getElementById('load-note-timing-btn').onclick = () => {
+            document.getElementById('note-timing-input').click();
+        };
+
+        document.getElementById('note-timing-input').onchange = (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                try {
+                    const data = JSON.parse(event.target.result);
+                    if (data.piano_notes) {
+                        noteTimings = data.piano_notes.map((note, index) => ({
+                            index: index,
+                            startMs: note.ms_offset,
+                            durationMs: note.duration_ms || 500,
+                            measure: note.measure,
+                            id: note.id,
+                            pitch: note.pitch
+                        }));
+                        document.getElementById('note-timing-status').innerHTML =
+                            `✅ Loaded ${noteTimings.length} notes from ${file.name}`;
+                        console.log(`📋 Loaded ${noteTimings.length} note timings`);
+                    } else {
+                        alert("Invalid timing file: missing 'piano_notes' array");
+                    }
+                } catch (err) {
+                    alert("Error parsing JSON: " + err.message);
+                }
+            };
+            reader.readAsText(file);
+        };
+    }
+
+    async function refreshActiveDevices() {
+        const snapshot = await db.ref('devices').once('value');
+        const devices = snapshot.val() || {};
+
+        activeDevices = [];
+        const now = Date.now();
+
+        Object.entries(devices).forEach(([id, data]) => {
+            if (data.lastSeen && (now - data.lastSeen < 30000)) {
+                activeDevices.push({
+                    id: id,
+                    x: data.x || 0,
+                    y: data.y || 0,
+                    status: data.status || 'unknown',
+                    lastSeen: data.lastSeen,
+                    isPillar: id.startsWith('PILLAR_')
+                });
+            }
+        });
+
+        document.getElementById('device-count-value').innerText = activeDevices.length;
+        return activeDevices;
+    }
+
+    function createSpiralPath(devices) {
+        const patronDevices = devices.filter(d => !d.id.startsWith('PILLAR_'));
+
+        if (patronDevices.length === 0) return [];
+        if (patronDevices.length === 1) return [patronDevices[0].id];
+
+        const centerX = patronDevices.reduce((sum, d) => sum + d.x, 0) / patronDevices.length;
+        const centerY = patronDevices.reduce((sum, d) => sum + d.y, 0) / patronDevices.length;
+
+        const withPolar = patronDevices.map(d => ({
+            ...d,
+            distance: Math.sqrt(Math.pow(d.x - centerX, 2) + Math.pow(d.y - centerY, 2)),
+            angle: Math.atan2(d.y - centerY, d.x - centerX)
+        }));
+
+        const sorted = withPolar.sort((a, b) => a.distance - b.distance);
+        return sorted.map(d => d.id);
+    }
+
+    function distributeNotes(deviceOrder) {
+        if (deviceOrder.length === 0 || noteTimings.length === 0) return null;
+
+        const schedule = [];
+        const deviceCount = deviceOrder.length;
+
+        noteTimings.forEach((note, index) => {
+            const deviceIndex = index % deviceCount;
+            const deviceId = deviceOrder[deviceIndex];
+            const device = activeDevices.find(d => d.id === deviceId);
+
+            schedule.push({
+                noteIndex: index,
+                startMs: note.startMs,
+                durationMs: note.durationMs || 500,
+                deviceId: deviceId,
+                originX: device ? device.x : 7.75,
+                originY: device ? device.y : 12.5,
+                pulsePositionMs: note.startMs + (note.durationMs / 2)
+            });
+        });
+
+        return {
+            deviceOrder: deviceOrder,
+            notes: schedule,
+            totalNotes: noteTimings.length,
+            deviceCount: deviceCount
+        };
+    }
+
+    async function startPillars(startTime) {
+        const pillarStartTime = startTime - 1000;
+
+        for (const [position, url] of Object.entries(PILLAR_URLS)) {
+            await db.ref('show/currentCue').set({
+                type: "AUDIO",
+                file: url,
+                originX: position === 'FL' || position === 'BL' ? 0 : 15.5,
+                originY: position === 'FL' || position === 'FR' ? 0 : 25,
+                radius: 30,
+                rolloff: "none",
+                triggerTime: pillarStartTime,
+                scheduledTime: pillarStartTime,
+                duration: 60000,
+                metadata: {
+                    purpose: "tuning_fabric",
+                    pillar: position
+                }
+            });
+        }
+    }
+
+    async function startTuningMovement() {
+        if (noteTimings.length === 0) {
+            alert("Please load note timing JSON file first");
+            return;
+        }
+
+        await refreshActiveDevices();
+
+        if (activeDevices.length === 0) {
+            alert("No active devices found!");
+            return;
+        }
+
+        const deviceOrder = createSpiralPath(activeDevices);
+
+        if (deviceOrder.length === 0) {
+            alert("No patron devices found for flute path");
+            return;
+        }
+
+        tuningSchedule = distributeNotes(deviceOrder);
+        tuningStartTime = Date.now() + 3000;
+
+        await startPillars(tuningStartTime);
+
+        await db.ref('tuning/current').set({
+            status: 'ACTIVE',
+            fluteUrl: FLUTE_URL,
+            pillars: PILLAR_URLS,
+            schedule: tuningSchedule.notes,
+            deviceOrder: deviceOrder,
+            startTime: tuningStartTime,
+            totalNotes: tuningSchedule.totalNotes,
+            deviceCount: tuningSchedule.deviceCount,
+            generatedAt: Date.now(),
+            activeDevices: activeDevices.map(d => ({
+                id: d.id,
+                x: d.x,
+                y: d.y,
+                isPillar: d.isPillar
+            }))
+        });
+
+        await db.ref('show/currentCue').set({
+            type: "TUNING_MOVEMENT",
+            file: FLUTE_URL,
+            triggerTime: tuningStartTime,
+            scheduledTime: tuningStartTime,
+            duration: noteTimings[noteTimings.length-1].startMs + 1000,
+            metadata: {
+                purpose: "tuning_movement",
+                scheduleRef: "tuning/current",
+                pulsePosition: "center"
+            }
+        });
+
+        isTuningActive = true;
+        document.getElementById('tuning-progress').style.display = 'block';
+        logDetection(`🎯 Tuning started: ${deviceOrder.length} devices, ${noteTimings.length} notes`);
+        renderMap();
+    }
+
+    async function stopTuning() {
+        await db.ref('show/currentCue').set({
+            action: 'KILL',
+            triggerTime: Date.now()
+        });
+
+        await db.ref('tuning/current').remove();
+
+        isTuningActive = false;
+        tuningSchedule = null;
+
+        document.getElementById('tuning-progress').style.display = 'none';
+        logDetection("⏹️ Tuning stopped");
+    }
+
+    async function testSeat(seatId) {
+        const seat = seats.find(s => s.id === seatId);
+        if (!seat) return;
+
+        const pulseTime = Date.now() + 1000;
+
+        await db.ref('show/currentCue').set({
+            type: "AUDIO",
+            file: TEST_PULSE_URL,
+            startMs: 100,
+            durationMs: 50,
+            originX: seat.x,
+            originY: seat.y,
+            radius: 0.2,
+            rolloff: "linear",
+            triggerTime: pulseTime,
+            scheduledTime: pulseTime,
+            metadata: {
+                purpose: "seat_test",
+                seatId: seatId
+            }
+        });
+
+        logDetection(`🔊 Silent test pulse sent to ${seatId}`);
+    }
+
+    // --- 5. PERFORMANCE REGISTRY & STATUS MONITORING ---
+    function initListeners() {
+        db.ref('devices').on('value', snap => {
+            deviceData = snap.val() || {};
+            updateCalibrationStats();
+            renderMap();
+            updatePerformanceRegistry();
+        });
+
+        setInterval(() => {
+            if (isTuningActive) {
+                updateCalibrationStats();
+            }
+        }, 2000);
+    }
+
+    function updateCalibrationStats() {
+        const now = Date.now();
+        let happy = 0, syncing = 0, dead = 0;
+
+        Object.entries(deviceData).forEach(([id, data]) => {
+            if (id.startsWith('PILLAR_')) return;
+
+            if (data.status === 'HAPPY') {
+                happy++;
+            } else if (data.status === 'CALIBRATING' || data.status === 'SYNCING') {
+                syncing++;
+            }
+
+            if (data.lastSeen && (now - data.lastSeen > 15000)) {
+                dead++;
+            }
+        });
+
+        const total = happy + syncing;
+        const percent = total > 0 ? Math.round((happy / total) * 100) : 0;
+
+        document.getElementById('happy-count').innerText = happy;
+        document.getElementById('syncing-count').innerText = syncing;
+        document.getElementById('dead-count').innerText = dead;
+        document.getElementById('happy-percent').innerText = percent + '%';
+        document.getElementById('happy-progress-bar').style.width = percent + '%';
+    }
+
+    function updatePerformanceRegistry() {
+        const registry = document.getElementById('performance-registry');
+        registry.innerHTML = '<div class="perf-row" style="font-weight:bold"><span>ID</span><span>JITTER</span><span>STATUS</span></div>';
+
+        Object.keys(deviceData).slice(0, 20).forEach(id => {
+            const dev = deviceData[id];
+            const row = document.createElement('div');
+            row.className = 'perf-row';
+
+            const lastSeen = dev.lastSeen ? Date.now() - dev.lastSeen : null;
+            if (lastSeen && lastSeen > 15000) row.className += ' critical';
+            else if (dev.performance?.lowPerf) row.className += ' warning';
+
+            row.innerHTML = `
+                <span>${id.substring(0, 8)}...</span>
+                <span>${dev.performance?.jitter || '--'}ms</span>
+                <span>${dev.status || 'IDLE'}</span>
+            `;
+            registry.appendChild(row);
+        });
+    }
+
+    // --- UI BINDINGS ---
+    document.getElementById('start-mic-btn').onclick = initMicrophone;
+    document.getElementById('load-config-btn').onclick = loadSeatConfig;
+    document.getElementById('refresh-devices-btn').onclick = async () => {
+        await refreshActiveDevices();
+        renderMap();
+    };
+    document.getElementById('start-tuning-btn').onclick = startTuningMovement;
+    document.getElementById('stop-tuning-btn').onclick = stopTuning;
+    document.getElementById('kill-all-btn').onclick = () => {
+        if(confirm("Refresh all patron devices?")) {
+            db.ref('show/currentCue').set({ action: 'KILL', triggerTime: Date.now() });
+            logDetection("COMMAND: Global Kill Signal sent.");
+        }
+    };
+
+    // Click on seat map to test individual seat
+    canvas.addEventListener('click', (e) => {
+        if (!isTuningActive) return;
+
+        const rect = canvas.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+
+        let closestSeat = null;
+        let minDist = Infinity;
+
+        seats.forEach(seat => {
+            const xValues = seats.map(s => s.x);
+            const yValues = seats.map(s => s.y);
+            const minX = Math.min(...xValues) - 1;
+            const maxX = Math.max(...xValues) + 1;
+            const minY = Math.min(...yValues) - 1;
+            const maxY = Math.max(...yValues) + 1;
+
+            const scaleX = canvas.width / (maxX - minX);
+            const scaleY = canvas.height / (maxY - minY);
+            const scale = Math.min(scaleX, scaleY) * 0.9;
+
+            const offsetX = (canvas.width - (maxX - minX) * scale) / 2 - minX * scale;
+            const offsetY = (canvas.height - (maxY - minY) * scale) / 2 - minY * scale;
+
+            const screenX = seat.x * scale + offsetX;
+            const screenY = seat.y * scale + offsetY;
+
+            const dist = Math.sqrt(Math.pow(mouseX - screenX, 2) + Math.pow(mouseY - screenY, 2));
+            if (dist < minDist) {
+                minDist = dist;
+                closestSeat = seat;
+            }
+        });
+
+        if (closestSeat && minDist < 20) {
+            testSeat(closestSeat.id);
+        }
+    });
+
+    function logDetection(msg) {
+        const log = document.getElementById('detection-log');
+        const now = new Date().toLocaleTimeString().split(' ')[0];
+        log.innerHTML = `[${now}] ${msg}<br>` + log.innerHTML;
+        if (log.children.length > 3) log.removeChild(log.lastChild);
+    }
+
+    // Initialize everything
+    window.onload = () => {
+        loadSeatConfig();
+        setupNoteTimingLoader();
+        initListeners();
+        
+        // Connection status
         db.ref('.info/connected').on('value', snap => {
             const el = document.getElementById('connection-status');
             if (snap.val() === true) {
@@ -308,56 +928,10 @@ with real-time device discovery and spiral path generation.
                 el.innerHTML = '<span class="status-dot status-off"></span>Firebase Disconnected';
             }
         });
+    };
 
-        db.ref('devices').on('value', snap => {
-            activeDevices = snap.val() || {};
-            document.getElementById('count-active').innerText = Object.keys(activeDevices).length;
-            drawMap();
-        });
+    window.onresize = resizeCanvas;
 
-        // --- UI HANDLERS ---
-        document.getElementById('load-config-btn').onclick = loadSeatConfig;
-        document.getElementById('load-bach-btn').onclick = loadBachManifest;
-
-        document.getElementById('play-bach-btn').onclick = async () => {
-            if (!audioCtx) await initMicrophone();
-            syncBachToDatabase();
-        };
-
-        document.getElementById('pause-bach-btn').onclick = () => {
-            db.ref('show/currentCue/action').set('PAUSE');
-            isBachPlaying = false;
-            logDetection("Bach Movement Paused.");
-        };
-
-        document.getElementById('kill-all-btn').onclick = () => {
-            if(confirm("Refresh all patron devices? This will stop all movements.")) {
-                db.ref('show/currentCue').set({ action: 'KILL', startTime: Date.now() });
-                db.ref('show/timeline').remove();
-            }
-        };
-
-        document.getElementById('reset-tuning-btn').onclick = () => {
-            if(confirm("Reset all stored hardware latencies?")) {
-                Object.keys(activeDevices).forEach(id => {
-                    db.ref(`devices/${id}/latency`).set(0);
-                    db.ref(`devices/${id}/status`).set('CALIBRATING');
-                });
-            }
-        };
-
-        function logDetection(msg) {
-            const log = document.getElementById('detection-log');
-            const now = new Date().toLocaleTimeString().split(' ')[0];
-            log.innerHTML = `[${now}] ${msg}<br>` + log.innerHTML;
-        }
-
-        window.onload = () => {
-            loadSeatConfig();
-        };
-
-        window.onresize = drawMap;
-
-    </script>
+</script>
 </body>
 </html>
