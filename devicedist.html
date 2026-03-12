@@ -420,16 +420,13 @@ devicedist.html: Feature List
         }
 
         // --- INDIVIDUAL SEAT TEST HANDLER ---
+        // --- INDIVIDUAL SEAT TEST HANDLER ---
         function handleSeatTest(cue, startTime) {
             console.log(`🔊 Received seat test for ${mySeat.id}`);
 
-            // The test pulse MP3 has the ultrasonic FSK at a specific position
-            // From bach_barber.py, the test pulse is: 100ms silence + 50ms FSK + 100ms silence
-            // The FSK pattern is at position 100ms (after the initial silence)
-            const pulsePositionMs = 100; // Position of the ultrasonic FSK in the test MP3
-
-            // Calculate when the pulse actually plays
-            const pulseTime = cue.startTime + pulsePositionMs;
+            // conductor.html uses startMs:100 to skip the silence, so the pulse plays immediately
+            // No need to add an offset - the FSK starts at time 0 in the playback
+            const pulseTime = cue.startTime; // Pulse plays immediately when audio starts
 
             // Schedule the pulse tracking
             const now = Date.now() + serverOffset;
