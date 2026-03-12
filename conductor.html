@@ -13,7 +13,7 @@ Features:
 - Seat map visualization with status indicators
 
 Note: All configuration uploads (seat_config.tsv, tuning_mode.json,
-pillar_config.json, movement manifests) are handled by admin.html
+pillar_config.json, visual_timeline.json) are handled by admin.html
 -->
 <html lang="en">
 <head>
@@ -64,7 +64,7 @@ pillar_config.json, movement manifests) are handled by admin.html
         .stats-row { display: flex; justify-content: space-between; font-size: 0.8rem; margin-top: 5px; }
 
         /* Movement selection */
-        .movement-selector { margin: 10px 0; }
+        .movement-selector { margin: 10px 0; max-height: 150px; overflow-y: auto; }
         .movement-btn { background: #222; text-align: left; padding: 8px; margin: 2px 0; }
         .movement-btn.active { background: #00ffcc; color: #000; border-left: 4px solid #fff; }
     </style>
@@ -98,9 +98,10 @@ pillar_config.json, movement manifests) are handled by admin.html
             <div id="timeline-status" style="background: #111; padding: 10px; border-radius: 4px; margin: 10px 0;">
                 <div>Current: <span id="current-movement-name">None</span></div>
                 <div>Pillars: <span id="pillar-count">0</span>/4 loaded</div>
+                <div>Cues: <span id="cue-count">0</span></div>
             </div>
 
-            <button class="go-button" id="go-button" disabled>🚀 GO (1s Buffer)</button>
+            <button class="go-button" id="go-button" disabled>🚀 GO (with buffer)</button>
         </div>
 
         <!-- DYNAMIC TUNING MODE -->
@@ -195,7 +196,7 @@ pillar_config.json, movement manifests) are handled by admin.html
     let currentMovement = null;
     let serverOffset = 0;
 
-    // Pillar URLs - FIXED: Now loaded from movement manifest, not pillar_config.json
+    // Pillar URLs - loaded from movement cues
     let PILLAR_URLS = {};
 
     // Tuning URLs (loaded from tuning_mode.json)
@@ -277,12 +278,13 @@ pillar_config.json, movement manifests) are handled by admin.html
 
     async function loadMovements() {
         try {
-            // Load the show manifest which contains references to all movements
+            // Load the show manifest which contains the full timeline with cues
             const showSnap = await db.ref('show').once('value');
             const showData = showSnap.val();
 
             if (showData && showData.movements) {
                 movements = showData.movements;
+                console.log(`📋 Loaded ${movements.length} movements from Firebase`);
 
                 // Render movement buttons
                 renderMovementButtons();
@@ -308,75 +310,53 @@ pillar_config.json, movement manifests) are handled by admin.html
         movements.forEach((movement, index) => {
             const btn = document.createElement('button');
             btn.className = 'movement-btn';
-            if (currentMovement && currentMovement.name === movement.name) {
+            // Compare using movement_name, not name
+            if (currentMovement && currentMovement.movement_name === movement.movement_name) {
                 btn.classList.add('active');
             }
-            btn.innerHTML = `${movement.emoji || '🎵'} ${movement.name}`;
+            btn.innerHTML = `${movement.emoji || '🎵'} ${movement.movement_name}`;
             btn.onclick = () => selectMovement(index);
             container.appendChild(btn);
         });
     }
 
+    // --- FIX 1: selectMovement() now uses inline movement data, no secondary fetch ---
     async function selectMovement(index) {
         const movement = movements[index];
         if (!movement) return;
 
-        // Update UI
+        // Update UI buttons
         document.querySelectorAll('.movement-btn').forEach((btn, i) => {
-            if (i === index) btn.classList.add('active');
-            else btn.classList.remove('active');
+            btn.classList.toggle('active', i === index);
         });
 
-        document.getElementById('current-movement-name').innerText = movement.name;
+        // movement already has .cues[] inline from visual_timeline.json - no secondary fetch needed
+        currentMovement = movement;
 
-        // Load the movement manifest from Firebase
-        if (movement.manifest_path) {
-            try {
-                const manifestSnap = await db.ref(movement.manifest_path).once('value');
-                const manifest = manifestSnap.val();
+        document.getElementById('go-button').innerText = `🚀 GO (in ${movement.buffer_s}s)`;
 
-                if (manifest) {
-                    currentMovement = {
-                        ...movement,
-                        manifest: manifest
-                    };
-
-                    // FIXED: Load pillar URLs from manifest.audio_assets_pillars
-                    if (manifest.audio_assets_pillars) {
-                        PILLAR_URLS = {};
-
-                        // Map pillar positions to URLs
-                        if (manifest.audio_assets_pillars.front_left) {
-                            PILLAR_URLS.FL = manifest.audio_assets_pillars.front_left;
-                        }
-                        if (manifest.audio_assets_pillars.front_right) {
-                            PILLAR_URLS.FR = manifest.audio_assets_pillars.front_right;
-                        }
-                        if (manifest.audio_assets_pillars.back_left) {
-                            PILLAR_URLS.BL = manifest.audio_assets_pillars.back_left;
-                        }
-                        if (manifest.audio_assets_pillars.back_right) {
-                            PILLAR_URLS.BR = manifest.audio_assets_pillars.back_right;
-                        }
-
-                        const pillarCount = Object.keys(PILLAR_URLS).length;
-                        document.getElementById('pillar-count').innerText = pillarCount;
-
-                        logDetection(`Loaded ${pillarCount} pillar URLs from ${movement.name}`);
-                    } else {
-                        logDetection(`No pillar URLs found in ${movement.name} manifest`);
-                    }
-
-                    // Enable GO button if we have a valid manifest
-                    document.getElementById('go-button').disabled = false;
-                }
-            } catch (e) {
-                logDetection(`Error loading manifest for ${movement.name}: ${e.message}`);
+        // Extract pillar URLs from the first cue's assets
+        PILLAR_URLS = {};
+        const firstCue = movement.cues?.[0];
+        (firstCue?.assets || []).forEach(asset => {
+            if (asset.type === 'pillar') {
+                const pos = asset.id.replace('PILLAR_', ''); // FL, FR, BL, BR
+                PILLAR_URLS[pos] = asset.audio_url;
             }
-        }
+        });
+
+        const pillarCount = Object.keys(PILLAR_URLS).length;
+        const cueCount = movement.cues?.length || 0;
+
+        document.getElementById('pillar-count').innerText = pillarCount;
+        document.getElementById('cue-count').innerText = cueCount;
+        document.getElementById('current-movement-name').innerText = movement.movement_name;
+        document.getElementById('go-button').disabled = false;
+
+        logDetection(`Selected: ${movement.movement_name} | ${pillarCount} pillars, ${cueCount} cues`);
     }
 
-    // FIXED: Function to load default pillar URLs for tuning mode
+    // Function to load default pillar URLs for tuning mode
     function loadDefaultPillarUrls() {
         PILLAR_URLS = { ...DEFAULT_PILLAR_URLS };
         const pillarCount = Object.keys(PILLAR_URLS).length;
@@ -611,27 +591,26 @@ pillar_config.json, movement manifests) are handled by admin.html
         requestAnimationFrame(drawFFT);
     }
 
-    // --- 3. SHOW CONTROL (GO BUTTON) ---
+    // --- FIX 2: GO BUTTON now sends cues array directly, no manifest.timeline ---
     document.getElementById('go-button').onclick = async () => {
-        if (!currentMovement || !currentMovement.manifest) {
-            alert("No movement selected or manifest not loaded");
+        if (!currentMovement) {
+            alert("No movement selected");
             return;
         }
 
-        // Calculate start time with 1 second buffer
-        const startTime = Date.now() + 1000; // 1 second buffer
+        const bufferMs = (currentMovement.buffer_s || 1.0) * 1000;
+        const startTime = Date.now() + serverOffset + bufferMs;
+        const startTimeStr = new Date(startTime).toLocaleTimeString();
 
-        // Send GO signal with the current movement's timeline
         await db.ref('show/currentCue').set({
-            action: 'GO',
+            action:    'GO',
+            movement:  currentMovement.movement_name,
             startTime: startTime,
-            bufferMs: 1000,
-            triggerTime: startTime,
-            movement: currentMovement.name,
-            timeline: currentMovement.manifest.timeline || {}
+            bufferMs:  bufferMs,
+            cues:      currentMovement.cues   // the array from visual_timeline.json, verbatim
         });
 
-        logDetection(`🚀 GO signal sent for "${currentMovement.name}" at ${startTime}`);
+        logDetection(`🚀 GO: "${currentMovement.movement_name}" at ${startTimeStr} (buffer: ${bufferMs/1000}s)`);
     };
 
     // --- 4. DYNAMIC TUNING ENGINE ---
@@ -709,7 +688,7 @@ pillar_config.json, movement manifests) are handled by admin.html
     }
 
     async function startPillars(startTime) {
-        // FIXED: Check if we have pillar URLs, if not try to load defaults
+        // Check if we have pillar URLs, if not try to load defaults
         if (Object.keys(PILLAR_URLS).length === 0) {
             logDetection("No pillar URLs loaded - attempting to load defaults");
             loadDefaultPillarUrls();
@@ -771,7 +750,7 @@ pillar_config.json, movement manifests) are handled by admin.html
         tuningSchedule = distributeNotes(deviceOrder);
         tuningStartTime = Date.now() + 3000;
 
-        // FIXED: Ensure we have pillar URLs before starting
+        // Ensure we have pillar URLs before starting
         if (Object.keys(PILLAR_URLS).length === 0) {
             logDetection("No pillar URLs from movement, loading defaults");
             loadDefaultPillarUrls();
