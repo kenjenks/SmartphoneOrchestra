@@ -258,36 +258,96 @@ devicedist.html: Feature List
         const FPS_TARGET = 30;
         const FRAME_DURATION = 1000 / FPS_TARGET; // 33.33ms
 
-        // --- IDENTITY RESOLUTION ---
+        // --- IDENTITY RESOLUTION - FIXED: Now reads from Firebase seat_config ---
         async function resolveIdentity() {
             try {
-                const response = await fetch('seat_config.tsv');
-                const data = await response.text();
-                const rows = data.split('\n').map(r => r.split('\t'));
-
-                // For production, identity is usually URL-param or persistent cookie
+                // Get seat ID from URL parameter
                 const urlParams = new URLSearchParams(window.location.search);
-                const seatId = urlParams.get('seat') || 'G12'; // Default for testing
+                const seatId = urlParams.get('seat');
 
-                const config = rows.find(r => r[0] === seatId);
-                if (config) {
-                    mySeat = { id: config[0], x: parseFloat(config[1]), y: parseFloat(config[2]) };
-                    document.getElementById('seat-label').innerText = `Seat ${mySeat.id}`;
-                    document.getElementById('id-ind').className = 'indicator active';
+                if (!seatId) {
+                    console.warn("No seat ID in URL, using default for testing");
+                    document.getElementById('seat-label').innerText = `No Seat ID (using default)`;
+                    // For testing, use a default seat
+                    mySeat = { id: 'G12', x: 7.75, y: 12.5 };
+                    document.getElementById('id-ind').className = 'indicator syncing';
                     return true;
                 }
-            } catch (e) {
-                console.error("Identity Error:", e);
+
+                document.getElementById('seat-label').innerText = `Seat ${seatId} (loading...)`;
+
+                // Read from seat_config/seats where admin.html uploads
+                const seatsSnap = await db.ref('seat_config/seats').once('value');
+                const seatsData = seatsSnap.val();
+
+                if (!seatsData) {
+                    console.warn("No seat data in Firebase, falling back to local TSV");
+                    // Fallback to local TSV
+                    const response = await fetch('seat_config.tsv');
+                    const data = await response.text();
+                    const rows = data.split('\n').map(r => r.split('\t'));
+                    const config = rows.find(r => r[0] === seatId);
+
+                    if (config) {
+                        mySeat = { id: config[0], x: parseFloat(config[1]), y: parseFloat(config[2]) };
+                        document.getElementById('seat-label').innerText = `Seat ${mySeat.id}`;
+                        document.getElementById('id-ind').className = 'indicator active';
+
+                        // Also upload to Firebase for future reference
+                        await db.ref(`seat_config/seats/${seatId}`).set({
+                            id: mySeat.id,
+                            x: mySeat.x,
+                            y: mySeat.y
+                        });
+
+                        return true;
+                    }
+                } else {
+                    // Find seat by ID in the seats object
+                    // seatsData is an object with seat IDs as keys
+                    if (seatsData[seatId]) {
+                        mySeat = {
+                            id: seatId,
+                            x: seatsData[seatId].x,
+                            y: seatsData[seatId].y
+                        };
+                        document.getElementById('seat-label').innerText = `Seat ${mySeat.id}`;
+                        document.getElementById('id-ind').className = 'indicator active';
+                        console.log(`✅ Resolved seat ${seatId} at (${mySeat.x}, ${mySeat.y})`);
+                        return true;
+                    } else {
+                        console.warn(`Seat ${seatId} not found in Firebase`);
+                        // Try to search as array if it's an array
+                        if (Array.isArray(seatsData)) {
+                            const config = seatsData.find(s => s.id === seatId);
+                            if (config) {
+                                mySeat = { id: config.id, x: config.x, y: config.y };
+                                document.getElementById('seat-label').innerText = `Seat ${mySeat.id}`;
+                                document.getElementById('id-ind').className = 'indicator active';
+                                console.log(`✅ Resolved seat ${seatId} from array`);
+                                return true;
+                            }
+                        }
+                    }
+                }
+
+                console.error(`Seat ${seatId} not found in any source`);
+                document.getElementById('seat-label').innerText = `Seat ${seatId} NOT FOUND`;
                 document.getElementById('id-ind').className = 'indicator error';
+                return false;
+
+            } catch (e) {
+                console.error("Identity Resolution Error:", e);
+                document.getElementById('id-ind').className = 'indicator error';
+                return false;
             }
-            return false;
         }
 
         // --- CLOCK SYNCHRONIZATION ---
         function syncClock() {
             const offsetRef = db.ref(".info/serverTimeOffset");
             offsetRef.on("value", snap => {
-                serverOffset = snap.val();
+                serverOffset = snap.val() || 0;
                 document.getElementById('sync-ind').className = 'indicator active';
             });
         }
@@ -876,16 +936,30 @@ devicedist.html: Feature List
 
             // 4. Initialize tuning schedule listener
             initTuningListener();
+
+            // 5. Register this device in Firebase
+            if (mySeat) {
+                db.ref(`devices/${mySeat.id}`).update({
+                    lastSeen: Date.now() + serverOffset,
+                    status: 'ACTIVE',
+                    x: mySeat.x,
+                    y: mySeat.y
+                });
+            }
         };
 
         window.onload = async () => {
             syncClock();
-            const idOk = await resolveIdentity();
 
             // Audio Context initialization requires user gesture,
             // so we wait for ready-btn.
             audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+            // Preload assets while waiting for user
             const assetsOk = await preloadAssets();
+
+            // Resolve identity from URL parameter
+            const idOk = await resolveIdentity();
 
             if (idOk && assetsOk) {
                 document.getElementById('ready-btn').disabled = false;
