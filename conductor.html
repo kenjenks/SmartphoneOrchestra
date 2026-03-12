@@ -778,11 +778,13 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             }))
         });
 
+        // FIX: Include startTime property in the tuning cue
         await db.ref('show/currentCue').set({
             type: "TUNING_MOVEMENT",
             file: FLUTE_URL,
-            triggerTime: tuningStartTime,
-            scheduledTime: tuningStartTime,
+            startTime: tuningStartTime,        // ADDED: This is what devicedist.html expects
+            triggerTime: tuningStartTime,      // KEPT: For backward compatibility
+            scheduledTime: tuningStartTime,    // KEPT: For backward compatibility
             duration: noteTimings[noteTimings.length-1].startMs + 1000,
             metadata: {
                 purpose: "tuning_movement",
@@ -832,6 +834,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             originY: seat.y,
             radius: 0.2,
             rolloff: "linear",
+            startTime: pulseTime,              // ADDED: For consistency
             triggerTime: pulseTime,
             scheduledTime: pulseTime,
             metadata: {
@@ -984,7 +987,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         await loadMovements();
 
         initListeners();
-        
+
         // Connection status
         db.ref('.info/connected').on('value', snap => {
             const el = document.getElementById('connection-status');
