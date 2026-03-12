@@ -101,7 +101,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
                 <div>Cues: <span id="cue-count">0</span></div>
             </div>
 
-            <button class="go-button" id="go-button" disabled>🚀 GO (with buffer)</button>
+            <button class="go-button" id="go-button" disabled>🚀 GO (in 1.0s)</button>
         </div>
 
         <!-- DYNAMIC TUNING MODE -->
@@ -310,7 +310,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         movements.forEach((movement, index) => {
             const btn = document.createElement('button');
             btn.className = 'movement-btn';
-            // Compare using movement_name, not name
+            // FIXED: Compare using movement_name, not name
             if (currentMovement && currentMovement.movement_name === movement.movement_name) {
                 btn.classList.add('active');
             }
@@ -333,6 +333,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         // movement already has .cues[] inline from visual_timeline.json - no secondary fetch needed
         currentMovement = movement;
 
+        // Update GO button with buffer time
         document.getElementById('go-button').innerText = `🚀 GO (in ${movement.buffer_s}s)`;
 
         // Extract pillar URLs from the first cue's assets
@@ -353,7 +354,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         document.getElementById('current-movement-name').innerText = movement.movement_name;
         document.getElementById('go-button').disabled = false;
 
-        logDetection(`Selected: ${movement.movement_name} | ${pillarCount} pillars, ${cueCount} cues`);
+        logDetection(`Selected: ${movement.movement_name} | ${pillarCount} pillars, ${cueCount} cues, buffer: ${movement.buffer_s}s`);
     }
 
     // Function to load default pillar URLs for tuning mode
@@ -714,7 +715,8 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
                 duration: 60000,
                 metadata: {
                     purpose: "tuning_fabric",
-                    pillar: position
+                    pillar: position,
+                    mix: "master"  // FIXED: Added mix:master so pillars don't filter this out
                 }
             });
         }
