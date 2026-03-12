@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <!--
 conductor.html
@@ -71,7 +70,7 @@ with real-time device discovery and spiral path generation.
             </div>
         </div>
 
-        <!-- DYNAMIC TUNING MODE - Replaces old Bach Tuning Mode -->
+        <!-- DYNAMIC TUNING MODE -->
         <div class="section">
             <h2>🎯 Dynamic Tuning: Jesu, Joy</h2>
             <div id="device-count-display" style="display: flex; justify-content: space-between; background: #1a1a1a; padding: 8px; border-radius: 4px; margin-bottom: 10px;">
@@ -166,7 +165,9 @@ with real-time device discovery and spiral path generation.
         BL: "https://static.wixstatic.com/mp3/9178d1_8987080abdb14616a0e9562387923614.mp3",
         BR: "https://static.wixstatic.com/mp3/9178d1_8b53f52bbce6406ebacae8288777bad5.mp3"
     };
-    const FLUTE_URL = "https://static.wixstatic.com/mp3/9178d1_29aa9ddc87f0405588c6d1b5b18ff382.mp3";
+
+    // UPDATED: New encoded flute URL with pulses at note centers
+    const FLUTE_URL = "https://static.wixstatic.com/mp3/9178d1_711f9f02c8664c2c9dc1522bd7b49111.mp3";
 
     // --- 1. SEAT MAP GUI ---
     const canvas = document.getElementById('seat-map-canvas');
@@ -308,8 +309,11 @@ with real-time device discovery and spiral path generation.
     }
 
     // FSK Pattern Detection: 19.5k -> 19.4k -> 19.5k
+    // UPDATED: More robust detection that doesn't rely on precise timing
     let patternStep = 0;
     let lastStepTime = 0;
+    let detectionWindow = [];
+    const DETECTION_WINDOW_SIZE = 10; // Keep last 10 readings
 
     function detectSignature() {
         if (!analyser || !dataArray) {
@@ -331,26 +335,70 @@ with real-time device discovery and spiral path generation.
 
         const val195 = dataArray[bin195];
         const val194 = dataArray[bin194];
-        const threshold = 180;
+        const threshold = 160; // Slightly lower threshold for softer pulses
 
         const now = Date.now();
 
-        if (patternStep === 0 && val195 > threshold) {
+        // Add to detection window
+        detectionWindow.push({
+            time: now,
+            val195: val195,
+            val194: val194,
+            step: patternStep
+        });
+
+        if (detectionWindow.length > DETECTION_WINDOW_SIZE) {
+            detectionWindow.shift();
+        }
+
+        // Look for the pattern within the detection window
+        // This is more robust because pulses might not align exactly with our sampling
+        let found195a = false;
+        let found194 = false;
+        let found195b = false;
+        let patternTime = null;
+
+        for (let i = 0; i < detectionWindow.length; i++) {
+            const sample = detectionWindow[i];
+
+            if (sample.val195 > threshold) {
+                if (!found195a) {
+                    found195a = true;
+                } else if (found194 && !found195b) {
+                    found195b = true;
+                    patternTime = sample.time;
+                }
+            } else if (sample.val194 > threshold) {
+                if (found195a && !found194) {
+                    found194 = true;
+                }
+            }
+        }
+
+        // If we found the complete pattern
+        if (found195a && found194 && found195b && patternTime) {
+            const tHeard = patternTime + (serverOffset || 0);
+            broadcastDetection(tHeard);
+            logDetection(`FSK Match at ${tHeard}`);
+
+            // Clear detection window to avoid double-counting
+            detectionWindow = [];
+        }
+
+        // Simple state machine for real-time feedback (not used for detection)
+        if (val195 > threshold && patternStep === 0) {
             patternStep = 1;
             lastStepTime = now;
-        } else if (patternStep === 1 && val194 > threshold && (now - lastStepTime < 50)) {
+        } else if (val194 > threshold && patternStep === 1 && (now - lastStepTime < 100)) {
             patternStep = 2;
             lastStepTime = now;
-        } else if (patternStep === 2 && val195 > threshold && (now - lastStepTime < 50)) {
-            // SUCCESS: FSK Signature Detected
-            const tHeard = now + (serverOffset || 0);
-            broadcastDetection(tHeard);
+        } else if (val195 > threshold && patternStep === 2 && (now - lastStepTime < 100)) {
+            // We already detected via window, but update UI
             patternStep = 0;
-            logDetection("FSK Match: " + tHeard);
         }
 
         // Timeout reset
-        if (now - lastStepTime > 100) patternStep = 0;
+        if (now - lastStepTime > 150) patternStep = 0;
 
         requestAnimationFrame(detectSignature);
     }
@@ -381,9 +429,10 @@ with real-time device discovery and spiral path generation.
                         noteTimings = data.piano_notes.map((note, index) => ({
                             index: index,
                             startMs: note.ms_offset,
-                            durationMs: 500, // Default duration if not specified
+                            durationMs: note.duration_ms || 500,
                             measure: note.measure,
-                            id: note.id
+                            id: note.id,
+                            pitch: note.pitch
                         }));
                         document.getElementById('note-timing-status').innerHTML =
                             `✅ Loaded ${noteTimings.length} notes from ${file.name}`;
@@ -469,7 +518,8 @@ with real-time device discovery and spiral path generation.
                 durationMs: note.durationMs || 500,
                 deviceId: deviceId,
                 originX: device ? device.x : 7.75,
-                originY: device ? device.y : 12.5
+                originY: device ? device.y : 12.5,
+                pulsePositionMs: note.startMs + (note.durationMs / 2) // Center of note
             });
         });
 
@@ -564,7 +614,8 @@ with real-time device discovery and spiral path generation.
             duration: noteTimings[noteTimings.length-1].startMs + 1000,
             metadata: {
                 purpose: "tuning_movement",
-                scheduleRef: "tuning/current"
+                scheduleRef: "tuning/current",
+                pulsePosition: "center" // Indicates pulses are at note centers
             }
         });
 
@@ -573,7 +624,7 @@ with real-time device discovery and spiral path generation.
         // Show progress UI
         document.getElementById('tuning-progress').style.display = 'block';
 
-        log(`🎯 Tuning started: ${deviceOrder.length} devices, ${noteTimings.length} notes`);
+        log(`🎯 Tuning started: ${deviceOrder.length} devices, ${noteTimings.length} notes (pulses at note centers)`);
         renderMap();
     }
 
@@ -614,7 +665,8 @@ with real-time device discovery and spiral path generation.
             scheduledTime: pulseTime,
             metadata: {
                 purpose: "seat_test",
-                seatId: seatId
+                seatId: seatId,
+                pulsePosition: "start" // For test, use start of file
             }
         });
 
@@ -782,31 +834,4 @@ with real-time device discovery and spiral path generation.
         const startBin = Math.round(19000 / (audioCtx.sampleRate / 2048));
         const endBin = Math.round(20000 / (audioCtx.sampleRate / 2048));
 
-        for(let i = startBin; i < endBin && i < dataArray.length; i++) {
-            const x = (i - startBin) * (300 / (endBin - startBin));
-            vCtx.fillRect(x, 60 - dataArray[i]/4, 2, dataArray[i]/4);
-        }
-
-        requestAnimationFrame(drawFFT);
-    }
-
-    function log(msg) {
-        const box = document.getElementById('detection-log');
-        box.innerHTML = `[${new Date().toLocaleTimeString()}] ${msg}<br>` + box.innerHTML;
-        if (box.children.length > 3) box.removeChild(box.lastChild);
-    }
-
-    // Initialize
-    window.onload = () => {
-        initSeatMap();
-        initListeners();
-        setupNoteTimingLoader();
-    };
-
-    window.onresize = () => {
-        resizeCanvas();
-        renderMap();
-    };
-</script>
-</body>
-</html>
+        for(let i = startBin; i
