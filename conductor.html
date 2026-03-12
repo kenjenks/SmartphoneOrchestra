@@ -239,19 +239,21 @@ pillar_config.json, movement manifests) are handled by admin.html
                     durationMs: note.duration_ms || 500,
                     measure: note.measure,
                     id: note.id,
-                    pitch: note.pitch,
-                    url: note.url
+                    pitch: note.pitch
+                    // REMOVED: url field - not needed
                 }));
 
-                // Load URLs from tuning config if present
-                if (configData.flute_url) {
-                    FLUTE_URL = configData.flute_url;
-                }
-                if (configData.test_pulse_url) {
-                    TEST_PULSE_URL = configData.test_pulse_url;
+                // Load flute URL from movement manifest or config
+                // This should be a CDN URL to the encoded flute MP3
+                if (configData.metadata && configData.metadata.source_audio) {
+                    // Convert filename to CDN URL - adjust based on your hosting
+                    FLUTE_URL = `https://static.wixstatic.com/mp3/${configData.metadata.source_audio}`;
                 }
 
                 logDetection(`Loaded ${noteTimings.length} notes from tuning config`);
+                if (FLUTE_URL) {
+                    logDetection(`Flute URL: ${FLUTE_URL}`);
+                }
             } else {
                 logDetection("No tuning configuration found in Firebase. Please upload via admin.html");
             }
@@ -672,8 +674,8 @@ pillar_config.json, movement manifests) are handled by admin.html
                 deviceId: deviceId,
                 originX: device ? device.x : 7.75,
                 originY: device ? device.y : 12.5,
-                pulsePositionMs: note.startMs + (note.durationMs / 2),
-                url: note.url
+                pulsePositionMs: note.startMs + (note.durationMs / 2)
+                // REMOVED: url field
             });
         });
 

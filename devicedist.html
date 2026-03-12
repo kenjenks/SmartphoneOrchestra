@@ -48,6 +48,8 @@ devicedist.html: Feature List
   detection timestamps at tuning/last_heard
 - One-Way Lag Calculation: Compares pulse playback time with heard time
 - Local Storage: Maintains calibrated lag value for precise synchronization
+- Single Flute MP3: Plays the encoded flute audio with volume ramping
+  only for notes assigned to this device
 
 5. Movement Control
 - GO Signal Handler: Processes movement start commands with buffer timing
@@ -238,6 +240,7 @@ devicedist.html: Feature List
         let assignedNotes = []; // Notes assigned to this device during tuning
         let pendingPulseDetections = []; // Track pulses waiting for conductor response
         let calibratedLag = null; // Final calibrated one-way lag
+        let fluteUrl = null; // URL of the encoded flute MP3
 
         // Individual seat test state
         let pendingTestPulse = null; // Track individual seat test
@@ -344,20 +347,31 @@ devicedist.html: Feature List
                     calibrationMode = true;
                     currentTuningSchedule = schedule;
 
+                    // Store flute URL from schedule
+                    if (schedule.fluteUrl) {
+                        fluteUrl = schedule.fluteUrl;
+                    }
+
                     // Find notes assigned to this device
                     if (schedule.schedule) {
                         assignedNotes = schedule.schedule.filter(note => note.deviceId === mySeat.id);
                         console.log(`🎯 Device assigned ${assignedNotes.length} notes for tuning`);
+
+                        // Log the note timings for debugging
+                        assignedNotes.forEach(note => {
+                            console.log(`   Note at ${note.startMs}ms, duration ${note.durationMs}ms, pulse at ${note.pulsePositionMs}ms`);
+                        });
                     }
 
                     // Preload the flute audio if not already cached
-                    if (schedule.fluteUrl && !bufferCache[schedule.fluteUrl]) {
-                        preloadTuningAsset(schedule.fluteUrl);
+                    if (fluteUrl && !bufferCache[fluteUrl]) {
+                        preloadTuningAsset(fluteUrl);
                     }
                 } else {
                     calibrationMode = false;
                     currentTuningSchedule = null;
                     assignedNotes = [];
+                    fluteUrl = null;
                 }
             });
 
@@ -528,8 +542,10 @@ devicedist.html: Feature List
             }
 
             // Special handling for tuning mode - track pulse playback time
-            if (calibrationMode && cue.metadata && cue.metadata.purpose === 'tuning_movement') {
-                trackTuningPulse(cue, startTime);
+            // Note: The tuning movement cue is a single flute MP3 that plays continuously
+            // We need to monitor its playback and ramp volume for assigned notes
+            if (calibrationMode && cue.type === 'TUNING_MOVEMENT') {
+                monitorTuningPlayback(cue, source, startTime);
             }
         }
 
@@ -567,46 +583,69 @@ devicedist.html: Feature List
             }
         }
 
-        function trackTuningPulse(cue, startTime) {
-            // For tuning, we need to know when the pulse at the center of the note plays
-            // The pulse is at the center of each note (see bach_barber.py)
+        // --- TUNING PLAYBACK MONITOR ---
+        // This function monitors the continuous flute playback and ramps volume
+        // for notes assigned to this device
+        function monitorTuningPlayback(cue, source, startTime) {
+            if (!assignedNotes.length || !currentTuningSchedule) return;
 
-            // Calculate when the center of the note occurs
-            const pulsePositionMs = cue.metadata?.pulsePositionMs || 0;
-            if (pulsePositionMs > 0) {
-                const pulseTime = cue.startTime + pulsePositionMs;
+            console.log(`🎵 Monitoring tuning playback for ${assignedNotes.length} assigned notes`);
 
-                // Check if this note is assigned to this device
-                const isAssigned = assignedNotes.some(note =>
-                    Math.abs(note.startMs - pulsePositionMs) < 50 &&
-                    note.deviceId === mySeat.id
-                );
+            // For each assigned note, schedule volume ramping
+            assignedNotes.forEach(note => {
+                // Calculate absolute times for this note
+                const noteStartAbs = cue.startTime + note.startMs;
+                const noteEndAbs = noteStartAbs + note.durationMs;
+                const pulseAbs = cue.startTime + note.pulsePositionMs;
 
-                if (isAssigned) {
-                    // Schedule a callback at the pulse time
-                    const now = Date.now() + serverOffset;
-                    const delayMs = pulseTime - now - hardwareLag;
+                const now = Date.now() + serverOffset;
 
-                    if (delayMs > 0) {
-                        setTimeout(() => {
-                            // This is when the ultrasonic pulse actually plays
-                            const playTime = Date.now() + serverOffset;
-                            lastPingSent = playTime;
+                // Schedule volume ramp up at note start
+                const rampUpDelay = noteStartAbs - now - hardwareLag;
+                if (rampUpDelay > 0) {
+                    setTimeout(() => {
+                        // Find the gain node for this cue
+                        const activeCue = activeAudioCues.find(c => c.source === source);
+                        if (activeCue) {
+                            // Ramp up over 15ms
+                            activeCue.gainNode.gain.setTargetAtTime(1.0, audioCtx.currentTime, 0.015);
+                            console.log(`🔊 Ramping up for note at ${note.startMs}ms`);
 
-                            // Add to pending detections
-                            pendingPulseDetections.push({
-                                playTime: playTime,
-                                noteId: cue.metadata?.noteId
-                            });
-
-                            // Flash the screen for visual feedback
+                            // Flash screen for visual feedback
                             flashScreenForPulse();
-
-                            console.log(`📡 Tuning pulse played at ${playTime}`);
-                        }, delayMs);
-                    }
+                        }
+                    }, rampUpDelay);
                 }
-            }
+
+                // Schedule pulse tracking at note center
+                const pulseDelay = pulseAbs - now - hardwareLag;
+                if (pulseDelay > 0) {
+                    setTimeout(() => {
+                        const playTime = Date.now() + serverOffset;
+                        lastPingSent = playTime;
+
+                        pendingPulseDetections.push({
+                            playTime: playTime,
+                            noteId: note.noteIndex
+                        });
+
+                        console.log(`📡 Tuning pulse played at ${playTime} (note ${note.noteIndex})`);
+                    }, pulseDelay);
+                }
+
+                // Schedule volume ramp down at note end
+                const rampDownDelay = noteEndAbs - now - hardwareLag;
+                if (rampDownDelay > 0) {
+                    setTimeout(() => {
+                        const activeCue = activeAudioCues.find(c => c.source === source);
+                        if (activeCue) {
+                            // Ramp down over 15ms
+                            activeCue.gainNode.gain.setTargetAtTime(0, audioCtx.currentTime, 0.015);
+                            console.log(`🔉 Ramping down after note at ${note.startMs}ms`);
+                        }
+                    }, rampDownDelay);
+                }
+            });
         }
 
         function flashScreenForPulse() {
@@ -672,28 +711,8 @@ devicedist.html: Feature List
                     intensity = 1 - (dist / cue.radius);
                 }
 
-                // Special handling for tuning mode - only play if this device is assigned to the current note
-                if (calibrationMode && cue.metadata?.purpose === 'tuning_movement') {
-                    // For tuning, we need to check if this moment corresponds to an assigned note
-                    const currentTimeMs = serverNow - cue.startTime;
-                    const isNoteTime = assignedNotes.some(note =>
-                        Math.abs(currentTimeMs - note.startMs) < note.durationMs / 2
-                    );
-
-                    if (!isNoteTime) {
-                        intensity = 0; // Mute if not this device's note
-                    } else {
-                        // Ramp up/down for the note
-                        const note = assignedNotes.find(n =>
-                            Math.abs(currentTimeMs - n.startMs) < n.durationMs / 2
-                        );
-                        if (note) {
-                            const noteProgress = (currentTimeMs - note.startMs) / note.durationMs;
-                            // Raised cosine ramp for smooth entry/exit
-                            intensity *= (1 - Math.cos(noteProgress * Math.PI)) / 2;
-                        }
-                    }
-                }
+                // Special handling for tuning mode volume is handled by monitorTuningPlayback
+                // via gainNode.setTargetAtTime, so we don't override here
 
                 // Special handling for test pulses - play at full volume only at the pulse moment
                 if (cue.metadata?.purpose === 'seat_test' && cue.metadata?.seatId === mySeat.id) {
@@ -708,6 +727,7 @@ devicedist.html: Feature List
                 }
 
                 // Apply Gain with anti-click ramp (15ms)
+                // Note: For tuning mode, this may be overridden by monitorTuningPlayback
                 cue.gainNode.gain.setTargetAtTime(intensity * (cue.volume || 1), audioCtx.currentTime, 0.015);
 
                 // Remove finished cues
@@ -819,7 +839,8 @@ devicedist.html: Feature List
                         // Handle movement start signal
                         handleMovementStart(cue);
                     } else if (cue.type === 'TUNING_MOVEMENT') {
-                        // Handle tuning movement specially
+                        // Handle tuning movement - play the flute MP3
+                        // Volume will be controlled by monitorTuningPlayback
                         calibrationMode = true;
                         playSpatialCue(cue);
                     } else {
