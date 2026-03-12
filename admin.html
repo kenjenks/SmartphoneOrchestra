@@ -396,7 +396,30 @@ Operational SOP for Admin:
                     }
 
                     log(`Uploading tuning config with ${data.piano_notes.length} notes...`);
+
+                    // Upload to both locations for compatibility
                     await db.ref('tuning_mode').set(data);
+
+                    // Also create the tuning/current structure that devicedist.html expects
+                    const currentTuning = {
+                        status: 'ACTIVE',
+                        startTime: Date.now(),
+                        generatedAt: Date.now(),
+                        fluteUrl: data.assets?.flute || data.metadata?.source_audio_url,
+                        pillars: data.assets?.pillars || {
+                            FL: data.metadata?.source_audio_FL,
+                            FR: data.metadata?.source_audio_FR,
+                            BL: data.metadata?.source_audio_BL,
+                            BR: data.metadata?.source_audio_BR
+                        },
+                        schedule: [], // Will be populated when tuning starts
+                        deviceOrder: [],
+                        activeDevices: [],
+                        deviceCount: 0
+                    };
+
+                    await db.ref('tuning/current').set(currentTuning);
+
                     log("SUCCESS: Tuning configuration uploaded.");
                 } catch (err) { log(`ERROR: ${err.message}`); }
             };
