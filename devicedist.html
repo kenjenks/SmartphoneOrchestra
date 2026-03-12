@@ -3,14 +3,13 @@
 devicedist.html
 
 Webapp for patron devices. Plays sounds and lightshow
-in cues.json (as represented by the RTDBMS)
-as commanded by timeline.json (as represented by the RTDBMS).
+as commanded by timeline manifests received via GO signals.
 
 devicedist.html: Feature List
 
 1. Synchronized Spatial Audio Engine
-- Firebase Real-Time Integration: Listens for 'currentCue' updates and maps
-  them to local playback using a shared master clock to eliminate jitter.
+- Firebase Real-Time Integration: Listens for GO signals and calibration data
+  using a shared master clock to eliminate jitter.
 
 - Acoustic Spatialization: Calculates real-time gain based on the distance
   between the patron's seat (from seat_config.tsv) and the sound's
@@ -51,10 +50,11 @@ devicedist.html: Feature List
 - Single Flute MP3: Plays the encoded flute audio with volume ramping
   only for notes assigned to this device
 
-5. Movement Control
-- GO Signal Handler: Processes movement start commands with buffer timing
-- Timeline Execution: Executes scheduled cues from movement manifests
+5. Distributed Timeline Execution (Model B)
+- GO Signal Handler: Processes movement start commands with full timeline
+- Local Scheduling: Each device schedules its own cues using setTimeout
 - Movement Buffer: Respects movement-specific buffer times (typically 1.0s)
+- No reliance on individual cue pushes from conductor
 
 6. Performance & Reliability
 - Asset Resilience: Wraps preloading in try/catch blocks to ensure
@@ -63,7 +63,7 @@ devicedist.html: Feature List
 - Battery & System Monitoring: Reports device battery level and
   charging status back to Firebase for real-time stage management.
 
-- System Kill Switch: Listens for 'SYSTEM' cues with 'KILL' actions
+- System Kill Switch: Listens for 'KILL' actions
   to force immediate browser reloads across all nodes.
 
 -->
@@ -172,6 +172,25 @@ devicedist.html: Feature List
             border-left: 2px solid #00ffcc;
             pointer-events: none;
         }
+
+        #asset-progress {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            right: 10px;
+            height: 4px;
+            background: #333;
+            border-radius: 2px;
+            display: none;
+        }
+
+        #asset-progress-fill {
+            height: 100%;
+            background: #00ffcc;
+            border-radius: 2px;
+            width: 0%;
+            transition: width 0.3s;
+        }
     </style>
 </head>
 <body>
@@ -205,6 +224,7 @@ devicedist.html: Feature List
     <div id="show-screen">
         <div id="performance-overlay">FPS: -- | Lag: --ms</div>
         <div id="movement-indicator">Standby</div>
+        <div id="asset-progress"><div id="asset-progress-fill"></div></div>
         <canvas id="stage-canvas"></canvas>
     </div>
 
@@ -227,6 +247,9 @@ devicedist.html: Feature List
         let bufferCache = {};
         let activeAudioCues = [];
         let activeLightCues = [];
+        let preloadQueue = [];
+        let totalAssetsToPreload = 0;
+        let preloadedCount = 0;
 
         // Calibration & Stats
         let hardwareLag = 273; // Baseline hardware latency (will be updated via calibration)
@@ -251,6 +274,7 @@ devicedist.html: Feature List
         let movementBuffer = 1.0; // Default 1 second buffer
         let scheduledCues = []; // Queue of upcoming cues
         let movementTimer = null;
+        let activeTimeouts = []; // Track all scheduled timeouts for cleanup
 
         // Performance Watchdog
         let lastFrameTime = 0;
@@ -258,7 +282,7 @@ devicedist.html: Feature List
         const FPS_TARGET = 30;
         const FRAME_DURATION = 1000 / FPS_TARGET; // 33.33ms
 
-        // --- IDENTITY RESOLUTION - FIXED: Now reads from Firebase seat_config ---
+        // --- IDENTITY RESOLUTION - Reads from Firebase seat_config ---
         async function resolveIdentity() {
             try {
                 // Get seat ID from URL parameter
@@ -480,20 +504,77 @@ devicedist.html: Feature List
             });
         }
 
-        // --- MOVEMENT HANDLER (GO Signal) ---
+        // --- ASSET PRELOADING (Enhanced for timeline-based playback) ---
+        async function preloadAssets() {
+            // Show progress bar
+            document.getElementById('asset-progress').style.display = 'block';
+
+            try {
+                // First, try to load cues.json for static assets
+                const response = await fetch('cues.json');
+                const cues = await response.json();
+
+                // Collect all unique audio files
+                const audioFiles = new Set();
+                Object.values(cues).forEach(cue => {
+                    if (cue.type === 'AUDIO' && cue.file) {
+                        audioFiles.add(cue.file);
+                    }
+                });
+
+                totalAssetsToPreload = audioFiles.size;
+                preloadedCount = 0;
+
+                if (totalAssetsToPreload === 0) {
+                    document.getElementById('asset-ind').className = 'indicator active';
+                    document.getElementById('asset-progress').style.display = 'none';
+                    return true;
+                }
+
+                // Load each audio file
+                const loadTasks = Array.from(audioFiles).map(async url => {
+                    try {
+                        const res = await fetch(url);
+                        const arrayBuf = await res.arrayBuffer();
+                        bufferCache[url] = await audioCtx.decodeAudioData(arrayBuf);
+                        preloadedCount++;
+                        updatePreloadProgress();
+                    } catch (e) {
+                        console.error(`Failed to load ${url}:`, e);
+                        preloadedCount++;
+                        updatePreloadProgress();
+                    }
+                });
+
+                await Promise.all(loadTasks);
+                document.getElementById('asset-ind').className = 'indicator active';
+                document.getElementById('asset-progress').style.display = 'none';
+                return true;
+
+            } catch (e) {
+                console.error("Asset Load Failure:", e);
+                document.getElementById('asset-ind').className = 'indicator error';
+                document.getElementById('asset-progress').style.display = 'none';
+                return false;
+            }
+        }
+
+        function updatePreloadProgress() {
+            const percent = (preloadedCount / totalAssetsToPreload) * 100;
+            document.getElementById('asset-progress-fill').style.width = `${percent}%`;
+        }
+
+        // --- MOVEMENT HANDLER (GO Signal) - Core of Model B ---
         function handleMovementStart(cue) {
             if (!cue.startTime || !cue.movement || !cue.timeline) {
                 console.error("Invalid GO signal: missing required fields");
                 return;
             }
 
-            // Clear any existing movement
-            if (movementTimer) {
-                clearTimeout(movementTimer);
-                movementTimer = null;
-            }
+            // Clear any existing movement and all scheduled timeouts
+            clearAllScheduledCues();
 
-            // Clear scheduled cues
+            // Clear scheduled cues array
             scheduledCues = [];
 
             // Set movement state
@@ -512,10 +593,41 @@ devicedist.html: Feature List
             }
         }
 
+        function clearAllScheduledCues() {
+            // Clear all pending timeouts
+            activeTimeouts.forEach(timeoutId => clearTimeout(timeoutId));
+            activeTimeouts = [];
+
+            // Stop all active audio cues
+            activeAudioCues.forEach(cue => {
+                if (cue.source) {
+                    try {
+                        cue.source.stop();
+                    } catch (e) {
+                        // Ignore errors from already stopped sources
+                    }
+                }
+            });
+            activeAudioCues = [];
+
+            // Clear all light cues
+            activeLightCues = [];
+
+            // Clear canvas
+            const canvas = document.getElementById('stage-canvas');
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }
+
         function scheduleTimelineCues(timeline) {
             const now = Date.now() + serverOffset;
 
             Object.entries(timeline).forEach(([cueId, cueData]) => {
+                // Skip cues not meant for this device (if targetSeat is specified)
+                if (cueData.targetSeat && cueData.targetSeat !== mySeat.id) {
+                    return;
+                }
+
                 // Calculate when this cue should play relative to movement start
                 // Cue times in manifest are offsets from movement start (in ms)
                 const cueOffset = cueData.startTime || 0; // Offset in ms
@@ -526,19 +638,25 @@ devicedist.html: Feature List
 
                 if (delayMs > 0) {
                     // Schedule the cue
-                    setTimeout(() => {
+                    const timeoutId = setTimeout(() => {
                         playSpatialCue({
                             ...cueData,
                             startTime: absoluteStartTime,
                             cueId: cueId
                         });
+
+                        // Remove from active timeouts list
+                        activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
                     }, delayMs);
+
+                    activeTimeouts.push(timeoutId);
 
                     // Store in scheduled cues list for reference
                     scheduledCues.push({
                         cueId: cueId,
                         startTime: absoluteStartTime,
-                        data: cueData
+                        data: cueData,
+                        timeoutId: timeoutId
                     });
 
                     console.log(`📅 Scheduled cue ${cueId} at +${cueOffset}ms (in ${Math.round(delayMs)}ms)`);
@@ -559,7 +677,14 @@ devicedist.html: Feature List
 
         // --- AUDIO ENGINE: SPATIAL WASH & RAMPING ---
         async function playSpatialCue(cue) {
+            // For pillar devices, filter out non-master cues if needed
+            if (mySeat.id.startsWith('PILLAR_') && cue.type === 'AUDIO' && cue.metadata?.mix !== 'master') {
+                console.log(`🔇 Pillar device filtering out non-master cue: ${cue.cueId}`);
+                return;
+            }
+
             if (!bufferCache[cue.file]) {
+                console.warn(`⚠️ Cue file not preloaded: ${cue.file}. Playing may be delayed.`);
                 // Try to preload on-demand if not cached
                 try {
                     const res = await fetch(cue.file);
@@ -607,6 +732,16 @@ devicedist.html: Feature List
             if (calibrationMode && cue.type === 'TUNING_MOVEMENT') {
                 monitorTuningPlayback(cue, source, startTime);
             }
+
+            // Handle light cues
+            if (cue.type === 'LIGHT' || cue.rgb) {
+                activeLightCues.push({
+                    ...cue,
+                    startTime: cue.startTime,
+                    duration: cue.duration || 1000,
+                    rgb: cue.rgb || '255,255,255'
+                });
+            }
         }
 
         // --- INDIVIDUAL SEAT TEST HANDLER ---
@@ -622,7 +757,7 @@ devicedist.html: Feature List
             const delayMs = pulseTime - now - hardwareLag;
 
             if (delayMs > 0) {
-                setTimeout(() => {
+                const timeoutId = setTimeout(() => {
                     // This is when the ultrasonic pulse actually plays
                     const playTime = Date.now() + serverOffset;
 
@@ -639,7 +774,12 @@ devicedist.html: Feature List
                     flashScreenForPulse();
 
                     console.log(`📡 Test pulse played at ${playTime}`);
+
+                    // Remove from active timeouts
+                    activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
                 }, delayMs);
+
+                activeTimeouts.push(timeoutId);
             }
         }
 
@@ -663,7 +803,7 @@ devicedist.html: Feature List
                 // Schedule volume ramp up at note start
                 const rampUpDelay = noteStartAbs - now - hardwareLag;
                 if (rampUpDelay > 0) {
-                    setTimeout(() => {
+                    const timeoutId = setTimeout(() => {
                         // Find the gain node for this cue
                         const activeCue = activeAudioCues.find(c => c.source === source);
                         if (activeCue) {
@@ -674,13 +814,17 @@ devicedist.html: Feature List
                             // Flash screen for visual feedback
                             flashScreenForPulse();
                         }
+
+                        activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
                     }, rampUpDelay);
+
+                    activeTimeouts.push(timeoutId);
                 }
 
                 // Schedule pulse tracking at note center
                 const pulseDelay = pulseAbs - now - hardwareLag;
                 if (pulseDelay > 0) {
-                    setTimeout(() => {
+                    const timeoutId = setTimeout(() => {
                         const playTime = Date.now() + serverOffset;
                         lastPingSent = playTime;
 
@@ -690,20 +834,28 @@ devicedist.html: Feature List
                         });
 
                         console.log(`📡 Tuning pulse played at ${playTime} (note ${note.noteIndex})`);
+
+                        activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
                     }, pulseDelay);
+
+                    activeTimeouts.push(timeoutId);
                 }
 
                 // Schedule volume ramp down at note end
                 const rampDownDelay = noteEndAbs - now - hardwareLag;
                 if (rampDownDelay > 0) {
-                    setTimeout(() => {
+                    const timeoutId = setTimeout(() => {
                         const activeCue = activeAudioCues.find(c => c.source === source);
                         if (activeCue) {
                             // Ramp down over 15ms
                             activeCue.gainNode.gain.setTargetAtTime(0, audioCtx.currentTime, 0.015);
                             console.log(`🔉 Ramping down after note at ${note.startMs}ms`);
                         }
+
+                        activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
                     }, rampDownDelay);
+
+                    activeTimeouts.push(timeoutId);
                 }
             });
         }
@@ -748,6 +900,8 @@ devicedist.html: Feature List
                 const secondsToStart = ((movementStartTime - serverNow) / 1000).toFixed(1);
                 document.getElementById('movement-indicator').innerText =
                     `🎭 ${currentMovement} (T-${secondsToStart}s)`;
+            } else if (currentMovement) {
+                document.getElementById('movement-indicator').innerText = `🎭 ${currentMovement} (Playing)`;
             }
 
             // 1. Update Spatial Audio (The "Wash")
@@ -840,37 +994,13 @@ devicedist.html: Feature List
             return { intensity, x: curX, y: curY };
         }
 
-        // --- ASSET MANAGEMENT ---
-        async function preloadAssets() {
-            try {
-                const response = await fetch('cues.json');
-                const cues = await response.json();
-
-                const loadTasks = Object.keys(cues).map(async key => {
-                    const cue = cues[key];
-                    if (cue.type === 'AUDIO') {
-                        const res = await fetch(cue.file);
-                        const arrayBuf = await res.arrayBuffer();
-                        bufferCache[cue.file] = await audioCtx.decodeAudioData(arrayBuf);
-                    }
-                });
-
-                await Promise.all(loadTasks);
-                document.getElementById('asset-ind').className = 'indicator active';
-                return true;
-            } catch (e) {
-                console.error("Asset Load Failure:", e);
-                document.getElementById('asset-ind').className = 'indicator error';
-            }
-            return false;
-        }
-
         // --- PERFORMANCE OVERLAY UPDATE ---
         function updatePerformanceOverlay() {
             const overlay = document.getElementById('performance-overlay');
             const fps = Math.round(1000 / (performance.now() - lastFrameTime));
             const lag = calibratedLag ? `${calibratedLag}ms` : '--';
-            overlay.innerHTML = `FPS: ${fps} | Lag: ${lag} | ${isHappy ? '✅' : '🔄'}`;
+            const cueCount = activeAudioCues.length + activeLightCues.length;
+            overlay.innerHTML = `FPS: ${fps} | Lag: ${lag} | Cues: ${cueCount} | ${isHappy ? '✅' : '🔄'}`;
         }
 
         // --- EVENT HANDLERS ---
@@ -889,24 +1019,23 @@ devicedist.html: Feature List
             // Start Render Loop
             requestAnimationFrame(frame);
 
-            // 1. Listen for Show Cues
+            // 1. Listen for GO signals (Model B - Distributed Timeline)
             db.ref('show/currentCue').on('value', snap => {
                 const cue = snap.val();
                 if (cue) {
                     if (cue.action === 'KILL') {
+                        console.log("💀 KILL signal received - reloading");
                         location.reload();
                     } else if (cue.action === 'GO') {
-                        // Handle movement start signal
+                        // Handle movement start signal with full timeline
                         handleMovementStart(cue);
                     } else if (cue.type === 'TUNING_MOVEMENT') {
                         // Handle tuning movement - play the flute MP3
                         // Volume will be controlled by monitorTuningPlayback
                         calibrationMode = true;
                         playSpatialCue(cue);
-                    } else {
-                        // Regular audio/visual cue
-                        playSpatialCue(cue);
                     }
+                    // Note: Individual cues are NOT handled here - they come via timeline in GO signal
                 }
             });
 
@@ -943,8 +1072,16 @@ devicedist.html: Feature List
                     lastSeen: Date.now() + serverOffset,
                     status: 'ACTIVE',
                     x: mySeat.x,
-                    y: mySeat.y
+                    y: mySeat.y,
+                    hardwareLag: hardwareLag,
+                    calibratedLag: calibratedLag,
+                    isHappy: isHappy
                 });
+
+                // Update lastSeen periodically
+                setInterval(() => {
+                    db.ref(`devices/${mySeat.id}/lastSeen`).set(Date.now() + serverOffset);
+                }, 5000);
             }
         };
 
