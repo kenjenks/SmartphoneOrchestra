@@ -12,22 +12,22 @@ Survey Purge: During setup, you might do several "test walks." This button allow
 
 Database Health: Keeping the devices node empty when the show isn't running prevents Firebase from racking up unnecessary "Simultaneous Connection" charges.
 
+Seat Configuration: Upload seat_config.tsv to define seat positions for spatial audio calculations.
+
+Tuning Mode Configuration: Upload tuning_mode.json for the Bach "Jesu, Joy of Man's Desiring" calibration sequence.
+
 Operational SOP for Admin:
 
 * Pre-Show:
-  (1)Upload pillar_config.json with the
-  current XY locations of the 4 pillars in meters
-  from front left of house.
-
-  (2) Check Admin to ensure Pillars = 0 and Devices = 0
-  (a clean slate).
-
-  (3) Upload visual_timeline.json, which schedules the audio and visual cues.
+  (1) Upload pillar_config.json with the current XY locations of the 4 pillars in meters from front left of house.
+  (2) Upload seat_config.tsv with all seat positions for spatial audio.
+  (3) Upload tuning_mode.json for the Bach calibration sequence (if using).
+  (4) Check Admin to ensure Pillars = 0 and Devices = 0 (a clean slate).
+  (5) Upload visual_timeline.json, which schedules the audio and visual cues.
 
 * During Onboarding: Watch the Patron Nodes count climb.
 
-* Post-Show: Hit Purge Device Registry as the audience
-leaves to reset for the next performance.
+* Post-Show: Hit Purge Device Registry as the audience leaves to reset for the next performance.
 -->
 <html lang="en">
 <head>
@@ -61,6 +61,9 @@ leaves to reset for the next performance.
 
         .config-status { margin-top: 15px; padding: 10px; border: 1px dotted #444; border-radius: 4px; }
         .status-title { font-size: 0.75rem; color: #00ffcc; margin-bottom: 5px; font-weight: bold; }
+
+        .button-group { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 10px; }
+        .download-btn { background: #2a2a2a; border-color: #446; }
     </style>
 </head>
 <body>
@@ -73,16 +76,44 @@ leaves to reset for the next performance.
     <div class="dashboard">
         <div class="card">
             <h3>1. Show Setup</h3>
-            <button class="btn" onclick="document.getElementById('pillar-input').click()">Upload pillar_config.json</button>
-            <input type="file" id="pillar-input" style="display:none" onchange="uploadPillarConfig(this)">
 
-            <button class="btn" onclick="document.getElementById('file-input').click()">Upload visual_timeline.json</button>
-            <input type="file" id="file-input" style="display:none" onchange="uploadTimeline(this)">
+            <div class="button-group">
+                <button class="btn" onclick="document.getElementById('pillar-input').click()">Upload pillar_config.json</button>
+                <input type="file" id="pillar-input" style="display:none" onchange="uploadPillarConfig(this)">
+
+                <button class="btn" onclick="document.getElementById('seat-config-input').click()">Upload seat_config.tsv</button>
+                <input type="file" id="seat-config-input" style="display:none" onchange="uploadSeatConfig(this)">
+
+                <button class="btn" onclick="document.getElementById('tuning-input').click()">Upload tuning_mode.json</button>
+                <input type="file" id="tuning-input" style="display:none" onchange="uploadTuningConfig(this)">
+
+                <button class="btn" onclick="document.getElementById('file-input').click()">Upload visual_timeline.json</button>
+                <input type="file" id="file-input" style="display:none" onchange="uploadTimeline(this)">
+            </div>
+
+            <div class="button-group">
+                <button class="btn download-btn" onclick="downloadSeatConfig()">Download seat_config.tsv</button>
+                <button class="btn download-btn" onclick="downloadTuningConfig()">Download tuning_mode.json</button>
+            </div>
 
             <div class="config-status">
                 <div class="status-title">LIVE PILLAR COORDINATES (METERS)</div>
                 <div id="pillar-view">
                     <div style="color: #444; font-style: italic; font-size: 0.8rem;">No Pillar Config Detected in Cloud</div>
+                </div>
+            </div>
+
+            <div class="config-status">
+                <div class="status-title">SEAT CONFIGURATION</div>
+                <div id="seat-view" style="max-height: 150px; overflow-y: auto;">
+                    <div style="color: #444; font-style: italic; font-size: 0.8rem;">No Seat Config Loaded</div>
+                </div>
+            </div>
+
+            <div class="config-status">
+                <div class="status-title">TUNING MODE (BACH)</div>
+                <div id="tuning-view" style="max-height: 150px; overflow-y: auto;">
+                    <div style="color: #444; font-style: italic; font-size: 0.8rem;">No Tuning Config Loaded</div>
                 </div>
             </div>
 
@@ -108,6 +139,7 @@ leaves to reset for the next performance.
             </div>
             <button class="btn btn-secondary" onclick="purgeDevices()">Purge Device Registry</button>
             <button class="btn btn-secondary" onclick="purgeSurvey()">Wipe Survey Results</button>
+            <button class="btn btn-secondary" onclick="resetAllLatencies()">Reset All Latencies</button>
         </div>
 
         <div class="card">
@@ -130,13 +162,13 @@ leaves to reset for the next performance.
         // PROTECTED BLOCK: Firebase Configuration
         // Security restricted to authorized domains in Google Cloud Console
         const firebaseConfig = {
-            apiKey: "YOUR_RESTRICTED_API_KEY",
-            authDomain: "YOUR_PROJECT.firebaseapp.com",
-            databaseURL: "https://YOUR_PROJECT.firebaseio.com",
-            projectId: "YOUR_PROJECT",
-            storageBucket: "YOUR_PROJECT.appspot.com",
-            messagingSenderId: "YOUR_SENDER_ID",
-            appId: "YOUR_APP_ID"
+            apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
+            authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
+            databaseURL: "https://smartphoneorchestra-dwt-default-rtdb.firebaseio.com/",
+            projectId: "smartphoneorchestra-dwt",
+            storageBucket: "smartphoneorchestra-dwt.firebasestorage.app",
+            messagingSenderId: "722537253165",
+            appId: "1:722537253165:web:8e8b6495bd508de35b2ba4"
         };
 
         firebase.initializeApp(firebaseConfig);
@@ -163,7 +195,7 @@ leaves to reset for the next performance.
             }
         });
 
-        // NEW: Observe Pillar Configuration
+        // Observe Pillar Configuration
         db.ref('pillar_config').on('value', snap => {
             const config = snap.val();
             if (!config || !config.pillars) {
@@ -183,6 +215,46 @@ leaves to reset for the next performance.
             document.getElementById('pillar-view').innerHTML = html;
         });
 
+        // Observe Seat Configuration
+        db.ref('seat_config').on('value', snap => {
+            const config = snap.val();
+            if (!config || !config.seats) {
+                document.getElementById('seat-view').innerHTML = '<div style="color: #444; font-style: italic; font-size: 0.8rem;">No Seat Config Loaded</div>';
+                return;
+            }
+            let html = "<table><tr><th>Seat</th><th>X</th><th>Y</th></tr>";
+            // Show first 10 seats as preview
+            config.seats.slice(0, 10).forEach(s => {
+                html += `<tr>
+                    <td style="color:#00ffcc;">${s.id}</td>
+                    <td>${s.x}</td>
+                    <td>${s.y}</td>
+                </tr>`;
+            });
+            if (config.seats.length > 10) {
+                html += `<tr><td colspan="3">... and ${config.seats.length - 10} more</td></tr>`;
+            }
+            html += "</table>";
+            document.getElementById('seat-view').innerHTML = html;
+        });
+
+        // Observe Tuning Configuration
+        db.ref('tuning_mode').on('value', snap => {
+            const config = snap.val();
+            if (!config || !config.piano_notes) {
+                document.getElementById('tuning-view').innerHTML = '<div style="color: #444; font-style: italic; font-size: 0.8rem;">No Tuning Config Loaded</div>';
+                return;
+            }
+            let html = "<table><tr><th>Notes</th><th>Duration</th><th>Assets</th></tr>";
+            html += `<tr>
+                <td>${config.piano_notes.length}</td>
+                <td>${Math.round(config.metadata?.total_duration_ms / 1000)}s</td>
+                <td>${config.metadata?.unique_assets || 'N/A'}</td>
+            </tr>`;
+            html += "</table>";
+            document.getElementById('tuning-view').innerHTML = html;
+        });
+
         // Observe Registry Counts (Separating Pillars from Patrons)
         db.ref('devices').on('value', snap => {
             const devices = snap.val() || {};
@@ -195,7 +267,7 @@ leaves to reset for the next performance.
             document.getElementById('count-patrons').innerText = patrons;
         });
 
-        // --- HANDLERS ---
+        // --- UPLOAD HANDLERS ---
 
         async function uploadPillarConfig(input) {
             const file = input.files[0];
@@ -213,6 +285,68 @@ leaves to reset for the next performance.
             reader.readAsText(file);
         }
 
+        async function uploadSeatConfig(input) {
+            const file = input.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = async (e) => {
+                try {
+                    const text = e.target.result;
+                    // Parse TSV
+                    const lines = text.split('\n').filter(line => line.trim());
+                    const headers = lines[0].split('\t');
+
+                    // Find column indices (handle different header formats)
+                    const idIdx = headers.findIndex(h => h.toLowerCase().includes('id') || h.toLowerCase().includes('seat'));
+                    const xIdx = headers.findIndex(h => h.toLowerCase() === 'x');
+                    const yIdx = headers.findIndex(h => h.toLowerCase() === 'y');
+
+                    if (idIdx === -1 || xIdx === -1 || yIdx === -1) {
+                        throw new Error("TSV must have 'seat_id' (or 'id'), 'x', and 'y' columns");
+                    }
+
+                    const seats = [];
+                    for (let i = 1; i < lines.length; i++) {
+                        const cols = lines[i].split('\t');
+                        if (cols.length <= Math.max(idIdx, xIdx, yIdx)) continue;
+
+                        const id = cols[idIdx].trim();
+                        const x = parseFloat(cols[xIdx]);
+                        const y = parseFloat(cols[yIdx]);
+
+                        if (id && !isNaN(x) && !isNaN(y)) {
+                            seats.push({ id, x, y });
+                        }
+                    }
+
+                    if (seats.length === 0) {
+                        throw new Error("No valid seat data found in TSV");
+                    }
+
+                    log(`Parsed ${seats.length} seats from TSV`);
+                    await db.ref('seat_config').set({ seats, uploadedAt: Date.now() });
+                    log("SUCCESS: Seat configuration uploaded.");
+                } catch (err) { log(`ERROR: ${err.message}`); }
+            };
+            reader.readAsText(file);
+        }
+
+        async function uploadTuningConfig(input) {
+            const file = input.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = async (e) => {
+                try {
+                    const data = JSON.parse(e.target.result);
+                    if (!data.piano_notes) throw new Error("Invalid Format: Missing 'piano_notes' key.");
+                    log(`Uploading tuning config with ${data.piano_notes.length} notes...`);
+                    await db.ref('tuning_mode').set(data);
+                    log("SUCCESS: Tuning configuration uploaded.");
+                } catch (err) { log(`ERROR: ${err.message}`); }
+            };
+            reader.readAsText(file);
+        }
+
         async function uploadTimeline(input) {
             const file = input.files[0];
             if (!file) return;
@@ -221,15 +355,65 @@ leaves to reset for the next performance.
                 try {
                     const data = JSON.parse(e.target.result);
                     await db.ref('show').set(data);
-                    log(`SUCCESS: Timeline '${data.show_title}' uploaded.`);
+                    log(`SUCCESS: Timeline '${data.show_title || 'Unnamed'}' uploaded.`);
                 } catch (err) { log(`ERROR: ${err.message}`); }
             };
             reader.readAsText(file);
         }
 
+        // --- DOWNLOAD HANDLERS ---
+
+        async function downloadSeatConfig() {
+            try {
+                const snap = await db.ref('seat_config').once('value');
+                const config = snap.val();
+                if (!config || !config.seats) {
+                    log("ERROR: No seat configuration found");
+                    return;
+                }
+
+                // Convert to TSV
+                let tsv = "seat_id\tx\ty\n";
+                config.seats.forEach(seat => {
+                    tsv += `${seat.id}\t${seat.x}\t${seat.y}\n`;
+                });
+
+                const blob = new Blob([tsv], { type: 'text/tab-separated-values' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `seat_config_${Date.now()}.tsv`;
+                a.click();
+                log("ACTION: Seat configuration downloaded.");
+            } catch (e) { log(`ERROR: Download failed: ${e.message}`); }
+        }
+
+        async function downloadTuningConfig() {
+            try {
+                const snap = await db.ref('tuning_mode').once('value');
+                const config = snap.val();
+                if (!config) {
+                    log("ERROR: No tuning configuration found");
+                    return;
+                }
+
+                const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `tuning_mode_${Date.now()}.json`;
+                a.click();
+                log("ACTION: Tuning configuration downloaded.");
+            } catch (e) { log(`ERROR: Download failed: ${e.message}`); }
+        }
+
+        // --- MAINTENANCE FUNCTIONS ---
+
         function sendKillSignal() {
-            db.ref('show/currentCue').set({ action: 'KILL', triggerTime: Date.now() });
-            log("COMMAND: Global Kill Signal sent.");
+            if(confirm("Send global KILL signal to all devices?")) {
+                db.ref('show/currentCue').set({ action: 'KILL', triggerTime: Date.now() });
+                log("COMMAND: Global Kill Signal sent.");
+            }
         }
 
         async function purgeDevices() {
@@ -243,6 +427,22 @@ leaves to reset for the next performance.
             if (confirm("Wipe all survey results?")) {
                 await db.ref('survey_results').remove();
                 log("ACTION: Survey results wiped.");
+            }
+        }
+
+        async function resetAllLatencies() {
+            if (confirm("Reset all device latencies to 0?")) {
+                const snap = await db.ref('devices').once('value');
+                const devices = snap.val() || {};
+
+                const updates = {};
+                Object.keys(devices).forEach(id => {
+                    updates[`devices/${id}/latency`] = 0;
+                    updates[`devices/${id}/status`] = 'CALIBRATING';
+                });
+
+                await db.ref().update(updates);
+                log("ACTION: All latencies reset.");
             }
         }
 
