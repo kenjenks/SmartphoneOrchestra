@@ -288,6 +288,7 @@ devicedist.html: Feature List
                 // Get seat ID from URL parameter
                 const urlParams = new URLSearchParams(window.location.search);
                 const seatId = urlParams.get('seat');
+                console.log("🔍 Looking for seat:", seatId);
 
                 if (!seatId) {
                     console.warn("No seat ID in URL, using default for testing");
@@ -304,6 +305,8 @@ devicedist.html: Feature List
                 const seatsSnap = await db.ref('seat_config/seats').once('value');
                 const seatsData = seatsSnap.val();
 
+                console.log("📊 Firebase seat data:", seatsData);
+
                 if (!seatsData) {
                     console.warn("No seat data in Firebase, falling back to local TSV");
                     // Fallback to local TSV
@@ -311,6 +314,9 @@ devicedist.html: Feature List
                     const data = await response.text();
                     const rows = data.split('\n').map(r => r.split('\t'));
                     const config = rows.find(r => r[0] === seatId);
+
+                    console.log("📄 TSV rows:", rows.slice(0, 5));
+                    console.log("🎯 Found in TSV:", config);
 
                     if (config) {
                         mySeat = { id: config[0], x: parseFloat(config[1]), y: parseFloat(config[2]) };
