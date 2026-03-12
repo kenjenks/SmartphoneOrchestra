@@ -64,6 +64,12 @@ Operational SOP for Admin:
 
         .button-group { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 10px; }
         .download-btn { background: #2a2a2a; border-color: #446; }
+
+        /* Asset URL display */
+        .asset-url { font-family: 'Courier New', monospace; font-size: 10px; color: #888; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .pillar-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 5px; margin-top: 5px; }
+        .pillar-item { background: #1a1a1a; padding: 3px; border-radius: 2px; font-size: 10px; }
+        .pillar-label { color: #00ffcc; font-weight: bold; }
     </style>
 </head>
 <body>
@@ -112,7 +118,7 @@ Operational SOP for Admin:
 
             <div class="config-status">
                 <div class="status-title">TUNING MODE (BACH)</div>
-                <div id="tuning-view" style="max-height: 150px; overflow-y: auto;">
+                <div id="tuning-view" style="max-height: 200px; overflow-y: auto;">
                     <div style="color: #444; font-style: italic; font-size: 0.8rem;">No Tuning Config Loaded</div>
                 </div>
             </div>
@@ -238,20 +244,60 @@ Operational SOP for Admin:
             document.getElementById('seat-view').innerHTML = html;
         });
 
-        // Observe Tuning Configuration
+        // --- UPDATED: Observe Tuning Configuration with asset URLs ---
         db.ref('tuning_mode').on('value', snap => {
             const config = snap.val();
             if (!config || !config.piano_notes) {
                 document.getElementById('tuning-view').innerHTML = '<div style="color: #444; font-style: italic; font-size: 0.8rem;">No Tuning Config Loaded</div>';
                 return;
             }
-            let html = "<table><tr><th>Notes</th><th>Duration</th><th>Assets</th></tr>";
+
+            let html = "<table style='margin-bottom:10px;'><tr><th>Notes</th><th>Duration</th><th>Version</th></tr>";
             html += `<tr>
                 <td>${config.piano_notes.length}</td>
                 <td>${Math.round(config.metadata?.total_duration_ms / 1000)}s</td>
-                <td>${config.metadata?.unique_assets || 'N/A'}</td>
+                <td>${config.metadata?.asset_version || '1.0'}</td>
             </tr>`;
             html += "</table>";
+
+            // Show flute asset
+            if (config.assets?.flute) {
+                html += `<div style="margin-top:5px;"><span style="color:#00ffcc;">🎵 Flute:</span> <span class="asset-url" title="${config.assets.flute}">${config.assets.flute}</span></div>`;
+            } else if (config.metadata?.source_audio_url) {
+                html += `<div style="margin-top:5px;"><span style="color:#00ffcc;">🎵 Flute:</span> <span class="asset-url" title="${config.metadata.source_audio_url}">${config.metadata.source_audio_url}</span></div>`;
+            }
+
+            // Show test pulse if available
+            if (config.assets?.test_pulse) {
+                html += `<div style="margin-top:5px;"><span style="color:#ffcc00;">🔊 Test Pulse:</span> <span class="asset-url" title="${config.assets.test_pulse}">${config.assets.test_pulse}</span></div>`;
+            } else if (config.metadata?.test_pulse_url) {
+                html += `<div style="margin-top:5px;"><span style="color:#ffcc00;">🔊 Test Pulse:</span> <span class="asset-url" title="${config.metadata.test_pulse_url}">${config.metadata.test_pulse_url}</span></div>`;
+            }
+
+            // Show pillars
+            html += `<div style="margin-top:10px;"><span style="color:#8844cc;">🏛️ Pillars:</span></div>`;
+            html += `<div class="pillar-grid">`;
+
+            // Try assets.pillars first (new format)
+            if (config.assets?.pillars) {
+                const pillars = config.assets.pillars;
+                for (const [pos, url] of Object.entries(pillars)) {
+                    html += `<div class="pillar-item"><span class="pillar-label">${pos}:</span> <span class="asset-url" title="${url}">${url}</span></div>`;
+                }
+            }
+            // Fall back to metadata.source_audio_* (old format)
+            else {
+                const pillarPositions = ['FL', 'FR', 'BL', 'BR'];
+                pillarPositions.forEach(pos => {
+                    const key = `source_audio_${pos}`;
+                    if (config.metadata?.[key]) {
+                        html += `<div class="pillar-item"><span class="pillar-label">${pos}:</span> <span class="asset-url" title="${config.metadata[key]}">${config.metadata[key]}</span></div>`;
+                    }
+                });
+            }
+
+            html += `</div>`;
+
             document.getElementById('tuning-view').innerHTML = html;
         });
 
@@ -339,6 +385,16 @@ Operational SOP for Admin:
                 try {
                     const data = JSON.parse(e.target.result);
                     if (!data.piano_notes) throw new Error("Invalid Format: Missing 'piano_notes' key.");
+
+                    // Validate asset URLs if present
+                    if (data.assets) {
+                        if (data.assets.flute) log(`📦 Flute asset: ${data.assets.flute.split('/').pop()}`);
+                        if (data.assets.pillars) {
+                            const pillarCount = Object.keys(data.assets.pillars).length;
+                            log(`📦 ${pillarCount} pillar assets found`);
+                        }
+                    }
+
                     log(`Uploading tuning config with ${data.piano_notes.length} notes...`);
                     await db.ref('tuning_mode').set(data);
                     log("SUCCESS: Tuning configuration uploaded.");
