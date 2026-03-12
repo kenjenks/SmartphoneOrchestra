@@ -2,16 +2,18 @@
 <!--
 conductor.html
 
-Webapp for leading the SmartphoneOrchestra, sending cues
-to patron devices over Firebase.
+Webapp for leading the SmartphoneOrchestra during live performances,
+sending cues to patron devices over Firebase.
 
-Includes:
-- Dynamic Tuning Mode for Bach "Jesu, Joy of Man's Desiring"
-  with real-time device discovery and spiral path generation
-- Ultrasonic FSK detection (19.5kHz-19.4kHz-19.5kHz)
-- Individual seat testing
-- Show control with GO button and timeline management
-- Performance registry and device monitoring
+Features:
+- Show control with GO button and timeline execution
+- Ultrasonic FSK detection (19.5kHz-19.4kHz-19.5kHz) for calibration
+- Individual seat testing during tuning mode
+- Real-time device monitoring and performance registry
+- Seat map visualization with status indicators
+
+Note: All configuration uploads (seat_config.tsv, tuning_mode.json,
+pillar_config.json, visual_timeline.json) are handled by admin.html
 -->
 <html lang="en">
 <head>
@@ -62,8 +64,8 @@ Includes:
         .stats-row { display: flex; justify-content: space-between; font-size: 0.8rem; margin-top: 5px; }
 
         /* Timeline display */
-        #timeline-preview { font-size: 0.8rem; max-height: 150px; overflow-y: auto; background: #111; padding: 5px; border-radius: 4px; margin-top: 10px; }
-        .timeline-item { padding: 2px 0; border-bottom: 1px solid #222; }
+        #timeline-status { font-size: 0.9rem; background: #111; padding: 10px; border-radius: 4px; margin-top: 10px; border-left: 3px solid #00ffcc; }
+        .timeline-loaded { color: #00ffcc; font-weight: bold; }
     </style>
 </head>
 <body>
@@ -85,22 +87,11 @@ Includes:
         <!-- SHOW CONTROL SECTION -->
         <div class="section">
             <h2>🎭 Show Control</h2>
-            <button class="btn btn-primary" id="load-config-btn">Load Seat Map (TSV)</button>
-            <div id="registry-stats" style="margin-top:10px; font-size: 0.9rem;">
-                Seats Loaded: <span id="count-seats">0</span><br>
-                Active Devices: <span id="count-active">0</span>
+            <div id="timeline-status">
+                <span>Timeline: </span>
+                <span id="timeline-loaded-status" class="timeline-loaded">Not Loaded</span>
             </div>
-            
-            <button class="go-button" id="go-button">🚀 GO (1s Buffer)</button>
-            
-            <div style="margin-top: 10px;">
-                <label>Timeline JSON:</label>
-                <input type="file" id="timeline-input" accept=".json" style="width: 100%; margin: 5px 0;">
-            </div>
-            
-            <div id="timeline-preview">
-                No timeline loaded
-            </div>
+            <button class="go-button" id="go-button" disabled>🚀 GO (1s Buffer)</button>
         </div>
 
         <!-- DYNAMIC TUNING MODE -->
@@ -117,11 +108,8 @@ Includes:
                 <button id="stop-tuning-btn" style="background:#600; border-color:#a00;">⏹️ STOP</button>
             </div>
 
-            <button id="load-note-timing-btn" class="secondary" style="margin-top: 5px;">📂 Load Note Timing JSON</button>
-            <input type="file" id="note-timing-input" style="display:none" accept=".json">
-
             <div id="note-timing-status" style="font-size: 0.7rem; color: #888; margin-top: 5px;">
-                No timing file loaded
+                Using tuning_mode.json from admin
             </div>
 
             <div id="tuning-progress" style="display: none;">
@@ -195,19 +183,12 @@ Includes:
     let currentTimeline = null;
     let serverOffset = 0;
 
-    // Pillar URLs
-    const PILLAR_URLS = {
-        FL: "https://static.wixstatic.com/mp3/9178d1_9aba02e74fc344808064f364bb505086.mp3",
-        FR: "https://static.wixstatic.com/mp3/9178d1_08a292cbcee448d7b83e464d6a94b377.mp3",
-        BL: "https://static.wixstatic.com/mp3/9178d1_8987080abdb14616a0e9562387923614.mp3",
-        BR: "https://static.wixstatic.com/mp3/9178d1_8b53f52bbce6406ebacae8288777bad5.mp3"
-    };
+    // Pillar URLs (loaded from Firebase)
+    let PILLAR_URLS = {};
 
-    // UPDATED: New encoded flute URL with pulses at note centers
-    const FLUTE_URL = "https://static.wixstatic.com/mp3/9178d1_711f9f02c8664c2c9dc1522bd7b49111.mp3";
-
-    // NEW: Standalone test pulse URL (silent ultrasonic pulse)
-    const TEST_PULSE_URL = "https://static.wixstatic.com/mp3/9178d1_f6b058d4fd0e496a8f18ab1a3bc4d88e.mp3";
+    // Tuning URLs (loaded from Firebase)
+    let FLUTE_URL = "";
+    let TEST_PULSE_URL = "";
 
     // --- CLOCK SYNC ---
     const offsetRef = db.ref(".info/serverTimeOffset");
@@ -215,42 +196,103 @@ Includes:
         serverOffset = snap.val() || 0;
     });
 
-    // --- 1. SEAT MAP GUI ---
-    const canvas = document.getElementById('seat-map-canvas');
-    const ctx = canvas.getContext('2d');
-
+    // --- LOAD CONFIGURATIONS FROM FIREBASE (uploaded by admin.html) ---
     async function loadSeatConfig() {
         try {
-            // First try to get seat config from Firebase (uploaded by admin.html)
             const configSnap = await db.ref('seat_config').once('value');
             const configData = configSnap.val();
 
             if (configData && configData.seats) {
                 seats = configData.seats;
                 console.log(`📋 Loaded ${seats.length} seats from Firebase`);
+                document.getElementById('device-count-value').innerText = Object.keys(deviceData).length;
+                resizeCanvas();
+                renderMap();
+                logDetection(`Loaded ${seats.length} seats from config.`);
             } else {
-                // Fallback to local TSV for development
-                const response = await fetch('seat_config.tsv');
-                const data = await response.text();
-                const rows = data.split('\n').slice(1).map(row => {
-                    const cols = row.split('\t');
-                    return {
-                        id: cols[0],
-                        x: parseFloat(cols[1] || cols[2]),
-                        y: parseFloat(cols[2] || cols[3])
-                    };
-                }).filter(s => s.id && !isNaN(s.x) && !isNaN(s.y));
-                seats = rows;
+                logDetection("No seat configuration found in Firebase. Please upload via admin.html");
             }
-
-            document.getElementById('count-seats').innerText = seats.length;
-            resizeCanvas();
-            renderMap();
-            logDetection(`Loaded ${seats.length} seats from TSV.`);
         } catch (e) {
-            logDetection("Error loading seat_config.tsv: " + e.message);
+            logDetection("Error loading seat config: " + e.message);
         }
     }
+
+    async function loadTuningConfig() {
+        try {
+            const configSnap = await db.ref('tuning_mode').once('value');
+            const configData = configSnap.val();
+
+            if (configData && configData.piano_notes) {
+                noteTimings = configData.piano_notes.map((note, index) => ({
+                    index: index,
+                    startMs: note.ms_offset,
+                    durationMs: note.duration_ms || 500,
+                    measure: note.measure,
+                    id: note.id,
+                    pitch: note.pitch,
+                    url: note.url
+                }));
+
+                // Load URLs from tuning config if present
+                if (configData.flute_url) {
+                    FLUTE_URL = configData.flute_url;
+                }
+                if (configData.test_pulse_url) {
+                    TEST_PULSE_URL = configData.test_pulse_url;
+                }
+
+                logDetection(`Loaded ${noteTimings.length} notes from tuning config`);
+            } else {
+                logDetection("No tuning configuration found in Firebase. Please upload via admin.html");
+            }
+        } catch (e) {
+            logDetection("Error loading tuning config: " + e.message);
+        }
+    }
+
+    async function loadPillarConfig() {
+        try {
+            const configSnap = await db.ref('pillar_config').once('value');
+            const configData = configSnap.val();
+
+            if (configData && configData.pillars) {
+                // Convert pillar array to URL object
+                configData.pillars.forEach(pillar => {
+                    if (pillar.id && pillar.url) {
+                        const key = pillar.id.replace('PILLAR_', '');
+                        PILLAR_URLS[key] = pillar.url;
+                    }
+                });
+                logDetection(`Loaded ${Object.keys(PILLAR_URLS).length} pillar URLs`);
+            }
+        } catch (e) {
+            logDetection("Error loading pillar config: " + e.message);
+        }
+    }
+
+    async function loadShowTimeline() {
+        try {
+            const timelineSnap = await db.ref('show').once('value');
+            const timelineData = timelineSnap.val();
+
+            if (timelineData && timelineData.movements) {
+                currentTimeline = timelineData;
+                document.getElementById('timeline-loaded-status').innerText =
+                    `"${timelineData.show_title || 'Unnamed'}" (${timelineData.movements.length} movements)`;
+                document.getElementById('go-button').disabled = false;
+                logDetection(`Loaded show timeline: ${timelineData.show_title || 'Unnamed'}`);
+            } else {
+                document.getElementById('timeline-loaded-status').innerText = 'Not Loaded';
+                document.getElementById('go-button').disabled = true;
+            }
+        } catch (e) {
+            logDetection("Error loading show timeline: " + e.message);
+        }
+    }
+
+    // --- 1. SEAT MAP GUI ---
+    const canvas = document.getElementById('seat-map-canvas');
+    const ctx = canvas.getContext('2d');
 
     function resizeCanvas() {
         const container = document.getElementById('map-container');
@@ -466,125 +508,38 @@ Includes:
         // Draw only the relevant frequency range (around 19.5kHz)
         const startBin = Math.round(19000 / (audioCtx.sampleRate / 2048));
         const endBin = Math.round(20000 / (audioCtx.sampleRate / 2048));
-        
+
         for(let i = startBin; i < endBin && i < dataArray.length; i++) {
             const x = (i - startBin) * (300 / (endBin - startBin));
             vCtx.fillRect(x, 60 - dataArray[i]/4, 2, dataArray[i]/4);
         }
-        
+
         requestAnimationFrame(drawFFT);
     }
 
-    // --- 3. SHOW CONTROL (GO BUTTON & TIMELINE) ---
-    document.getElementById('timeline-input').onchange = (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-
-        const reader = new FileReader();
-        reader.onload = (event) => {
-            try {
-                currentTimeline = JSON.parse(event.target.result);
-                updateTimelinePreview();
-                logDetection(`Loaded timeline: ${file.name}`);
-            } catch (err) {
-                alert("Error parsing timeline JSON: " + err.message);
-            }
-        };
-        reader.readAsText(file);
-    };
-
-    function updateTimelinePreview() {
-        const preview = document.getElementById('timeline-preview');
-        if (!currentTimeline) {
-            preview.innerHTML = 'No timeline loaded';
-            return;
-        }
-
-        let html = '';
-        const cueCount = Object.keys(currentTimeline).length;
-        html += `<div>📋 ${cueCount} cues loaded</div>`;
-        
-        // Show first 5 cues as preview
-        Object.entries(currentTimeline).slice(0, 5).forEach(([key, cue]) => {
-            html += `<div class="timeline-item">${key}: ${cue.action || 'PLAY'} at ${cue.startTime || 0}ms</div>`;
-        });
-        
-        if (cueCount > 5) {
-            html += `<div>... and ${cueCount - 5} more</div>`;
-        }
-        
-        preview.innerHTML = html;
-    }
-
+    // --- 3. SHOW CONTROL (GO BUTTON) ---
     document.getElementById('go-button').onclick = async () => {
         if (!currentTimeline) {
-            alert("Please load a timeline JSON file first");
+            alert("No timeline loaded. Please upload via admin.html");
             return;
         }
 
         // Calculate start time with 1 second buffer
         const startTime = Date.now() + 1000; // 1 second buffer
 
-        // Upload timeline to Firebase with adjusted timings
-        const adjustedTimeline = {};
-        Object.entries(currentTimeline).forEach(([key, cue]) => {
-            adjustedTimeline[key] = {
-                ...cue,
-                startTime: startTime + (cue.startTime || 0),
-                triggerTime: startTime + (cue.triggerTime || 0)
-            };
-        });
-
-        await db.ref('show/timeline').set(adjustedTimeline);
-        
         // Send GO signal
         await db.ref('show/currentCue').set({
             action: 'GO',
             startTime: startTime,
             bufferMs: 1000,
-            triggerTime: startTime
+            triggerTime: startTime,
+            timeline: currentTimeline
         });
 
         logDetection(`🚀 GO signal sent with ${startTime} start time`);
     };
 
     // --- 4. DYNAMIC TUNING ENGINE ---
-    function setupNoteTimingLoader() {
-        document.getElementById('load-note-timing-btn').onclick = () => {
-            document.getElementById('note-timing-input').click();
-        };
-
-        document.getElementById('note-timing-input').onchange = (e) => {
-            const file = e.target.files[0];
-            if (!file) return;
-
-            const reader = new FileReader();
-            reader.onload = (event) => {
-                try {
-                    const data = JSON.parse(event.target.result);
-                    if (data.piano_notes) {
-                        noteTimings = data.piano_notes.map((note, index) => ({
-                            index: index,
-                            startMs: note.ms_offset,
-                            durationMs: note.duration_ms || 500,
-                            measure: note.measure,
-                            id: note.id,
-                            pitch: note.pitch
-                        }));
-                        document.getElementById('note-timing-status').innerHTML =
-                            `✅ Loaded ${noteTimings.length} notes from ${file.name}`;
-                        console.log(`📋 Loaded ${noteTimings.length} note timings`);
-                    } else {
-                        alert("Invalid timing file: missing 'piano_notes' array");
-                    }
-                } catch (err) {
-                    alert("Error parsing JSON: " + err.message);
-                }
-            };
-            reader.readAsText(file);
-        };
-    }
-
     async function refreshActiveDevices() {
         const snapshot = await db.ref('devices').once('value');
         const devices = snapshot.val() || {};
@@ -646,7 +601,8 @@ Includes:
                 deviceId: deviceId,
                 originX: device ? device.x : 7.75,
                 originY: device ? device.y : 12.5,
-                pulsePositionMs: note.startMs + (note.durationMs / 2)
+                pulsePositionMs: note.startMs + (note.durationMs / 2),
+                url: note.url
             });
         });
 
@@ -659,6 +615,8 @@ Includes:
     }
 
     async function startPillars(startTime) {
+        if (Object.keys(PILLAR_URLS).length === 0) return;
+
         const pillarStartTime = startTime - 1000;
 
         for (const [position, url] of Object.entries(PILLAR_URLS)) {
@@ -682,7 +640,12 @@ Includes:
 
     async function startTuningMovement() {
         if (noteTimings.length === 0) {
-            alert("Please load note timing JSON file first");
+            alert("No tuning configuration found. Please upload via admin.html");
+            return;
+        }
+
+        if (!FLUTE_URL) {
+            alert("No flute URL configured in tuning_mode.json");
             return;
         }
 
@@ -760,6 +723,11 @@ Includes:
     async function testSeat(seatId) {
         const seat = seats.find(s => s.id === seatId);
         if (!seat) return;
+
+        if (!TEST_PULSE_URL) {
+            logDetection("No test pulse URL configured in tuning_mode.json");
+            return;
+        }
 
         const pulseTime = Date.now() + 1000;
 
@@ -851,7 +819,6 @@ Includes:
 
     // --- UI BINDINGS ---
     document.getElementById('start-mic-btn').onclick = initMicrophone;
-    document.getElementById('load-config-btn').onclick = loadSeatConfig;
     document.getElementById('refresh-devices-btn').onclick = async () => {
         await refreshActiveDevices();
         renderMap();
@@ -913,10 +880,14 @@ Includes:
         if (log.children.length > 3) log.removeChild(log.lastChild);
     }
 
-    // Initialize everything
-    window.onload = () => {
-        loadSeatConfig();
-        setupNoteTimingLoader();
+    // Initialize everything - load all configs from Firebase
+    window.onload = async () => {
+        // Load all configurations uploaded by admin.html
+        await loadSeatConfig();
+        await loadPillarConfig();
+        await loadTuningConfig();
+        await loadShowTimeline();
+
         initListeners();
         
         // Connection status
