@@ -15,9 +15,9 @@ devicedist.html: Feature List
   between the patron's seat (from seat_config.tsv) and the sound's
   originX/Y coordinates as they move over time.
 
-- Hardware "Silent Warm-up": Triggers a 100ms silent burst immediately
-  upon receiving a cue to prime the MP3 decoder and wake the mobile
-  device's audio hardware before the actual scheduled start time.
+- Hardware "Silent Warm-up": Triggers a 100ms silent burst 500ms
+  before the scheduled start time to prime the MP3 decoder and wake the mobile
+  device's audio hardware, ensuring zero-latency playback at the precise moment.
 
 - Non-Blocking Asset Preloading: Fetches and decodes all AUDIO type
   cues from the Firebase show/movements timeline during setup.
@@ -49,6 +49,8 @@ devicedist.html: Feature List
 - Local Storage: Maintains calibrated lag value for precise synchronization
 - Single Flute MP3: Plays the encoded flute audio with volume ramping
   only for notes assigned to this device
+- Pillar Fabric: All four pillars play their continuous MP3s
+  throughout the tuning movement, providing the musical foundation
 
 5. Distributed Timeline Execution (Model B)
 - GO Signal Handler: Processes movement start commands with full timeline
@@ -268,6 +270,7 @@ devicedist.html: Feature List
             BL: null,
             BR: null
         };
+        let activePillarSources = []; // Track active pillar audio sources
 
         // Individual seat test state
         let pendingTestPulse = null; // Track individual seat test
@@ -288,6 +291,10 @@ devicedist.html: Feature List
 
         // Pillar positions (loaded from pillar_config.json via Firebase)
         let pillarPositions = {};
+
+        // Constants
+        const SILENT_WARMUP_MS = 100; // 100ms silent warm-up for all audio
+        const SILENT_WARMUP_T_MINUS = 500; Schedule the silent warm-up half a second before the cue starts
 
         // --- IDENTITY RESOLUTION - Reads from Firebase seat_config ---
         async function resolveIdentity() {
@@ -396,7 +403,7 @@ devicedist.html: Feature List
             }
         }
 
-        // --- NEW: LOAD TUNING ASSET URLS from tuning_mode.json ---
+        // --- LOAD TUNING ASSET URLS from tuning_mode.json ---
         async function loadTuningAssetUrls() {
             try {
                 const tuningSnap = await db.ref('tuning_mode').once('value');
@@ -489,22 +496,6 @@ devicedist.html: Feature List
 
             } catch (e) {
                 console.error("Failed to load tuning asset URLs:", e);
-            }
-        }
-
-        // --- LOAD PILLAR POSITIONS ---
-        async function loadPillarPositions() {
-            try {
-                const snap = await db.ref('pillar_config/pillars').once('value');
-                const pillars = snap.val();
-                if (pillars && Array.isArray(pillars)) {
-                    pillars.forEach(p => {
-                        pillarPositions[p.id] = { x: p.x, y: p.y };
-                    });
-                    console.log(`📌 Loaded ${Object.keys(pillarPositions).length} pillar positions`);
-                }
-            } catch (e) {
-                console.warn("Could not load pillar positions:", e);
             }
         }
 
@@ -645,7 +636,7 @@ devicedist.html: Feature List
             });
         }
 
-        // --- CHANGE 1 OF 4: ASSET PRELOADING from Firebase show/movements ---
+        // --- ASSET PRELOADING from Firebase show/movements ---
         async function preloadAssets() {
             // Show progress bar
             document.getElementById('asset-progress').style.display = 'block';
@@ -719,7 +710,7 @@ devicedist.html: Feature List
             document.getElementById('asset-progress-fill').style.width = `${percent}%`;
         }
 
-        // --- CHANGE 2 OF 4: MOVEMENT HANDLER (uses cue.cues not cue.timeline) ---
+        // --- MOVEMENT HANDLER (uses cue.cues not cue.timeline) ---
         function handleMovementStart(cue) {
             if (!cue.startTime || !cue.movement || !cue.cues) {
                 console.error("Invalid GO signal: missing required fields", cue);
@@ -764,6 +755,7 @@ devicedist.html: Feature List
                 }
             });
             activeAudioCues = [];
+            activePillarSources = [];
 
             // Clear all light cues
             activeLightCues = [];
@@ -774,10 +766,7 @@ devicedist.html: Feature List
             ctx.clearRect(0, 0, canvas.width, canvas.height);
         }
 
-        // --- CHANGE 3 OF 4: SPATIAL TIMELINE SCHEDULER ---
-        // Processes the cues array from visual_timeline.json
-        // For each MASTER_MEDIA_SYNC cue, loops through assets and
-        // schedules those that are within range or are pillars
+        // --- SPATIAL TIMELINE SCHEDULER with trajectory overlap detection ---
         function scheduleTimelineCues(cues) {
             const now = Date.now() + serverOffset;
 
@@ -787,7 +776,11 @@ devicedist.html: Feature List
                 // cue.time is seconds offset from movement start
                 const cueOffsetMs = (cue.time || 0) * 1000;
                 const absoluteStartTime = movementStartTime + cueOffsetMs;
-                const delayMs = absoluteStartTime - now - hardwareLag;
+
+                // We schedule the warm-up to happen 500ms BEFORE the actual start
+                const warmUpTime = absoluteStartTime - SILENT_WARMUP_T_MINUS;
+                const warmUpDelayMs = warmUpTime - now - hardwareLag;
+                const startDelayMs = absoluteStartTime - now - hardwareLag;
 
                 // Process each asset in this cue
                 (cue.assets || []).forEach(asset => {
@@ -798,49 +791,117 @@ devicedist.html: Feature List
                         // For pillars, use their position from pillar_config
                         const pillarPos = pillarPositions[asset.id] || { x: 0, y: 0 };
 
-                        scheduleCue({
+                        scheduleCueWithWarmUp({
                             audio_url: asset.audio_url,
                             lsq_url: asset.lsq_url,
                             gain: 1.0, // Pillars play at full volume
                             color: null,
                             label: asset.id,
                             startTime: absoluteStartTime,
+                            warmUpTime: warmUpTime,
                             // Store spatial info for render loop
                             originX: pillarPos.x,
                             originY: pillarPos.y,
-                            radius: 0.3, // Pillars have well-defined position
-                            rolloff: 'none',
-                            type: 'pillar'
-                        }, delayMs);
+                            radius: asset.radius || 30,
+                            rolloff: asset.rolloff || 'none',
+                            type: 'pillar',
+                            duration: asset.duration || 30000
+                        }, warmUpDelayMs, startDelayMs);
                         return;
                     }
 
-                    // INSTRUMENT HANDLING: Calculate initial distance
-                    // Note: This is just for scheduling - actual gain is updated in render loop
-                    // as the sound source moves (originX/destX interpolation)
-                    const dx = mySeat.x - asset.originX;
-                    const dy = mySeat.y - asset.originY;
-                    const initialDist = Math.sqrt(dx * dx + dy * dy);
+                    // INSTRUMENT HANDLING: Check if this device will be within THIS cue's radius
+                    // at any point during its movement
 
-                    // Only schedule if within radius at start
-                    if (initialDist <= asset.radius) {
-                        scheduleCue({
+                    const startX = asset.originX;
+                    const startY = asset.originY;
+                    const endX = asset.destX || startX;
+                    const endY = asset.destY || startY;
+                    const cueRadius = asset.radius;
+
+                    // Calculate duration
+                    const cueDuration = asset.duration || 30000;
+
+                    // Check if the sound source moves
+                    const isMoving = (startX !== endX) || (startY !== endY);
+
+                    let shouldSchedule = false;
+
+                    if (!isMoving) {
+                        // Static sound source - just check distance
+                        const dx = mySeat.x - startX;
+                        const dy = mySeat.y - startY;
+                        const dist = Math.sqrt(dx * dx + dy * dy);
+                        shouldSchedule = (dist <= cueRadius);
+                    } else {
+                        // Moving sound source - check if trajectory comes within its radius
+
+                        // Vector from start to end
+                        const moveX = endX - startX;
+                        const moveY = endY - startY;
+
+                        // Vector from start to seat
+                        const seatVecX = mySeat.x - startX;
+                        const seatVecY = mySeat.y - startY;
+
+                        // Find closest point on line segment to seat
+                        const moveLenSq = moveX * moveX + moveY * moveY;
+                        let t = 0;
+
+                        if (moveLenSq > 0) {
+                            t = (seatVecX * moveX + seatVecY * moveY) / moveLenSq;
+                            t = Math.max(0, Math.min(1, t));
+                        }
+
+                        // Closest point on path
+                        const closestX = startX + t * moveX;
+                        const closestY = startY + t * moveY;
+
+                        // Distance from seat to closest point on path
+                        const distToPath = Math.sqrt(
+                            Math.pow(mySeat.x - closestX, 2) +
+                            Math.pow(mySeat.y - closestY, 2)
+                        );
+
+                        // If the path comes within this cue's radius, schedule it
+                        if (distToPath <= cueRadius) {
+                            shouldSchedule = true;
+                        } else {
+                            // Also check endpoints in case radius is large
+                            const distStart = Math.sqrt(
+                                Math.pow(mySeat.x - startX, 2) +
+                                Math.pow(mySeat.y - startY, 2)
+                            );
+                            const distEnd = Math.sqrt(
+                                Math.pow(mySeat.x - endX, 2) +
+                                Math.pow(mySeat.y - endY, 2)
+                            );
+
+                            if (distStart <= cueRadius || distEnd <= cueRadius) {
+                                shouldSchedule = true;
+                            }
+                        }
+                    }
+
+                    if (shouldSchedule) {
+                        scheduleCueWithWarmUp({
                             audio_url: asset.audio_url,
                             lsq_url: asset.lsq_url,
                             // Store all spatial params for render loop
-                            originX: asset.originX,
-                            originY: asset.originY,
-                            destX: asset.destX || asset.originX, // If moving
-                            destY: asset.destY || asset.originY,
-                            radius: asset.radius,
+                            originX: startX,
+                            originY: startY,
+                            destX: endX,
+                            destY: endY,
+                            radius: cueRadius,
                             rolloff: asset.rolloff || 'linear',
                             color: asset.color,
                             label: asset.id,
                             startTime: absoluteStartTime,
-                            duration: asset.duration || 30000, // Default 30s if not specified
+                            warmUpTime: warmUpTime,
+                            duration: cueDuration,
                             type: 'instrument',
-                            volume: 1.0 // Base volume
-                        }, delayMs);
+                            volume: 1.0
+                        }, warmUpDelayMs, startDelayMs);
                     }
                 });
             });
@@ -849,31 +910,35 @@ devicedist.html: Feature List
             console.log(`📅 Scheduled ${scheduledCues.length} asset(s) for this seat`);
         }
 
-        // Schedule a single resolved asset
-        function scheduleCue(payload, delayMs) {
-            const dispatch = () => {
-                playSpatialCue(payload);
+        // Schedule a single asset with separate warm-up and start times
+        function scheduleCueWithWarmUp(payload, warmUpDelayMs, startDelayMs) {
+            // Schedule the warm-up (starts playing silently)
+            const warmUpTimeoutId = setTimeout(() => {
+                playSpatialCueWarmUp(payload);
+                activeTimeouts = activeTimeouts.filter(id => id !== warmUpTimeoutId);
+            }, warmUpDelayMs);
+            activeTimeouts.push(warmUpTimeoutId);
+
+            // Schedule the volume ramp-up (actual start)
+            const startTimeoutId = setTimeout(() => {
+                startSpatialCue(payload);
                 if (payload.lsq_url) {
                     scheduleLightSequence(payload);
                 }
-                activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
-            };
+                activeTimeouts = activeTimeouts.filter(id => id !== startTimeoutId);
+            }, startDelayMs);
+            activeTimeouts.push(startTimeoutId);
 
-            let timeoutId;
-            if (delayMs > 0) {
-                timeoutId = setTimeout(dispatch, delayMs);
-                activeTimeouts.push(timeoutId);
-            } else if (delayMs > -1000) {
-                // Within 1s late — play immediately
-                dispatch();
-            } else {
-                console.warn(`Skipping ${payload.label}: ${Math.round(-delayMs)}ms too late`);
-            }
+            // Store for reference
+            scheduledCues.push({
+                label: payload.label,
+                startTime: payload.startTime,
+                warmUpTime: payload.warmUpTime
+            });
         }
 
-        // --- CHANGE 4 OF 4: UPDATED AUDIO ENGINE ---
-        // Uses audio_url instead of file, applies gain dynamically in render loop
-        async function playSpatialCue(cue) {
+        // --- WARM-UP: Start playing silently ---
+        async function playSpatialCueWarmUp(cue) {
             // For pillar devices, verify this is a master mix
             if (mySeat.id.startsWith('PILLAR_') && cue.type !== 'pillar') {
                 console.log(`🔇 Pillar device filtering out non-pillar cue: ${cue.label}`);
@@ -882,7 +947,7 @@ devicedist.html: Feature List
 
             const url = cue.audio_url;
             if (!url) {
-                console.error('playSpatialCue: no audio_url', cue);
+                console.error('playSpatialCueWarmUp: no audio_url', cue);
                 return;
             }
 
@@ -903,40 +968,183 @@ devicedist.html: Feature List
             source.buffer = bufferCache[url];
 
             const gainNode = audioCtx.createGain();
-            gainNode.gain.setValueAtTime(0, audioCtx.currentTime); // Start silent
+
+            // Start at zero volume (silent warm-up)
+            gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
 
             source.connect(gainNode).connect(audioCtx.destination);
+            source.start(0); // Start playing now, silently
 
-            const scheduledStart = cue.startTime - serverOffset - hardwareLag;
-            const startTime = Math.max(audioCtx.currentTime, (scheduledStart / 1000));
+            console.log(`🔇 Warm-up: ${cue.label} playing silently at ${new Date().toLocaleTimeString()}`);
 
-            // Silent warm-up to prime audio hardware
-            const silentSource = audioCtx.createBufferSource();
-            silentSource.start(0);
-
-            source.start(startTime);
-
-            // Store all necessary info for render loop
+            // Store for later volume ramp-up
             activeAudioCues.push({
                 ...cue,
                 source,
                 gainNode,
-                startTime: cue.startTime, // Store absolute start time for render loop
-                localStartTime: Date.now() + (startTime * 1000) - audioCtx.currentTime * 1000
+                startTime: cue.startTime,
+                warmUpTime: cue.warmUpTime,
+                isWarmingUp: true,
+                localStartTime: Date.now()
             });
+        }
 
-            // Special handling for seat tests
-            if (cue.metadata?.purpose === 'seat_test' && cue.metadata?.seatId === mySeat.id) {
-                handleSeatTest(cue, startTime);
+        // --- START: Ramp up volume at scheduled time ---
+        function startSpatialCue(cue) {
+            // Find the warming-up cue
+            const activeCue = activeAudioCues.find(c =>
+                c.label === cue.label &&
+                c.isWarmingUp === true &&
+                Math.abs(c.startTime - cue.startTime) < 10 // Same start time within 10ms
+            );
+
+            if (!activeCue) {
+                console.warn(`⚠️ No warming cue found for ${cue.label}, starting fresh`);
+                // Fallback to direct playback (though this shouldn't happen)
+                playSpatialCueWarmUp(cue);
+                return;
             }
 
-            // Special handling for tuning movement
-            if (calibrationMode && cue.type === 'TUNING_MOVEMENT') {
-                monitorTuningPlayback(cue, source, startTime);
+            // Ramp up to target gain
+            const targetGain = cue.gain || 1.0;
+            activeCue.gainNode.gain.setTargetAtTime(targetGain, audioCtx.currentTime, 0.015);
+            activeCue.isWarmingUp = false;
+
+            console.log(`🔊 Started: ${cue.label} at gain ${targetGain.toFixed(3)} at ${new Date().toLocaleTimeString()}`);
+
+            // Start light sequence if present
+            if (cue.lsq_url) {
+                scheduleLightSequence(cue);
             }
         }
 
-        // --- NEW: LIGHT SEQUENCE SCHEDULER ---
+        // --- LEGACY: Direct playback for non-warmed cues (seat tests, tuning) ---
+        async function playSpatialCueDirect(cue) {
+            // For pillar devices, verify this is a master mix
+            if (mySeat.id.startsWith('PILLAR_') && cue.type !== 'pillar') {
+                console.log(`🔇 Pillar device filtering out non-pillar cue: ${cue.label}`);
+                return;
+            }
+
+            const url = cue.audio_url || cue.file;
+            if (!url) {
+                console.error('playSpatialCueDirect: no audio_url', cue);
+                return;
+            }
+
+            // Load on-demand if not preloaded
+            if (!bufferCache[url]) {
+                console.warn(`⚠️ Not preloaded, fetching: ${url.split('/').pop()}`);
+                try {
+                    const res = await fetch(url);
+                    const arrayBuf = await res.arrayBuffer();
+                    bufferCache[url] = await audioCtx.decodeAudioData(arrayBuf);
+                } catch (e) {
+                    console.error(`Failed to fetch ${url}:`, e);
+                    return;
+                }
+            }
+
+            const source = audioCtx.createBufferSource();
+            source.buffer = bufferCache[url];
+
+            const gainNode = audioCtx.createGain();
+
+            // Calculate timing
+            const scheduledStart = cue.startTime - serverOffset - hardwareLag;
+            const startTime = Math.max(audioCtx.currentTime, (scheduledStart / 1000));
+
+            // Connect and start
+            source.connect(gainNode).connect(audioCtx.destination);
+
+            // Set target gain
+            gainNode.gain.setTargetAtTime(cue.gain || 1.0, startTime, 0.015);
+
+            source.start(startTime);
+
+            // Store for render loop
+            activeAudioCues.push({
+                ...cue,
+                source,
+                gainNode,
+                startTime: cue.startTime,
+                isWarmingUp: false,
+                localStartTime: Date.now() + (startTime * 1000) - audioCtx.currentTime * 1000
+            });
+
+            // Light sequence if present
+            if (cue.lsq_url) {
+                scheduleLightSequence(cue);
+            }
+        }
+
+        // --- PLAY PILLAR FABRIC DURING TUNING (with warm-up) ---
+        async function startPillarFabric(startTime) {
+            console.log("🎻 Starting pillar fabric (string quartet + piano)");
+
+            const pillars = [
+                { id: 'PILLAR_FL', url: pillarUrls.FL, pos: 'FL' },
+                { id: 'PILLAR_FR', url: pillarUrls.FR, pos: 'FR' },
+                { id: 'PILLAR_BL', url: pillarUrls.BL, pos: 'BL' },
+                { id: 'PILLAR_BR', url: pillarUrls.BR, pos: 'BR' }
+            ];
+
+            const now = Date.now() + serverOffset;
+
+            // Calculate warm-up time (500ms before start)
+            const warmUpTime = startTime - SILENT_WARMUP_MS;
+            const warmUpDelay = warmUpTime - now - hardwareLag;
+            const startDelay = startTime - now - hardwareLag;
+
+            for (const pillar of pillars) {
+                if (!pillar.url) {
+                    console.warn(`⚠️ No URL for pillar ${pillar.id} - skipping`);
+                    continue;
+                }
+
+                // Ensure the asset is loaded
+                if (!bufferCache[pillar.url]) {
+                    console.warn(`⚠️ Pillar ${pillar.id} not preloaded, fetching now`);
+                    try {
+                        const res = await fetch(pillar.url);
+                        const arrayBuf = await res.arrayBuffer();
+                        bufferCache[pillar.url] = await audioCtx.decodeAudioData(arrayBuf);
+                    } catch (e) {
+                        console.error(`Failed to load pillar ${pillar.id}:`, e);
+                        continue;
+                    }
+                }
+
+                // Schedule warm-up
+                const warmUpTimeoutId = setTimeout(() => {
+                    const source = audioCtx.createBufferSource();
+                    source.buffer = bufferCache[pillar.url];
+                    source.loop = true;
+
+                    const gainNode = audioCtx.createGain();
+                    gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+
+                    source.connect(gainNode).connect(audioCtx.destination);
+                    source.start(0); // Start silently now
+
+                    activePillarSources.push({ source, gainNode, id: pillar.id });
+                    console.log(`🏛️ Pillar ${pillar.id} warming up`);
+                }, warmUpDelay);
+                activeTimeouts.push(warmUpTimeoutId);
+
+                // Schedule volume ramp
+                const startTimeoutId = setTimeout(() => {
+                    const pillarSource = activePillarSources.find(p => p.id === pillar.id);
+                    if (pillarSource) {
+                        pillarSource.gainNode.gain.setTargetAtTime(1.0, audioCtx.currentTime, 0.015);
+                        console.log(`🏛️ Pillar ${pillar.id} started`);
+                    }
+                }, startDelay);
+                activeTimeouts.push(startTimeoutId);
+            }
+        }
+
+        // --- LIGHT SEQUENCE SCHEDULER ---
         async function scheduleLightSequence(payload) {
             if (!payload.lsq_url) return;
 
@@ -954,7 +1162,7 @@ devicedist.html: Feature List
                     startTime: payload.startTime,
                     color: payload.color || '#ffffff',
                     label: payload.label,
-                    gain: 1.0 // Will be multiplied by audio gain in render loop
+                    gain: 1.0
                 });
 
                 console.log(`💡 Loaded light sequence: ${payload.label} (${frames.length} frames)`);
@@ -963,7 +1171,7 @@ devicedist.html: Feature List
             }
         }
 
-        // --- INDIVIDUAL SEAT TEST HANDLER ---
+        // --- INDIVIDUAL SEAT TEST HANDLER (uses direct playback) ---
         function handleSeatTest(cue, startTime) {
             console.log(`🔊 Received seat test for ${mySeat.id}`);
 
@@ -1001,6 +1209,9 @@ devicedist.html: Feature List
             if (!assignedNotes.length || !currentTuningSchedule) return;
 
             console.log(`🎵 Monitoring tuning playback for ${assignedNotes.length} assigned notes`);
+
+            // Start the pillar fabric when the flute starts (with warm-up)
+            startPillarFabric(cue.startTime);
 
             assignedNotes.forEach(note => {
                 const noteStartAbs = cue.startTime + note.startMs;
@@ -1102,6 +1313,9 @@ devicedist.html: Feature List
                 // Skip special cases handled elsewhere
                 if (cue.metadata?.purpose === 'seat_test') return;
                 if (calibrationMode && cue.type === 'TUNING_MOVEMENT') return;
+
+                // Skip cues that are still in warm-up (volume already 0)
+                if (cue.isWarmingUp) return;
 
                 // Calculate elapsed time and interpolation factor
                 const elapsed = serverNow - cue.startTime;
@@ -1225,7 +1439,7 @@ devicedist.html: Feature List
                     } else if (cue.type === 'TUNING_MOVEMENT') {
                         // Handle tuning movement - play the flute MP3
                         calibrationMode = true;
-                        playSpatialCue(cue);
+                        playSpatialCueDirect(cue);
                     }
                 }
             });
@@ -1241,7 +1455,7 @@ devicedist.html: Feature List
                 const noteAsset = snap.val();
                 if (noteAsset) {
                     lastPingSent = Date.now() + serverOffset;
-                    playSpatialCue({
+                    playSpatialCueDirect({
                         file: noteAsset,
                         startTime: lastPingSent,
                         duration: 1000,
@@ -1276,8 +1490,8 @@ devicedist.html: Feature List
 
         window.onload = async () => {
             syncClock();
-            await loadPillarPositions(); // Load pillar positions
-            await loadTuningAssetUrls(); // Load tuning asset URLs from database
+            await loadPillarPositions();
+            await loadTuningAssetUrls();
 
             audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
