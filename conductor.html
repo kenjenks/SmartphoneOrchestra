@@ -242,10 +242,10 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             clearInterval(heartbeatChecker);
         }
 
-        // Check every 5 seconds (faster than timeout to be responsive)
+        // Check every 12.1 seconds
         heartbeatChecker = setInterval(() => {
             checkDeviceHeartbeats();
-        }, 5000);
+        }, 12100);
 
         console.log(`💓 Heartbeat monitoring started (timeout: ${HEARTBEAT_TIMEOUT_MS}ms)`);
     }
