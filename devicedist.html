@@ -1069,6 +1069,10 @@ devicedist.html: Feature List
                 console.log(`🔇 Pillar device filtering out non-pillar cue: ${cue.label}`);
                 return;
             }
+            if (!mySeat.id.startsWith('PILLAR_') && cue.type === 'pillar') {
+                console.log(`🔇 Patron device skipping pillar cue: ${cue.label}`);
+                return;
+            }
 
             const url = cue.audio_url;
             if (!url) {
