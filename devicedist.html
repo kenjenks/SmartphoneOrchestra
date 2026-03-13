@@ -1638,7 +1638,10 @@ devicedist.html: Feature List
                 return;
             }
 
-            const scheduledStart = cue.startTime - (serverOffset || 0) - (hardwareLag || 0);
+            // Convert wall-clock startTime to AudioContext time
+            const nowWall = Date.now() + serverOffset;
+            const secondsUntilStart = (cue.startTime - nowWall - hardwareLag) / 1000;
+            const startTime = Math.max(audioCtx.currentTime, audioCtx.currentTime + secondsUntilStart);
             console.log("Scheduled start (ms):", scheduledStart);
 
             if (isNaN(scheduledStart)) {
