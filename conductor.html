@@ -936,38 +936,45 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
     }
 
     // --- INDIVIDUAL SEAT TEST HANDLER (uses test pulse URL from tuning_mode) ---
-    // UPDATED: Uses audible warble test pulse instead of ultrasonic
+    // Uses audible warble test pulse instead of ultrasonic
     function handleSeatTest(cue, startTime) {
         console.log(`🔊 Received seat test for ${mySeat.id}`);
 
-        // Use the test pulse URL from tuning_mode (should be warble version from bach_baker.py)
+        // Use the test pulse URL from tuning_mode
         const url = testPulseUrl;
         if (!url) {
             console.error('handleSeatTest: No test pulse URL available from tuning_mode');
             return;
         }
 
-        const pulseTime = cue.startTime;
+        // The warble occurs 3000ms into the file (based on your specification)
+        const WARBLE_POSITION_MS = 3000;
+
+        // The time the warble should be heard by conductor
+        const warbleTime = cue.startTime + WARBLE_POSITION_MS;
 
         const now = Date.now() + serverOffset;
-        const delayMs = pulseTime - now - hardwareLag;
+        const delayMs = cue.startTime - now - hardwareLag;
 
         if (delayMs > 0) {
             const timeoutId = setTimeout(() => {
                 const playTime = Date.now() + serverOffset;
 
+                // Record when the warble actually played
+                const warblePlayTime = playTime + WARBLE_POSITION_MS;
+
                 pendingTestPulse = {
-                    playTime: playTime,
+                    playTime: warblePlayTime,  // This is what conductor should hear
                     cueId: cue.metadata?.seatId
                 };
 
-                lastPingSent = playTime;
+                lastPingSent = warblePlayTime;
 
-                // Play the test pulse audio (audible warble version)
-                playTestPulse(url, pulseTime);
+                // Play the test pulse audio from the beginning
+                playTestPulse(url, cue.startTime);
 
                 flashScreenForPulse();
-                console.log(`📡 Test warble played at ${playTime}`);
+                console.log(`📡 Test warble played at ${warblePlayTime} (file position: ${WARBLE_POSITION_MS}ms)`);
 
                 activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
             }, delayMs);
