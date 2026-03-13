@@ -947,7 +947,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             return;
         }
 
-        // The warble occurs 3000ms into the file (based on your specification)
+        // The warble occurs 3000ms into the file (based on specification)
         const WARBLE_POSITION_MS = 3000;
 
         // The time the warble should be heard by conductor
@@ -1298,98 +1298,94 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         }
     }
 
-    // --- EVENT HANDLERS ---
-    document.getElementById('ready-btn').onclick = async () => {
-        // Wake Audio Hardware
-        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        if (audioCtx.state === 'suspended') await audioCtx.resume();
-
-        document.getElementById('setup-screen').style.display = 'none';
-        document.getElementById('show-screen').style.display = 'block';
-
-        const canvas = document.getElementById('stage-canvas');
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
-
-        // Start Render Loop
-        requestAnimationFrame(frame);
-
-        // 1. Listen for GO signals (Model B - Distributed Timeline)
-        db.ref('show/currentCue').on('value', snap => {
-            const cue = snap.val();
-            if (cue) {
-                if (cue.action === 'KILL') {
-                    console.log("💀 KILL signal received - reloading");
-                    location.reload();
-                } else if (cue.action === 'GO') {
-                    // Handle movement start signal with full timeline
-                    handleMovementStart(cue);
-                } else if (cue.type === 'TUNING_MOVEMENT') {
-                    // Handle tuning movement - use the flute URL from tuning_mode
-                    calibrationMode = true;
-                    playTuningMovement(cue);
-                }
-            }
-        });
-
-        // 2. Listen for Calibration Broadcast (Conductor Mic)
-        db.ref('tuning/last_heard').on('value', snap => {
-            const tHeard = snap.val();
-            if (tHeard) processAcousticReturn(tHeard);
-        });
-
-        // 3. Listen for Personal Calibration Polling (Bach Sequence)
-        db.ref(`tuning/active_poll/${mySeat.id}`).on('value', snap => {
-            const noteAsset = snap.val();
-            if (noteAsset) {
-                lastPingSent = Date.now() + serverOffset;
-                // This is legacy - we now use tuning_mode URLs
-                console.warn("Received legacy active_poll, ignoring");
-            }
-        });
-
-        // 4. Initialize tuning schedule listener
-        initTuningListener();
-
-        // 5. Register this device in Firebase
-        if (mySeat) {
-            db.ref(`devices/${mySeat.id}`).update({
-                lastSeen: Date.now() + serverOffset,
-                status: 'ACTIVE',
-                x: mySeat.x,
-                y: mySeat.y,
-                hardwareLag: hardwareLag,
-                calibratedLag: calibratedLag,
-                isHappy: isHappy
-            });
-
-            setInterval(() => {
-                db.ref(`devices/${mySeat.id}/lastSeen`).set(Date.now() + serverOffset);
-            }, 5000);
+    // --- UI BINDINGS ---
+    document.getElementById('start-mic-btn').onclick = initMicrophone;
+    document.getElementById('refresh-devices-btn').onclick = async () => {
+        await refreshActiveDevices();
+        renderMap();
+    };
+    document.getElementById('start-tuning-btn').onclick = startTuningMovement;
+    document.getElementById('stop-tuning-btn').onclick = stopTuning;
+    document.getElementById('load-default-pillars-btn').onclick = () => {
+        loadDefaultPillarUrls();
+        logDetection("Default pillar URLs loaded");
+    };
+    document.getElementById('kill-all-btn').onclick = () => {
+        if(confirm("Refresh all patron devices?")) {
+            db.ref('show/currentCue').set({ action: 'KILL', triggerTime: Date.now() });
+            logDetection("COMMAND: Global Kill Signal sent.");
         }
     };
 
+    // Click on seat map to test individual seat
+    canvas.addEventListener('click', (e) => {
+        if (!isTuningActive) return;
+
+        const rect = canvas.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+
+        let closestSeat = null;
+        let minDist = Infinity;
+
+        seats.forEach(seat => {
+            const xValues = seats.map(s => s.x);
+            const yValues = seats.map(s => s.y);
+            const minX = Math.min(...xValues) - 1;
+            const maxX = Math.max(...xValues) + 1;
+            const minY = Math.min(...yValues) - 1;
+            const maxY = Math.max(...yValues) + 1;
+
+            const scaleX = canvas.width / (maxX - minX);
+            const scaleY = canvas.height / (maxY - minY);
+            const scale = Math.min(scaleX, scaleY) * 0.9;
+
+            const offsetX = (canvas.width - (maxX - minX) * scale) / 2 - minX * scale;
+            const offsetY = (canvas.height - (maxY - minY) * scale) / 2 - minY * scale;
+
+            const screenX = seat.x * scale + offsetX;
+            const screenY = seat.y * scale + offsetY;
+
+            const dist = Math.sqrt(Math.pow(mouseX - screenX, 2) + Math.pow(mouseY - screenY, 2));
+            if (dist < minDist) {
+                minDist = dist;
+                closestSeat = seat;
+            }
+        });
+
+        if (closestSeat && minDist < 20) {
+            testSeat(closestSeat.id);
+        }
+    });
+
+    function logDetection(msg) {
+        const log = document.getElementById('detection-log');
+        const now = new Date().toLocaleTimeString().split(' ')[0];
+        log.innerHTML = `[${now}] ${msg}<br>` + log.innerHTML;
+        if (log.children.length > 3) log.removeChild(log.lastChild);
+    }
+
+    // Initialize everything - load all configs from Firebase
     window.onload = async () => {
-        syncClock();
-        await loadPillarPositions();
-        await loadTuningAssetUrls(); // Load tuning asset URLs from database
+        // Load all configurations uploaded by admin.html
+        await loadSeatConfig();
+        await loadTuningConfig();
+        await loadMovements();
 
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        initListeners();
 
-        const assetsOk = await preloadAssets();
-        const idOk = await resolveIdentity();
-
-        if (idOk && assetsOk) {
-            document.getElementById('ready-btn').disabled = false;
-            document.getElementById('system-msg').innerText = "System Ready. Please Enter.";
-        }
+        // Connection status
+        db.ref('.info/connected').on('value', snap => {
+            const el = document.getElementById('connection-status');
+            if (snap.val() === true) {
+                el.innerHTML = '<span class="status-dot status-active"></span>Firebase Connected';
+            } else {
+                el.innerHTML = '<span class="status-dot status-off"></span>Firebase Disconnected';
+            }
+        });
     };
 
-    window.onresize = () => {
-        const canvas = document.getElementById('stage-canvas');
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
-    };
+    window.onresize = resizeCanvas;
 
 </script>
 </body>
