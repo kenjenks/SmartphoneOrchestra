@@ -193,6 +193,27 @@ devicedist.html: Feature List
             width: 0%;
             transition: width 0.3s;
         }
+
+        /* Tuning Debug Panel */
+        #tuning-debug {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.8);
+            color: #00ff00;
+            font-family: monospace;
+            font-size: 10px;
+            padding: 10px;
+            border-radius: 4px;
+            border-left: 3px solid #ffcc00;
+            z-index: 100;
+            max-width: 300px;
+            display: none;
+            pointer-events: none;
+        }
+        .debug-label {
+            color: #888;
+        }
     </style>
 </head>
 <body>
@@ -220,7 +241,6 @@ devicedist.html: Feature List
         </div>
 
         <button id="ready-btn" disabled>ENTER THE ISLE</button>
-        <button id="debug-test-btn" style="margin-top:10px; background:#333; color:#ffcc00; padding:10px; border-radius:4px;">🔊 DEBUG: Play Test Pulse</button>
         <p id="system-msg" style="margin-top:20px; font-size: 0.8rem; color: #888;">Waiting for Audio Context...</p>
     </div>
 
@@ -228,6 +248,17 @@ devicedist.html: Feature List
         <div id="performance-overlay">FPS: -- | Lag: --ms</div>
         <div id="movement-indicator">Standby</div>
         <div id="asset-progress"><div id="asset-progress-fill"></div></div>
+        <div id="tuning-debug">
+            <div style="font-weight: bold; margin-bottom: 5px;">🔧 Tuning Debug</div>
+            <div><span class="debug-label">Flute URL:</span> <span id="debug-flute-url"></span></div>
+            <div><span class="debug-label">Tuning status:</span> <span id="debug-tuning-status"></span></div>
+            <div><span class="debug-label">Notes assigned:</span> <span id="debug-notes-assigned"></span></div>
+            <div><span class="debug-label">Next note:</span> <span id="debug-next-note"></span></div>
+            <div><span class="debug-label">Audio context:</span> <span id="debug-audio-ctx"></span></div>
+            <div><span class="debug-label">Flute buffer:</span> <span id="debug-buffer-status"></span></div>
+            <div><span class="debug-label">Current time:</span> <span id="debug-time"></span></div>
+            <div><span class="debug-label">Tuning start:</span> <span id="debug-tuning-start"></span></div>
+        </div>
         <canvas id="stage-canvas"></canvas>
     </div>
 
@@ -1297,7 +1328,7 @@ devicedist.html: Feature List
                     activeTimeouts.push(timeoutId);
                 }
 
-                // Pulse tracking at note center
+                // Pulse tracking at note center - devices will emit warble here
                 const pulseDelay = pulseAbs - now - hardwareLag;
                 if (pulseDelay > 0) {
                     const timeoutId = setTimeout(() => {
@@ -1309,7 +1340,7 @@ devicedist.html: Feature List
                             noteId: note.noteIndex
                         });
 
-                        console.log(`📡 Tuning pulse played at ${playTime} (note ${note.noteIndex})`);
+                        console.log(`📡 Tuning warble played at ${playTime} (note ${note.noteIndex})`);
                         activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
                     }, pulseDelay);
                     activeTimeouts.push(timeoutId);
@@ -1339,6 +1370,43 @@ devicedist.html: Feature List
             setTimeout(() => {
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
             }, 100);
+        }
+
+        // --- DEBUG FUNCTION TO MONITOR TUNING STATE ---
+        function updateTuningDebug() {
+            const debugDiv = document.getElementById('tuning-debug');
+            if (!debugDiv) return;
+
+            // Only show debug during tuning
+            if (calibrationMode && currentTuningSchedule) {
+                debugDiv.style.display = 'block';
+
+                document.getElementById('debug-flute-url').innerText = fluteUrl ? fluteUrl.split('/').pop() : 'not set';
+                document.getElementById('debug-tuning-status').innerText = calibrationMode ? 'ACTIVE' : 'inactive';
+                document.getElementById('debug-notes-assigned').innerText = assignedNotes.length;
+
+                const now = Date.now() + serverOffset;
+                const nextNote = assignedNotes.find(n => {
+                    return n.startMs + (currentTuningSchedule.startTime || 0) > now;
+                });
+
+                if (nextNote) {
+                    const timeToNext = ((nextNote.startMs + (currentTuningSchedule.startTime || 0)) - now) / 1000;
+                    document.getElementById('debug-next-note').innerText = `Note ${nextNote.noteIndex} in ${timeToNext.toFixed(2)}s`;
+                } else {
+                    document.getElementById('debug-next-note').innerText = 'none';
+                }
+
+                document.getElementById('debug-audio-ctx').innerText = audioCtx?.state || 'not created';
+                document.getElementById('debug-buffer-status').innerText = (fluteUrl && bufferCache[fluteUrl]) ? 'loaded' : 'not loaded';
+                document.getElementById('debug-time').innerText = (now / 1000).toFixed(2);
+                document.getElementById('debug-tuning-start').innerText = currentTuningSchedule.startTime ?
+                    ((currentTuningSchedule.startTime - now) / 1000).toFixed(2) + 's from now' : 'not set';
+            } else {
+                debugDiv.style.display = 'none';
+            }
+
+            requestAnimationFrame(updateTuningDebug);
         }
 
         // --- THE UNIFIED 30FPS RENDER LOOP ---
@@ -1556,42 +1624,6 @@ devicedist.html: Feature List
         }
 
         // --- EVENT HANDLERS ---
-
-        // DEBUG: Manual test pulse playback
-        document.getElementById('debug-test-btn').onclick = async () => {
-            console.log("🔊 DEBUG: Manual test pulse triggered");
-
-            // Ensure audio context is running
-            if (!audioCtx) {
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            }
-            if (audioCtx.state === 'suspended') {
-                await audioCtx.resume();
-            }
-
-            const url = "https://static.wixstatic.com/mp3/9178d1_63e58ac50ec7434eba6785cd3291c227.mp3";
-
-            try {
-                // Fetch and decode
-                const response = await fetch(url);
-                const arrayBuffer = await response.arrayBuffer();
-                const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-
-                // Play it
-                const source = audioCtx.createBufferSource();
-                source.buffer = audioBuffer;
-                source.connect(audioCtx.destination);
-                source.start();
-
-                console.log("✅ Test pulse playing!");
-
-                // Flash screen for visual feedback
-                flashScreenForPulse();
-
-            } catch (e) {
-                console.error("❌ Debug playback failed:", e);
-            }
-        };
         document.getElementById('ready-btn').onclick = async () => {
             // Wake Audio Hardware
             if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -1606,6 +1638,9 @@ devicedist.html: Feature List
 
             // Start Render Loop
             requestAnimationFrame(frame);
+
+            // Start debug update loop
+            updateTuningDebug();
 
             // 1. Listen for GO signals (Model B - Distributed Timeline)
             db.ref('show/currentCue').on('value', snap => {
