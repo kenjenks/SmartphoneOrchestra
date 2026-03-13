@@ -53,6 +53,8 @@ Operational SOP for Admin:
         .btn-danger:hover { background: #800; }
         .btn-warning { background: #663d00; border-color: #cc7a00; color: #fff; }
         .btn-warning:hover { background: #804d00; }
+        .btn-success { background: #1e4d1e; border-color: #2e8b57; color: #fff; }
+        .btn-success:hover { background: #2e6b2e; }
 
         #log { background: #000; color: #0f0; font-family: 'Consolas', 'Monaco', monospace; height: 150px; overflow-y: scroll; padding: 10px; border: 1px solid #333; margin-top: 20px; font-size: 12px; border-radius: 8px; }
         .log-entry { margin-bottom: 4px; border-bottom: 1px solid #111; }
@@ -72,13 +74,24 @@ Operational SOP for Admin:
         .pillar-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 5px; margin-top: 5px; }
         .pillar-item { background: #1a1a1a; padding: 3px; border-radius: 2px; font-size: 10px; }
         .pillar-label { color: #00ffcc; font-weight: bold; }
+
+        .status-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 10px;
+            font-weight: bold;
+            margin-left: 10px;
+        }
+        .badge-loaded { background: #1e4d1e; color: #8bc34a; }
+        .badge-missing { background: #4d1e1e; color: #ff6b6b; }
     </style>
 </head>
 <body>
 
     <header style="margin-bottom: 20px;">
         <h1 style="margin:0; font-weight: 300;">Smartphone Orchestra <span style="color:#444;">|</span> <span style="font-weight: 800; color:#00ffcc;">ADMIN</span></h1>
-        <p style="color:#666; margin:5px 0;">Production: <span id="active-show-display">No Production Loaded</span></p>
+        <p style="color:#666; margin:5px 0;">Production: <span id="active-show-display">Checking...</span></p>
     </header>
 
     <div class="dashboard">
@@ -88,15 +101,19 @@ Operational SOP for Admin:
             <div class="button-group">
                 <button class="btn" onclick="document.getElementById('pillar-input').click()">Upload pillar_config.json</button>
                 <input type="file" id="pillar-input" style="display:none" onchange="uploadPillarConfig(this)">
+                <span id="pillar-status" class="status-badge badge-missing">Not Loaded</span>
 
                 <button class="btn" onclick="document.getElementById('seat-config-input').click()">Upload seat_config.tsv</button>
                 <input type="file" id="seat-config-input" style="display:none" onchange="uploadSeatConfig(this)">
+                <span id="seat-status" class="status-badge badge-missing">Not Loaded</span>
 
                 <button class="btn" onclick="document.getElementById('tuning-input').click()">Upload tuning_mode.json</button>
                 <input type="file" id="tuning-input" style="display:none" onchange="uploadTuningConfig(this)">
+                <span id="tuning-status" class="status-badge badge-missing">Not Loaded</span>
 
                 <button class="btn" onclick="document.getElementById('file-input').click()">Upload visual_timeline.json</button>
                 <input type="file" id="file-input" style="display:none" onchange="uploadTimeline(this)">
+                <span id="timeline-status" class="status-badge badge-missing">Not Loaded</span>
             </div>
 
             <div class="button-group">
@@ -107,28 +124,28 @@ Operational SOP for Admin:
             <div class="config-status">
                 <div class="status-title">LIVE PILLAR COORDINATES (METERS)</div>
                 <div id="pillar-view">
-                    <div style="color: #444; font-style: italic; font-size: 0.8rem;">No Pillar Config Detected in Cloud</div>
+                    <div style="color: #444; font-style: italic; font-size: 0.8rem;">Checking for pillar config...</div>
                 </div>
             </div>
 
             <div class="config-status">
                 <div class="status-title">SEAT CONFIGURATION</div>
                 <div id="seat-view" style="max-height: 150px; overflow-y: auto;">
-                    <div style="color: #444; font-style: italic; font-size: 0.8rem;">No Seat Config Loaded</div>
+                    <div style="color: #444; font-style: italic; font-size: 0.8rem;">Checking for seat config...</div>
                 </div>
             </div>
 
             <div class="config-status">
                 <div class="status-title">TUNING MODE (BACH)</div>
                 <div id="tuning-view" style="max-height: 200px; overflow-y: auto;">
-                    <div style="color: #444; font-style: italic; font-size: 0.8rem;">No Tuning Config Loaded</div>
+                    <div style="color: #444; font-style: italic; font-size: 0.8rem;">Checking for tuning config...</div>
                 </div>
             </div>
 
             <div class="config-status">
                 <div class="status-title">MOVEMENT TIMELINE</div>
                 <div id="timeline-view" style="max-height: 150px; overflow-y: auto;">
-                    <div style="color: #444; font-style: italic; font-size: 0.8rem;">No Timeline Loaded</div>
+                    <div style="color: #444; font-style: italic; font-size: 0.8rem;">Checking for timeline...</div>
                 </div>
             </div>
         </div>
@@ -183,30 +200,87 @@ Operational SOP for Admin:
         firebase.initializeApp(firebaseConfig);
         const db = firebase.database();
 
-        // --- DATA OBSERVERS ---
+        // --- INITIAL DATA CHECK ---
+        async function checkExistingData() {
+            log("🔍 Checking for existing configuration data...");
 
-        // Observe Timeline and Show Title
-        db.ref('show').on('value', snap => {
-            const data = snap.val();
-            if (!data) {
-                document.getElementById('active-show-display').innerText = "No Production Loaded";
-                document.getElementById('timeline-view').innerHTML = '<div style="color: #444;">EMPTY</div>';
-                return;
+            // Check Pillar Config
+            try {
+                const pillarSnap = await db.ref('pillar_config').once('value');
+                const pillarData = pillarSnap.val();
+                if (pillarData && pillarData.pillars) {
+                    document.getElementById('pillar-status').innerHTML = 'Loaded';
+                    document.getElementById('pillar-status').className = 'status-badge badge-loaded';
+                    updatePillarView(pillarData);
+                    log(`✅ Found pillar config with ${pillarData.pillars.length} pillars`);
+                } else {
+                    document.getElementById('pillar-status').innerHTML = 'Not Loaded';
+                    document.getElementById('pillar-status').className = 'status-badge badge-missing';
+                    document.getElementById('pillar-view').innerHTML = '<div style="color: #444; font-style: italic; font-size: 0.8rem;">No Pillar Config Detected in Cloud</div>';
+                }
+            } catch (e) {
+                log(`⚠️ Error checking pillar config: ${e.message}`);
             }
-            document.getElementById('active-show-display').innerText = data.show_title || "Unnamed";
-            if (data.movements) {
-                let html = "<table><tr><th>Movement</th><th>Start</th><th>Cues</th></tr>";
-                data.movements.forEach(m => {
-                    html += `<tr><td>${m.movement_name}</td><td>${m.planned_start}</td><td>${m.cues ? m.cues.length : 0}</td></tr>`;
-                });
-                html += "</table>";
-                document.getElementById('timeline-view').innerHTML = html;
-            }
-        });
 
-        // Observe Pillar Configuration
-        db.ref('pillar_config').on('value', snap => {
-            const config = snap.val();
+            // Check Seat Config
+            try {
+                const seatSnap = await db.ref('seat_config').once('value');
+                const seatData = seatSnap.val();
+                if (seatData && seatData.seats) {
+                    document.getElementById('seat-status').innerHTML = 'Loaded';
+                    document.getElementById('seat-status').className = 'status-badge badge-loaded';
+                    updateSeatView(seatData);
+                    log(`✅ Found seat config with ${seatData.seats.length} seats`);
+                } else {
+                    document.getElementById('seat-status').innerHTML = 'Not Loaded';
+                    document.getElementById('seat-status').className = 'status-badge badge-missing';
+                    document.getElementById('seat-view').innerHTML = '<div style="color: #444; font-style: italic; font-size: 0.8rem;">No Seat Config Loaded</div>';
+                }
+            } catch (e) {
+                log(`⚠️ Error checking seat config: ${e.message}`);
+            }
+
+            // Check Tuning Config
+            try {
+                const tuningSnap = await db.ref('tuning_mode').once('value');
+                const tuningData = tuningSnap.val();
+                if (tuningData && tuningData.piano_notes) {
+                    document.getElementById('tuning-status').innerHTML = 'Loaded';
+                    document.getElementById('tuning-status').className = 'status-badge badge-loaded';
+                    updateTuningView(tuningData);
+                    log(`✅ Found tuning config with ${tuningData.piano_notes.length} notes`);
+                } else {
+                    document.getElementById('tuning-status').innerHTML = 'Not Loaded';
+                    document.getElementById('tuning-status').className = 'status-badge badge-missing';
+                    document.getElementById('tuning-view').innerHTML = '<div style="color: #444; font-style: italic; font-size: 0.8rem;">No Tuning Config Loaded</div>';
+                }
+            } catch (e) {
+                log(`⚠️ Error checking tuning config: ${e.message}`);
+            }
+
+            // Check Timeline
+            try {
+                const showSnap = await db.ref('show').once('value');
+                const showData = showSnap.val();
+                if (showData && showData.movements) {
+                    document.getElementById('timeline-status').innerHTML = 'Loaded';
+                    document.getElementById('timeline-status').className = 'status-badge badge-loaded';
+                    updateTimelineView(showData);
+                    document.getElementById('active-show-display').innerText = showData.show_title || "Unnamed";
+                    log(`✅ Found timeline with ${showData.movements.length} movements`);
+                } else {
+                    document.getElementById('timeline-status').innerHTML = 'Not Loaded';
+                    document.getElementById('timeline-status').className = 'status-badge badge-missing';
+                    document.getElementById('timeline-view').innerHTML = '<div style="color: #444; font-style: italic; font-size: 0.8rem;">No Timeline Loaded</div>';
+                    document.getElementById('active-show-display').innerText = "No Production Loaded";
+                }
+            } catch (e) {
+                log(`⚠️ Error checking timeline: ${e.message}`);
+            }
+        }
+
+        // --- UPDATE VIEW FUNCTIONS ---
+        function updatePillarView(config) {
             if (!config || !config.pillars) {
                 document.getElementById('pillar-view').innerHTML = '<div style="color: #444; font-style: italic; font-size: 0.8rem;">No Pillar Config Detected in Cloud</div>';
                 return;
@@ -222,11 +296,9 @@ Operational SOP for Admin:
             });
             html += "</table>";
             document.getElementById('pillar-view').innerHTML = html;
-        });
+        }
 
-        // Observe Seat Configuration
-        db.ref('seat_config').on('value', snap => {
-            const config = snap.val();
+        function updateSeatView(config) {
             if (!config || !config.seats) {
                 document.getElementById('seat-view').innerHTML = '<div style="color: #444; font-style: italic; font-size: 0.8rem;">No Seat Config Loaded</div>';
                 return;
@@ -245,11 +317,9 @@ Operational SOP for Admin:
             }
             html += "</table>";
             document.getElementById('seat-view').innerHTML = html;
-        });
+        }
 
-        // --- Observe Tuning Configuration with asset URLs ---
-        db.ref('tuning_mode').on('value', snap => {
-            const config = snap.val();
+        function updateTuningView(config) {
             if (!config || !config.piano_notes) {
                 document.getElementById('tuning-view').innerHTML = '<div style="color: #444; font-style: italic; font-size: 0.8rem;">No Tuning Config Loaded</div>';
                 return;
@@ -302,6 +372,79 @@ Operational SOP for Admin:
             html += `</div>`;
 
             document.getElementById('tuning-view').innerHTML = html;
+        }
+
+        function updateTimelineView(showData) {
+            if (!showData || !showData.movements) {
+                document.getElementById('timeline-view').innerHTML = '<div style="color: #444; font-style: italic; font-size: 0.8rem;">No Timeline Loaded</div>';
+                return;
+            }
+            let html = "<table><tr><th>Movement</th><th>Start</th><th>Cues</th></tr>";
+            showData.movements.forEach(m => {
+                html += `<tr><td>${m.movement_name}</td><td>${m.planned_start}</td><td>${m.cues ? m.cues.length : 0}</td></tr>`;
+            });
+            html += "</table>";
+            document.getElementById('timeline-view').innerHTML = html;
+        }
+
+        // --- DATA OBSERVERS (Keep existing real-time updates) ---
+
+        // Observe Timeline and Show Title
+        db.ref('show').on('value', snap => {
+            const data = snap.val();
+            if (!data) {
+                document.getElementById('active-show-display').innerText = "No Production Loaded";
+                document.getElementById('timeline-view').innerHTML = '<div style="color: #444;">EMPTY</div>';
+                document.getElementById('timeline-status').innerHTML = 'Not Loaded';
+                document.getElementById('timeline-status').className = 'status-badge badge-missing';
+                return;
+            }
+            document.getElementById('active-show-display').innerText = data.show_title || "Unnamed";
+            updateTimelineView(data);
+            document.getElementById('timeline-status').innerHTML = 'Loaded';
+            document.getElementById('timeline-status').className = 'status-badge badge-loaded';
+        });
+
+        // Observe Pillar Configuration
+        db.ref('pillar_config').on('value', snap => {
+            const config = snap.val();
+            if (!config || !config.pillars) {
+                document.getElementById('pillar-view').innerHTML = '<div style="color: #444; font-style: italic; font-size: 0.8rem;">No Pillar Config Detected in Cloud</div>';
+                document.getElementById('pillar-status').innerHTML = 'Not Loaded';
+                document.getElementById('pillar-status').className = 'status-badge badge-missing';
+                return;
+            }
+            updatePillarView(config);
+            document.getElementById('pillar-status').innerHTML = 'Loaded';
+            document.getElementById('pillar-status').className = 'status-badge badge-loaded';
+        });
+
+        // Observe Seat Configuration
+        db.ref('seat_config').on('value', snap => {
+            const config = snap.val();
+            if (!config || !config.seats) {
+                document.getElementById('seat-view').innerHTML = '<div style="color: #444; font-style: italic; font-size: 0.8rem;">No Seat Config Loaded</div>';
+                document.getElementById('seat-status').innerHTML = 'Not Loaded';
+                document.getElementById('seat-status').className = 'status-badge badge-missing';
+                return;
+            }
+            updateSeatView(config);
+            document.getElementById('seat-status').innerHTML = 'Loaded';
+            document.getElementById('seat-status').className = 'status-badge badge-loaded';
+        });
+
+        // Observe Tuning Configuration
+        db.ref('tuning_mode').on('value', snap => {
+            const config = snap.val();
+            if (!config || !config.piano_notes) {
+                document.getElementById('tuning-view').innerHTML = '<div style="color: #444; font-style: italic; font-size: 0.8rem;">No Tuning Config Loaded</div>';
+                document.getElementById('tuning-status').innerHTML = 'Not Loaded';
+                document.getElementById('tuning-status').className = 'status-badge badge-missing';
+                return;
+            }
+            updateTuningView(config);
+            document.getElementById('tuning-status').innerHTML = 'Loaded';
+            document.getElementById('tuning-status').className = 'status-badge badge-loaded';
         });
 
         // Observe Registry Counts (Separating Pillars from Patrons)
@@ -489,13 +632,13 @@ Operational SOP for Admin:
             } catch (e) { log(`ERROR: Download failed: ${e.message}`); }
         }
 
-        // --- WIPE REALTIME DATA BUTTON ---
+        // --- WIPE REALTIME DATA ---
         async function wipeRealtimeData() {
             if (confirm("Wipe all realtime data? This will clear:\n• Device registrations\n• Current tuning state\n• Current cues\n• Survey results\n\nPillar config, seat config, tuning mode, and show timeline will be preserved.")) {
                 log("🧹 Wiping realtime data...");
-                
+
                 const updates = {};
-                
+
                 // List of realtime paths to wipe
                 const realtimePaths = [
                     'devices',
@@ -503,12 +646,12 @@ Operational SOP for Admin:
                     'show/currentCue',
                     'survey_results'
                 ];
-                
+
                 // Set each path to null (delete)
                 realtimePaths.forEach(path => {
                     updates[path] = null;
                 });
-                
+
                 try {
                     await db.ref().update(updates);
                     log("✅ Realtime data wiped successfully!");
@@ -583,6 +726,12 @@ Operational SOP for Admin:
             box.innerHTML += `<div class="log-entry">[${new Date().toLocaleTimeString()}] ${msg}</div>`;
             box.scrollTop = box.scrollHeight;
         }
+
+        // Initialize everything - check for existing data on load
+        window.onload = async () => {
+            log("🚀 Admin panel initializing...");
+            await checkExistingData();
+        };
     </script>
 </body>
 </html>
