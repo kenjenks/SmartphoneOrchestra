@@ -11,6 +11,7 @@ Features:
 - Individual seat testing during tuning mode
 - Real-time device monitoring and performance registry
 - Seat map visualization with status indicators
+- Heartbeat monitoring: devices marked dead if no heartbeat for 12.1s
 
 Note: All configuration uploads (seat_config.tsv, tuning_mode.json,
 pillar_config.json, visual_timeline.json) are handled by admin.html
@@ -67,6 +68,9 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         .movement-selector { margin: 10px 0; max-height: 150px; overflow-y: auto; }
         .movement-btn { background: #222; text-align: left; padding: 8px; margin: 2px 0; }
         .movement-btn.active { background: #00ffcc; color: #000; border-left: 4px solid #fff; }
+
+        /* Heartbeat status indicators */
+        .heartbeat-dead { opacity: 0.3; filter: grayscale(100%); }
     </style>
 </head>
 <body>
@@ -217,6 +221,10 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
     const WARBLE_MIN_CONFIDENCE = 0.6; // Minimum confidence for warble detection
     const WARBLE_LOOKBACK_FRAMES = 10; // Number of FFT frames to analyze for modulation
 
+    // Heartbeat monitoring parameters
+    const HEARTBEAT_TIMEOUT_MS = 12100; // 12.1 seconds (10s ±1s heartbeat + 10% buffer)
+    let heartbeatChecker = null;
+
     // FFT analysis buffer for warble detection
     let warbleBuffer = [];
     let lastWarbleTime = 0;
@@ -227,6 +235,78 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
     offsetRef.on("value", snap => {
         serverOffset = snap.val() || 0;
     });
+
+    // --- HEARTBEAT MONITORING ---
+    function startHeartbeatMonitoring() {
+        if (heartbeatChecker) {
+            clearInterval(heartbeatChecker);
+        }
+
+        // Check every 5 seconds (faster than timeout to be responsive)
+        heartbeatChecker = setInterval(() => {
+            checkDeviceHeartbeats();
+        }, 5000);
+
+        console.log(`💓 Heartbeat monitoring started (timeout: ${HEARTBEAT_TIMEOUT_MS}ms)`);
+    }
+
+    function stopHeartbeatMonitoring() {
+        if (heartbeatChecker) {
+            clearInterval(heartbeatChecker);
+            heartbeatChecker = null;
+            console.log("💓 Heartbeat monitoring stopped");
+        }
+    }
+
+    function checkDeviceHeartbeats() {
+        const now = Date.now() + serverOffset;
+        let anyChanges = false;
+
+        Object.keys(deviceData).forEach(deviceId => {
+            const device = deviceData[deviceId];
+            if (!device) return;
+
+            // Skip pillars - they might have different heartbeat expectations
+            if (deviceId.startsWith('PILLAR_')) return;
+
+            const lastSeen = device.lastSeen;
+            if (!lastSeen) return;
+
+            const timeSinceLastSeen = now - lastSeen;
+
+            // Check if device has missed too many heartbeats
+            if (timeSinceLastSeen > HEARTBEAT_TIMEOUT_MS) {
+                // Only mark as dead if it was previously considered alive
+                if (device.status !== 'DEAD' && device.status !== 'OFFLINE') {
+                    console.log(`💔 Device ${deviceId} marked DEAD (last seen ${(timeSinceLastSeen/1000).toFixed(1)}s ago)`);
+
+                    // Update local data
+                    deviceData[deviceId].status = 'DEAD';
+
+                    // Update Firebase to reflect dead status
+                    db.ref(`devices/${deviceId}/status`).set('DEAD');
+
+                    anyChanges = true;
+                }
+            } else {
+                // Device is alive - ensure status reflects that (unless it was explicitly DEAD)
+                // This handles devices that come back online
+                if (device.status === 'DEAD' || device.status === 'OFFLINE') {
+                    console.log(`💚 Device ${deviceId} returned to life`);
+                    deviceData[deviceId].status = 'ACTIVE';
+                    db.ref(`devices/${deviceId}/status`).set('ACTIVE');
+                    anyChanges = true;
+                }
+            }
+        });
+
+        if (anyChanges) {
+            // Update UI
+            updateCalibrationStats();
+            renderMap();
+            updatePerformanceRegistry();
+        }
+    }
 
     // --- LOAD CONFIGURATIONS FROM FIREBASE (uploaded by admin.html) ---
     async function loadSeatConfig() {
@@ -359,7 +439,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         });
     }
 
-    // --- FIX 1: selectMovement() now uses inline movement data, no secondary fetch ---
+    // --- selectMovement() uses inline movement data, no secondary fetch ---
     async function selectMovement(index) {
         const movement = movements[index];
         if (!movement) return;
@@ -466,10 +546,12 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
                 ctx.fillStyle = '#00ffcc';
             } else if (status === 'CALIBRATING' || status === 'SYNCING') {
                 ctx.fillStyle = '#ffcc00';
-            } else if (deviceInfo && deviceInfo.lastSeen && (Date.now() - deviceInfo.lastSeen > 15000)) {
+            } else if (status === 'DEAD' || (deviceInfo && deviceInfo.lastSeen && (Date.now() + serverOffset - deviceInfo.lastSeen > HEARTBEAT_TIMEOUT_MS))) {
                 ctx.fillStyle = '#ff4444'; // Dead device
+            } else if (status === 'ACTIVE') {
+                ctx.fillStyle = '#00ffcc'; // Active but not calibrated
             } else {
-                ctx.fillStyle = '#333';
+                ctx.fillStyle = '#333'; // Offline
             }
 
             ctx.beginPath();
@@ -708,7 +790,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         requestAnimationFrame(drawFFT);
     }
 
-    // --- FIX 2: GO BUTTON now sends cues array directly, no manifest.timeline ---
+    // --- GO BUTTON sends cues array directly, no manifest.timeline ---
     document.getElementById('go-button').onclick = async () => {
         if (!currentMovement) {
             alert("No movement selected");
@@ -743,8 +825,8 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         const now = Date.now() + serverOffset;  // This gives you UTC time
 
         Object.entries(devices).forEach(([id, data]) => {
-            // Compare using UTC timestamps
-            if (data.lastSeen && (Math.abs(now - data.lastSeen) < 30000)) {
+            // Consider devices with recent heartbeats as active
+            if (data.lastSeen && (Math.abs(now - data.lastSeen) < HEARTBEAT_TIMEOUT_MS)) {
                 activeDevices.push({
                     id: id,
                     x: data.x || 0,
@@ -866,7 +948,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         const deviceOrder = createSpiralPath(activeDevices);
 
         if (deviceOrder.length === 0) {
-            alert("No patron devices found for flute path");
+            alert("No active patron devices found for flute path");
             return;
         }
 
@@ -899,7 +981,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             }))
         });
 
-        // FIX: Include startTime property in the tuning cue
+        // Include startTime property in the tuning cue
         await db.ref('show/currentCue').set({
             type: "TUNING_MOVEMENT",
             file: FLUTE_URL,
@@ -935,367 +1017,70 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         logDetection("⏹️ Tuning stopped");
     }
 
-    // --- INDIVIDUAL SEAT TEST HANDLER (uses test pulse URL from tuning_mode) ---
-    // Uses audible warble test pulse instead of ultrasonic
-    function handleSeatTest(cue, startTime) {
-        console.log(`🔊 Received seat test for ${mySeat.id}`);
+    // --- PERFORMANCE REGISTRY & STATUS MONITORING ---
+    function initListeners() {
+        db.ref('devices').on('value', snap => {
+            deviceData = snap.val() || {};
+            updateCalibrationStats();
+            renderMap();
+            updatePerformanceRegistry();
+        });
 
-        // Use the test pulse URL from tuning_mode
-        const url = testPulseUrl;
-        if (!url) {
-            console.error('handleSeatTest: No test pulse URL available from tuning_mode');
-            return;
-        }
+        refreshActiveDevices();
 
-        // The warble occurs 3000ms into the file (based on specification)
-        const WARBLE_POSITION_MS = 3000;
+        setInterval(() => {
+            if (isTuningActive) {
+                updateCalibrationStats();
+            }
+        }, 2000);
+    }
 
-        // The time the warble should be heard by conductor
-        const warbleTime = cue.startTime + WARBLE_POSITION_MS;
-
+    function updateCalibrationStats() {
         const now = Date.now() + serverOffset;
-        const delayMs = cue.startTime - now - hardwareLag;
+        let happy = 0, syncing = 0, dead = 0;
 
-        if (delayMs > 0) {
-            const timeoutId = setTimeout(() => {
-                const playTime = Date.now() + serverOffset;
+        Object.entries(deviceData).forEach(([id, data]) => {
+            if (id.startsWith('PILLAR_')) return;
 
-                // Record when the warble actually played
-                const warblePlayTime = playTime + WARBLE_POSITION_MS;
-
-                pendingTestPulse = {
-                    playTime: warblePlayTime,  // This is what conductor should hear
-                    cueId: cue.metadata?.seatId
-                };
-
-                lastPingSent = warblePlayTime;
-
-                // Play the test pulse audio from the beginning
-                playTestPulse(url, cue.startTime);
-
-                flashScreenForPulse();
-                console.log(`📡 Test warble played at ${warblePlayTime} (file position: ${WARBLE_POSITION_MS}ms)`);
-
-                activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
-            }, delayMs);
-
-            activeTimeouts.push(timeoutId);
-        }
-    }
-
-    // --- PLAY TEST PULSE (separate function for clarity) ---
-    // UPDATED: Just plays the audio, detection happens in detectWarble()
-    async function playTestPulse(url, scheduledTime) {
-        // Load on-demand if not preloaded
-        if (!bufferCache[url]) {
-            console.warn(`⚠️ Test pulse not preloaded, fetching: ${url.split('/').pop()}`);
-            try {
-                const res = await fetch(url);
-                const arrayBuf = await res.arrayBuffer();
-                bufferCache[url] = await audioCtx.decodeAudioData(arrayBuf);
-            } catch (e) {
-                console.error(`Failed to fetch test pulse ${url}:`, e);
-                return;
-            }
-        }
-
-        const source = audioCtx.createBufferSource();
-        source.buffer = bufferCache[url];
-
-        const gainNode = audioCtx.createGain();
-        gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime);
-
-        source.connect(gainNode).connect(audioCtx.destination);
-        source.start(0);
-    }
-
-    // --- TUNING PLAYBACK MONITOR ---
-    function monitorTuningPlayback(cue, source, startTime) {
-        if (!assignedNotes.length || !currentTuningSchedule) return;
-
-        console.log(`🎵 Monitoring tuning playback for ${assignedNotes.length} assigned notes`);
-
-        // Start the pillar fabric when the flute starts (with warm-up)
-        startPillarFabric(cue.startTime);
-
-        assignedNotes.forEach(note => {
-            const noteStartAbs = cue.startTime + note.startMs;
-            const noteEndAbs = noteStartAbs + note.durationMs;
-            const pulseAbs = cue.startTime + note.pulsePositionMs;
-
-            const now = Date.now() + serverOffset;
-
-            // Ramp up at note start
-            const rampUpDelay = noteStartAbs - now - hardwareLag;
-            if (rampUpDelay > 0) {
-                const timeoutId = setTimeout(() => {
-                    const activeCue = activeAudioCues.find(c => c.source === source);
-                    if (activeCue) {
-                        activeCue.gainNode.gain.setTargetAtTime(1.0, audioCtx.currentTime, 0.015);
-                        console.log(`🔊 Ramping up for note at ${note.startMs}ms`);
-                        flashScreenForPulse();
-                    }
-                    activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
-                }, rampUpDelay);
-                activeTimeouts.push(timeoutId);
-            }
-
-            // Pulse tracking at note center - devices will emit warble here
-            const pulseDelay = pulseAbs - now - hardwareLag;
-            if (pulseDelay > 0) {
-                const timeoutId = setTimeout(() => {
-                    const playTime = Date.now() + serverOffset;
-                    lastPingSent = playTime;
-
-                    pendingPulseDetections.push({
-                        playTime: playTime,
-                        noteId: note.noteIndex
-                    });
-
-                    console.log(`📡 Tuning warble played at ${playTime} (note ${note.noteIndex})`);
-                    activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
-                }, pulseDelay);
-                activeTimeouts.push(timeoutId);
-            }
-
-            // Ramp down at note end
-            const rampDownDelay = noteEndAbs - now - hardwareLag;
-            if (rampDownDelay > 0) {
-                const timeoutId = setTimeout(() => {
-                    const activeCue = activeAudioCues.find(c => c.source === source);
-                    if (activeCue) {
-                        activeCue.gainNode.gain.setTargetAtTime(0, audioCtx.currentTime, 0.015);
-                        console.log(`🔉 Ramping down after note at ${note.startMs}ms`);
-                    }
-                    activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
-                }, rampDownDelay);
-                activeTimeouts.push(timeoutId);
-            }
-        });
-    }
-
-    function flashScreenForPulse() {
-        const canvas = document.getElementById('stage-canvas');
-        const ctx = canvas.getContext('2d');
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        setTimeout(() => {
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-        }, 100);
-    }
-
-    // --- THE UNIFIED 30FPS RENDER LOOP ---
-    function frame(now) {
-        const delta = now - lastFrameTime;
-
-        // Throttle to 30fps
-        if (delta < FRAME_DURATION) {
-            requestAnimationFrame(frame);
-            return;
-        }
-
-        // Performance Watchdog
-        if (delta > 50) {
-            isLowPerf = true;
-            db.ref(`devices/${mySeat.id}/performance`).update({ lowPerf: true, jitter: delta });
-        }
-
-        lastFrameTime = now;
-        const serverNow = Date.now() + serverOffset;
-
-        // Update movement indicator
-        if (currentMovement && movementStartTime > serverNow) {
-            const secondsToStart = ((movementStartTime - serverNow) / 1000).toFixed(1);
-            document.getElementById('movement-indicator').innerText =
-                `🎭 ${currentMovement} (T-${secondsToStart}s)`;
-        } else if (currentMovement) {
-            document.getElementById('movement-indicator').innerText = `🎭 ${currentMovement} (Playing)`;
-        }
-
-        // --- SPATIAL AUDIO UPDATE ---
-        // Calculate gain for each active audio cue based on current position
-        activeAudioCues.forEach((cue, index) => {
-            // Skip special cases handled elsewhere
-            if (cue.metadata?.purpose === 'seat_test') return;
-            if (calibrationMode && cue.type === 'TUNING_MOVEMENT') return;
-
-            // Calculate elapsed time and interpolation factor
-            const elapsed = serverNow - cue.startTime;
-            const t = Math.max(0, Math.min(1, elapsed / cue.duration));
-
-            // Sine-based ease-in-out for movement
-            const easedT = -(Math.cos(Math.PI * t) - 1) / 2;
-
-            // Interpolate between origin and destination
-            const curX = cue.originX + (cue.destX - cue.originX) * easedT;
-            const curY = cue.originY + (cue.destY - cue.originY) * easedT;
-
-            // Calculate distance to this seat
-            const dist = Math.sqrt(
-                Math.pow(mySeat.x - curX, 2) +
-                Math.pow(mySeat.y - curY, 2)
-            );
-
-            // Calculate gain based on distance and rolloff
-            let gain = 0;
-            if (dist < cue.radius) {
-                if (cue.rolloff === 'linear') {
-                    gain = 1 - (dist / cue.radius);
-                } else { // 'none' = constant volume inside radius
-                    gain = 1.0;
-                }
-            }
-
-            // Apply gain with anti-click ramp
-            cue.gainNode.gain.setTargetAtTime(
-                gain * (cue.volume || 1),
-                audioCtx.currentTime,
-                0.015
-            );
-
-            // Clean up finished cues
-            if (elapsed >= cue.duration) {
-                activeAudioCues.splice(index, 1);
+            if (data.status === 'HAPPY') {
+                happy++;
+            } else if (data.status === 'CALIBRATING' || data.status === 'SYNCING') {
+                syncing++;
+            } else if (data.status === 'DEAD' || (data.lastSeen && (now - data.lastSeen > HEARTBEAT_TIMEOUT_MS))) {
+                dead++;
             }
         });
 
-        // --- VISUAL UPDATE ---
-        if (!isLowPerf) {
-            updateVisuals(serverNow);
-        } else {
-            const ctx = document.getElementById('stage-canvas').getContext('2d');
-            ctx.fillStyle = '#000';
-            ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
-        }
+        const total = happy + syncing;
+        const percent = total > 0 ? Math.round((happy / total) * 100) : 0;
 
-        requestAnimationFrame(frame);
+        document.getElementById('happy-count').innerText = happy;
+        document.getElementById('syncing-count').innerText = syncing;
+        document.getElementById('dead-count').innerText = dead;
+        document.getElementById('happy-percent').innerText = percent + '%';
+        document.getElementById('happy-progress-bar').style.width = percent + '%';
     }
 
-    // --- VISUAL RENDER with additive blending ---
-    function updateVisuals(serverNow) {
-        const canvas = document.getElementById('stage-canvas');
-        const ctx = canvas.getContext('2d');
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.globalCompositeOperation = 'lighter';
+    function updatePerformanceRegistry() {
+        const registry = document.getElementById('performance-registry');
+        registry.innerHTML = '<div class="perf-row" style="font-weight:bold"><span>ID</span><span>JITTER</span><span>STATUS</span></div>';
 
-        activeLightCues = activeLightCues.filter(lc => {
-            const elapsedS = (serverNow - lc.startTime) / 1000;
-            const frameIndex = Math.floor(elapsedS * 20); // 20fps LSQ
+        Object.keys(deviceData).slice(0, 20).forEach(id => {
+            const dev = deviceData[id];
+            const row = document.createElement('div');
+            row.className = 'perf-row';
 
-            if (frameIndex >= lc.frames.length) return false;
+            const lastSeen = dev.lastSeen ? Date.now() + serverOffset - dev.lastSeen : null;
+            if (lastSeen && lastSeen > HEARTBEAT_TIMEOUT_MS) row.className += ' critical';
+            else if (dev.performance?.lowPerf) row.className += ' warning';
 
-            const row = lc.frames[frameIndex];
-            const rawMax = Math.max(...row); // 0.0-1.0
-
-            if (rawMax > 0.001) {
-                // Parse hex color
-                const r = parseInt(lc.color.slice(1, 3), 16);
-                const g = parseInt(lc.color.slice(3, 5), 16);
-                const b = parseInt(lc.color.slice(5, 7), 16);
-
-                ctx.fillStyle = `rgba(${r},${g},${b},${rawMax})`;
-                ctx.fillRect(0, 0, canvas.width, canvas.height);
-            }
-
-            return true;
+            row.innerHTML = `
+                <span>${id.substring(0, 8)}...</span>
+                <span>${dev.performance?.jitter || '--'}ms</span>
+                <span>${dev.status || 'IDLE'}</span>
+            `;
+            registry.appendChild(row);
         });
-
-        ctx.globalCompositeOperation = 'source-over';
-    }
-
-    // --- PERFORMANCE OVERLAY UPDATE ---
-    function updatePerformanceOverlay() {
-        const overlay = document.getElementById('performance-overlay');
-        const fps = Math.round(1000 / (performance.now() - lastFrameTime));
-        const lag = calibratedLag ? `${calibratedLag}ms` : '--';
-        const cueCount = activeAudioCues.length + activeLightCues.length;
-        overlay.innerHTML = `FPS: ${fps} | Lag: ${lag} | Cues: ${cueCount} | ${isHappy ? '✅' : '🔄'}`;
-    }
-
-    // --- DIRECT PLAYBACK FOR TUNING MOVEMENT (uses fluteUrl from tuning_mode) ---
-    async function playTuningMovement(cue) {
-        console.log("🎵 Starting tuning movement with cue:", cue);
-        console.log("🎵 Flute URL:", fluteUrl);
-        console.log("🎵 Current values:", {
-            cueStartTime: cue.startTime,
-            serverOffset: serverOffset,
-            hardwareLag: hardwareLag,
-            audioCtxCurrentTime: audioCtx.currentTime
-        });
-
-        if (!fluteUrl) {
-            console.error("No flute URL available for tuning movement");
-            return;
-        }
-
-        // Calculate timing with validation
-        if (!cue.startTime || isNaN(cue.startTime)) {
-            console.error("Invalid cue.startTime:", cue.startTime);
-            return;
-        }
-
-        const scheduledStart = cue.startTime - (serverOffset || 0) - (hardwareLag || 0);
-        console.log("Scheduled start (ms):", scheduledStart);
-
-        if (isNaN(scheduledStart)) {
-            console.error("scheduledStart is NaN");
-            return;
-        }
-
-        const startTime = Math.max(audioCtx.currentTime, scheduledStart / 1000);
-        console.log("Final startTime (seconds):", startTime);
-
-        if (isNaN(startTime) || !isFinite(startTime)) {
-            console.error("Invalid startTime:", startTime);
-            return;
-        }
-
-        // Load on-demand if not preloaded
-        if (!bufferCache[fluteUrl]) {
-            console.warn(`⚠️ Flute not preloaded, fetching: ${fluteUrl.split('/').pop()}`);
-            try {
-                const res = await fetch(fluteUrl);
-                const arrayBuf = await res.arrayBuffer();
-                bufferCache[fluteUrl] = await audioCtx.decodeAudioData(arrayBuf);
-            } catch (e) {
-                console.error(`Failed to fetch flute ${fluteUrl}:`, e);
-                return;
-            }
-        }
-
-        const source = audioCtx.createBufferSource();
-        source.buffer = bufferCache[fluteUrl];
-
-        const gainNode = audioCtx.createGain();
-
-        // Connect and start
-        source.connect(gainNode).connect(audioCtx.destination);
-
-        // Set target gain with validated time
-        try {
-            gainNode.gain.setTargetAtTime(1.0, startTime, 0.015);
-        } catch (e) {
-            console.error("Error in setTargetAtTime:", e, "startTime:", startTime);
-            return;
-        }
-
-        source.start(startTime);
-
-        // Store for render loop
-        activeAudioCues.push({
-            ...cue,
-            source,
-            gainNode,
-            startTime: cue.startTime,
-            localStartTime: Date.now() + (startTime * 1000) - audioCtx.currentTime * 1000
-        });
-
-        // Start monitoring for note assignments
-        if (currentTuningSchedule && assignedNotes.length > 0) {
-            monitorTuningPlayback(cue, source, startTime);
-        } else {
-            console.log("No notes assigned to this device");
-        }
     }
 
     // --- UI BINDINGS ---
@@ -1354,7 +1139,22 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         });
 
         if (closestSeat && minDist < 20) {
-            testSeat(closestSeat.id);
+            // Send seat test cue to the device
+            const pulseTime = Date.now() + serverOffset + 1000;
+            db.ref('show/currentCue').set({
+                type: "AUDIO",
+                file: TEST_PULSE_URL,
+                startTime: pulseTime,
+                originX: closestSeat.x,
+                originY: closestSeat.y,
+                radius: 0.2,
+                rolloff: "linear",
+                metadata: {
+                    purpose: "seat_test",
+                    seatId: closestSeat.id
+                }
+            });
+            logDetection(`🔊 Seat test sent to ${closestSeat.id}`);
         }
     });
 
@@ -1373,6 +1173,9 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         await loadMovements();
 
         initListeners();
+
+        // Start heartbeat monitoring
+        startHeartbeatMonitoring();
 
         // Connection status
         db.ref('.info/connected').on('value', snap => {
