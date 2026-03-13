@@ -570,13 +570,30 @@ devicedist.html: Feature List
 
                     // Find notes assigned to this device
                     if (schedule.schedule) {
-                        assignedNotes = schedule.schedule.filter(note => note.deviceId === mySeat.id);
+                        // Parse all timing values as floats
+                        assignedNotes = schedule.schedule
+                            .filter(note => note.deviceId === mySeat.id)
+                            .map(note => ({
+                                ...note,
+                                startMs: parseFloat(note.startMs),
+                                durationMs: parseFloat(note.durationMs),
+                                pulsePositionMs: parseFloat(note.pulsePositionMs)
+                            }));
+
                         console.log(`🎯 Device assigned ${assignedNotes.length} notes for tuning`);
 
-                        // Log the note timings for debugging
-                        assignedNotes.forEach(note => {
-                            console.log(`   Note at ${note.startMs}ms, duration ${note.durationMs}ms, pulse at ${note.pulsePositionMs}ms`);
+                        // Log first few notes with proper floating point values
+                        assignedNotes.slice(0, 5).forEach((note, i) => {
+                            console.log(`   Note ${i}: start=${note.startMs.toFixed(1)}ms, ` +
+                                      `duration=${note.durationMs.toFixed(1)}ms, ` +
+                                      `pulse at ${note.pulsePositionMs.toFixed(1)}ms`);
                         });
+
+                        // Verify durations are > 0
+                        const zeroDurationNotes = assignedNotes.filter(n => n.durationMs <= 0);
+                        if (zeroDurationNotes.length > 0) {
+                            console.warn(`⚠️ Warning: ${zeroDurationNotes.length} notes have zero/negative duration`);
+                        }
                     }
 
                     // Preload the flute audio if not already cached
@@ -587,6 +604,7 @@ devicedist.html: Feature List
                     calibrationMode = false;
                     currentTuningSchedule = null;
                     assignedNotes = [];
+                    console.log("🎯 Tuning mode deactivated");
                     // Don't clear fluteUrl - keep it for potential future use
                 }
             });
@@ -595,14 +613,37 @@ devicedist.html: Feature List
             db.ref('tuning/last_heard').on('value', snap => {
                 const tHeard = snap.val();
                 if (tHeard) {
+                    // Parse as float to ensure precision
+                    const heardTime = parseFloat(tHeard);
+
                     // Check if this detection matches any of our pending pulses
-                    processPendingDetections(tHeard);
+                    processPendingDetections(heardTime);
 
                     // Also check if it matches a pending individual test
-                    if (pendingTestPulse && Math.abs(tHeard - pendingTestPulse.playTime) < 1000) {
-                        processAcousticReturn(tHeard);
+                    if (pendingTestPulse && Math.abs(heardTime - pendingTestPulse.playTime) < 1000) {
+                        processAcousticReturn(heardTime);
                     }
                 }
+            });
+
+            // Also listen for changes to the tuning schedule (in case it gets updated)
+            db.ref('tuning/current/schedule').on('child_changed', snap => {
+                console.log("🔄 Tuning schedule updated, reloading assignments");
+                // Force a refresh of the tuning data
+                db.ref('tuning/current').once('value', scheduleSnap => {
+                    const updatedSchedule = scheduleSnap.val();
+                    if (updatedSchedule && updatedSchedule.schedule) {
+                        assignedNotes = updatedSchedule.schedule
+                            .filter(note => note.deviceId === mySeat.id)
+                            .map(note => ({
+                                ...note,
+                                startMs: parseFloat(note.startMs),
+                                durationMs: parseFloat(note.durationMs),
+                                pulsePositionMs: parseFloat(note.pulsePositionMs)
+                            }));
+                        console.log(`🔄 Updated: ${assignedNotes.length} notes assigned`);
+                    }
+                });
             });
         }
 
