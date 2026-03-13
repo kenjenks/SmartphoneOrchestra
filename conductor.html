@@ -7,7 +7,7 @@ sending cues to patron devices over Firebase.
 
 Features:
 - Show control with GO button and timeline execution
-- Ultrasonic FSK detection (19.5kHz-19.4kHz-19.5kHz) for calibration
+- Warble frequency detection (frequency modulation pattern) for calibration
 - Individual seat testing during tuning mode
 - Real-time device monitoring and performance registry
 - Seat map visualization with status indicators
@@ -211,6 +211,17 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         BR: "https://static.wixstatic.com/mp3/9178d1_8b53f52bbce6406ebacae8288777bad5.mp3"
     };
 
+    // Warble detection parameters (calibrated from bach_tester.py)
+    const WARBLE_ENERGY_THRESHOLD = 0.0008;
+    const WARBLE_FREQ_BINS = 3; // Look at ±3 FFT bins around target frequency
+    const WARBLE_MIN_CONFIDENCE = 0.6; // Minimum confidence for warble detection
+    const WARBLE_LOOKBACK_FRAMES = 10; // Number of FFT frames to analyze for modulation
+
+    // FFT analysis buffer for warble detection
+    let warbleBuffer = [];
+    let lastWarbleTime = 0;
+    const WARBLE_COOLDOWN_MS = 500; // Minimum time between detections
+
     // --- CLOCK SYNC ---
     const offsetRef = db.ref(".info/serverTimeOffset");
     offsetRef.on("value", snap => {
@@ -250,7 +261,8 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
                     durationMs: note.duration_ms || 500,
                     measure: note.measure,
                     id: note.id,
-                    pitch: note.pitch
+                    pitch: note.pitch,
+                    freq_hz: pitchToFreq(note.pitch) // Convert pitch to frequency for warble detection
                 }));
 
                 // Load flute URL from tuning_mode.json metadata
@@ -274,6 +286,33 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         } catch (e) {
             logDetection("Error loading tuning config: " + e.message);
         }
+    }
+
+    // Helper function to convert pitch to frequency (same as bach_tester.py)
+    function pitchToFreq(pitch) {
+        if (!pitch) return 440.0;
+
+        const flat_to_sharp = {
+            'Db': 'C#', 'Eb': 'D#', 'Gb': 'F#', 'Ab': 'G#', 'Bb': 'A#',
+            'Cb': 'B', 'Fb': 'E'
+        };
+        const note_names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+
+        const match = pitch.match(/([A-G][b#]?)(\d+)/);
+        if (!match) return 440.0;
+
+        let note = match[1];
+        let octave = parseInt(match[2]);
+
+        if (flat_to_sharp[note]) {
+            note = flat_to_sharp[note];
+        }
+
+        const a4_idx = note_names.indexOf('A') + 4 * 12;
+        const note_idx = note_names.indexOf(note) + octave * 12;
+        const semitone_diff = note_idx - a4_idx;
+
+        return 440 * Math.pow(2, semitone_diff / 12);
     }
 
     async function loadMovements() {
@@ -453,19 +492,21 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         });
     }
 
-    // --- 2. THE CONDUCTOR'S EAR (FFT & FSK DETECTION) ---
+    // --- 2. THE CONDUCTOR'S EAR (WARBLE DETECTION - REPLACES ULTRASONIC) ---
     async function initMicrophone() {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
             audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             const source = audioCtx.createMediaStreamSource(stream);
             analyser = audioCtx.createAnalyser();
-            analyser.fftSize = 2048;
+            analyser.fftSize = 4096; // Larger FFT for better frequency resolution
             source.connect(analyser);
 
             dataArray = new Uint8Array(analyser.frequencyBinCount);
             document.getElementById('mic-status').innerHTML = '<span style="color:#00ffcc">ACTIVE</span>';
-            detectSignature();
+
+            // Start warble detection (replaces ultrasonic detection)
+            detectWarble();
             drawFFT();
         } catch (e) {
             alert("Mic Access Required for Calibration");
@@ -473,95 +514,169 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         }
     }
 
-    // FSK Pattern Detection: 19.5k -> 19.4k -> 19.5k
-    let patternStep = 0;
-    let lastStepTime = 0;
-    let detectionWindow = [];
-    const DETECTION_WINDOW_SIZE = 10;
-
-    function detectSignature() {
-        if (!analyser || !dataArray) {
-            requestAnimationFrame(detectSignature);
+    // Warble Detection: Look for frequency modulation patterns
+    // This REPLACES the previous ultrasonic FSK detection
+    function detectWarble() {
+        if (!analyser || !dataArray || !audioCtx) {
+            requestAnimationFrame(detectWarble);
             return;
         }
 
         analyser.getByteFrequencyData(dataArray);
 
-        // Frequencies to Bins (Approx)
-        const bin195 = Math.round(19500 / (audioCtx.sampleRate / 2048));
-        const bin194 = Math.round(19400 / (audioCtx.sampleRate / 2048));
+        const now = Date.now();
 
-        // Ensure bins are within range
-        if (bin195 >= dataArray.length || bin194 >= dataArray.length) {
-            requestAnimationFrame(detectSignature);
+        // Only detect every 100ms to avoid overload
+        if (now - lastWarbleTime < 100) {
+            requestAnimationFrame(detectWarble);
             return;
         }
 
-        const val195 = dataArray[bin195];
-        const val194 = dataArray[bin194];
-        const threshold = 160;
+        // Get current FFT data as float for better precision
+        const floatData = new Float32Array(analyser.frequencyBinCount);
+        analyser.getFloatFrequencyData(floatData);
 
-        const now = Date.now();
+        // Convert from dB to linear scale (matching bach_tester.py)
+        const linearData = floatData.map(val => Math.pow(10, val / 20));
 
-        // Add to detection window
-        detectionWindow.push({
+        // Store in buffer for temporal analysis
+        warbleBuffer.push({
             time: now,
-            val195: val195,
-            val194: val194
+            data: linearData.slice()
         });
 
-        if (detectionWindow.length > DETECTION_WINDOW_SIZE) {
-            detectionWindow.shift();
+        // Keep buffer at reasonable size
+        if (warbleBuffer.length > WARBLE_LOOKBACK_FRAMES * 2) {
+            warbleBuffer.shift();
         }
 
-        // Look for the pattern within the detection window
-        let found195a = false;
-        let found194 = false;
-        let found195b = false;
-        let patternTime = null;
+        // Need enough history for analysis
+        if (warbleBuffer.length < WARBLE_LOOKBACK_FRAMES) {
+            requestAnimationFrame(detectWarble);
+            return;
+        }
 
-        for (let i = 0; i < detectionWindow.length; i++) {
-            const sample = detectionWindow[i];
+        // Get recent frames
+        const recentFrames = warbleBuffer.slice(-WARBLE_LOOKBACK_FRAMES);
 
-            if (sample.val195 > threshold) {
-                if (!found195a) {
-                    found195a = true;
-                } else if (found194 && !found195b) {
-                    found195b = true;
-                    patternTime = sample.time;
+        // Calculate frequency bins for each note in tuning mode
+        if (noteTimings.length > 0 && isTuningActive) {
+            // NO OFFSET APPLIED HERE - conductor just listens and reports when it hears something
+            // Devices handle their own timing offsets based on calibration
+            const songPosition = now - tuningStartTime;
+
+            // Check notes that should be happening now (±500ms window)
+            const windowMs = 500;
+            const relevantNotes = noteTimings.filter(note =>
+                Math.abs(note.startMs - songPosition) < windowMs
+            );
+
+            relevantNotes.forEach(note => {
+                // Calculate FFT bin for this note's frequency
+                const freq = note.freq_hz || 440;
+                const nyquist = audioCtx.sampleRate / 2;
+                const binIndex = Math.floor(freq / nyquist * analyser.frequencyBinCount);
+
+                if (binIndex < 0 || binIndex >= analyser.frequencyBinCount) return;
+
+                // Get energy in surrounding bins (account for frequency spread from modulation)
+                let energy = 0;
+                let binCount = 0;
+                for (let i = -WARBLE_FREQ_BINS; i <= WARBLE_FREQ_BINS; i++) {
+                    const idx = binIndex + i;
+                    if (idx >= 0 && idx < analyser.frequencyBinCount) {
+                        energy += linearData[idx];
+                        binCount++;
+                    }
                 }
-            } else if (sample.val194 > threshold) {
-                if (found195a && !found194) {
-                    found194 = true;
+                energy = energy / binCount; // Average energy
+
+                // Look for energy above threshold (from bach_tester.py calibration)
+                if (energy > WARBLE_ENERGY_THRESHOLD) {
+                    // Now check for frequency modulation (warble pattern) in recent frames
+                    let modulationScore = 0;
+
+                    // Extract frequency peaks over time to detect modulation
+                    const peakFreqs = [];
+                    for (let i = 0; i < recentFrames.length; i++) {
+                        const frame = recentFrames[i];
+                        // Find peak in region around this note's frequency
+                        let maxEnergy = 0;
+                        let maxIdx = binIndex;
+                        for (let j = -5; j <= 5; j++) {
+                            const idx = binIndex + j;
+                            if (idx >= 0 && idx < frame.data.length && frame.data[idx] > maxEnergy) {
+                                maxEnergy = frame.data[idx];
+                                maxIdx = idx;
+                            }
+                        }
+                        const peakFreq = (maxIdx / analyser.frequencyBinCount) * nyquist;
+                        peakFreqs.push(peakFreq);
+                    }
+
+                    // Calculate frequency variation over time
+                    if (peakFreqs.length > 3) {
+                        const freqChanges = [];
+                        for (let i = 1; i < peakFreqs.length; i++) {
+                            freqChanges.push(peakFreqs[i] - peakFreqs[i-1]);
+                        }
+
+                        // Look for alternating sign changes (characteristic of warble)
+                        let signChanges = 0;
+                        for (let i = 1; i < freqChanges.length; i++) {
+                            if (Math.sign(freqChanges[i]) !== Math.sign(freqChanges[i-1]) &&
+                                Math.abs(freqChanges[i]) > 5) {
+                                signChanges++;
+                            }
+                        }
+
+                        // Calculate frequency range
+                        const freqRange = Math.max(...peakFreqs) - Math.min(...peakFreqs);
+
+                        // Warble detection logic (from bach_tester.py)
+                        // Warble should have:
+                        // 1. Frequency range of 20-60Hz (our encoded depth)
+                        // 2. At least 2 sign changes (up-down-up pattern)
+                        // 3. Energy above threshold
+
+                        if (freqRange > 20 && freqRange < 80 && signChanges >= 2) {
+                            modulationScore += 0.7;
+                        }
+
+                        // Also check for increased spectral spread (characteristic of modulation)
+                        if (energy > WARBLE_ENERGY_THRESHOLD * 2) {
+                            modulationScore += 0.3;
+                        }
+                    }
+
+                    // If modulation score is high enough, this is a warble detection
+                    if (modulationScore >= WARBLE_MIN_CONFIDENCE) {
+                        // Avoid duplicate detections within cooldown period
+                        if (now - lastWarbleTime > WARBLE_COOLDOWN_MS) {
+                            lastWarbleTime = now;
+
+                            // Broadcast the detection time immediately - NO OFFSET
+                            // Devices will use their calibrated lag to adjust
+                            const tHeard = now + serverOffset;
+                            broadcastDetection(tHeard);
+
+                            // Log with note info for debugging
+                            const songPosSec = (songPosition / 1000).toFixed(1);
+                            logDetection(`🎯 Warble detected: Note ${note.index} (${note.pitch}) at ${songPos}s (energy: ${energy.toFixed(4)})`);
+
+                            // Flash detection indicator on FFT viz
+                            const vCtx = document.getElementById('fft-viz').getContext('2d');
+                            vCtx.fillStyle = '#00ffcc';
+                            vCtx.globalAlpha = 0.3;
+                            vCtx.fillRect(0, 0, 300, 60);
+                            vCtx.globalAlpha = 1.0;
+                        }
+                    }
                 }
-            }
+            });
         }
 
-        // If we found the complete pattern
-        if (found195a && found194 && found195b && patternTime) {
-            const tHeard = patternTime + serverOffset;
-            broadcastDetection(tHeard);
-            logDetection(`FSK Match at ${tHeard}`);
-
-            // Clear detection window to avoid double-counting
-            detectionWindow = [];
-        }
-
-        // Simple state machine for real-time feedback
-        if (val195 > threshold && patternStep === 0) {
-            patternStep = 1;
-            lastStepTime = now;
-        } else if (val194 > threshold && patternStep === 1 && (now - lastStepTime < 100)) {
-            patternStep = 2;
-            lastStepTime = now;
-        } else if (val195 > threshold && patternStep === 2 && (now - lastStepTime < 100)) {
-            patternStep = 0;
-        }
-
-        // Timeout reset
-        if (now - lastStepTime > 150) patternStep = 0;
-
-        requestAnimationFrame(detectSignature);
+        requestAnimationFrame(detectWarble);
     }
 
     function broadcastDetection(tHeard) {
@@ -580,13 +695,14 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         vCtx.fillRect(0,0,300,60);
         vCtx.fillStyle = '#00ffcc';
 
-        // Draw only the relevant frequency range (around 19.5kHz)
-        const startBin = Math.round(19000 / (audioCtx.sampleRate / 2048));
-        const endBin = Math.round(20000 / (audioCtx.sampleRate / 2048));
+        // Draw the audible frequency range (0-2kHz) where warbles occur
+        const startBin = 0;
+        const endBin = Math.round(2000 / (audioCtx.sampleRate / 4096));
 
         for(let i = startBin; i < endBin && i < dataArray.length; i++) {
             const x = (i - startBin) * (300 / (endBin - startBin));
-            vCtx.fillRect(x, 60 - dataArray[i]/4, 2, dataArray[i]/4);
+            const height = Math.min(60, dataArray[i]/4);
+            vCtx.fillRect(x, 60 - height, 2, height);
         }
 
         requestAnimationFrame(drawFFT);
@@ -819,194 +935,454 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         logDetection("⏹️ Tuning stopped");
     }
 
-    async function testSeat(seatId) {
-        const seat = seats.find(s => s.id === seatId);
-        if (!seat) return;
+    // --- INDIVIDUAL SEAT TEST HANDLER (uses test pulse URL from tuning_mode) ---
+    // UPDATED: Uses audible warble test pulse instead of ultrasonic
+    function handleSeatTest(cue, startTime) {
+        console.log(`🔊 Received seat test for ${mySeat.id}`);
 
-        if (!TEST_PULSE_URL) {
-            logDetection("No test pulse URL configured in tuning_mode.json");
+        // Use the test pulse URL from tuning_mode (should be warble version from bach_baker.py)
+        const url = testPulseUrl;
+        if (!url) {
+            console.error('handleSeatTest: No test pulse URL available from tuning_mode');
             return;
         }
 
-        const pulseTime = Date.now() + 1000;
+        const pulseTime = cue.startTime;
 
-        await db.ref('show/currentCue').set({
-            type: "AUDIO",
-            file: TEST_PULSE_URL,
-            startMs: 100,
-            durationMs: 50,
-            originX: seat.x,
-            originY: seat.y,
-            radius: 0.2,
-            rolloff: "linear",
-            startTime: pulseTime,              // ADDED: For consistency
-            triggerTime: pulseTime,
-            scheduledTime: pulseTime,
-            metadata: {
-                purpose: "seat_test",
-                seatId: seatId
+        const now = Date.now() + serverOffset;
+        const delayMs = pulseTime - now - hardwareLag;
+
+        if (delayMs > 0) {
+            const timeoutId = setTimeout(() => {
+                const playTime = Date.now() + serverOffset;
+
+                pendingTestPulse = {
+                    playTime: playTime,
+                    cueId: cue.metadata?.seatId
+                };
+
+                lastPingSent = playTime;
+
+                // Play the test pulse audio (audible warble version)
+                playTestPulse(url, pulseTime);
+
+                flashScreenForPulse();
+                console.log(`📡 Test warble played at ${playTime}`);
+
+                activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
+            }, delayMs);
+
+            activeTimeouts.push(timeoutId);
+        }
+    }
+
+    // --- PLAY TEST PULSE (separate function for clarity) ---
+    // UPDATED: Just plays the audio, detection happens in detectWarble()
+    async function playTestPulse(url, scheduledTime) {
+        // Load on-demand if not preloaded
+        if (!bufferCache[url]) {
+            console.warn(`⚠️ Test pulse not preloaded, fetching: ${url.split('/').pop()}`);
+            try {
+                const res = await fetch(url);
+                const arrayBuf = await res.arrayBuffer();
+                bufferCache[url] = await audioCtx.decodeAudioData(arrayBuf);
+            } catch (e) {
+                console.error(`Failed to fetch test pulse ${url}:`, e);
+                return;
+            }
+        }
+
+        const source = audioCtx.createBufferSource();
+        source.buffer = bufferCache[url];
+
+        const gainNode = audioCtx.createGain();
+        gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime);
+
+        source.connect(gainNode).connect(audioCtx.destination);
+        source.start(0);
+    }
+
+    // --- TUNING PLAYBACK MONITOR ---
+    function monitorTuningPlayback(cue, source, startTime) {
+        if (!assignedNotes.length || !currentTuningSchedule) return;
+
+        console.log(`🎵 Monitoring tuning playback for ${assignedNotes.length} assigned notes`);
+
+        // Start the pillar fabric when the flute starts (with warm-up)
+        startPillarFabric(cue.startTime);
+
+        assignedNotes.forEach(note => {
+            const noteStartAbs = cue.startTime + note.startMs;
+            const noteEndAbs = noteStartAbs + note.durationMs;
+            const pulseAbs = cue.startTime + note.pulsePositionMs;
+
+            const now = Date.now() + serverOffset;
+
+            // Ramp up at note start
+            const rampUpDelay = noteStartAbs - now - hardwareLag;
+            if (rampUpDelay > 0) {
+                const timeoutId = setTimeout(() => {
+                    const activeCue = activeAudioCues.find(c => c.source === source);
+                    if (activeCue) {
+                        activeCue.gainNode.gain.setTargetAtTime(1.0, audioCtx.currentTime, 0.015);
+                        console.log(`🔊 Ramping up for note at ${note.startMs}ms`);
+                        flashScreenForPulse();
+                    }
+                    activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
+                }, rampUpDelay);
+                activeTimeouts.push(timeoutId);
+            }
+
+            // Pulse tracking at note center - devices will emit warble here
+            const pulseDelay = pulseAbs - now - hardwareLag;
+            if (pulseDelay > 0) {
+                const timeoutId = setTimeout(() => {
+                    const playTime = Date.now() + serverOffset;
+                    lastPingSent = playTime;
+
+                    pendingPulseDetections.push({
+                        playTime: playTime,
+                        noteId: note.noteIndex
+                    });
+
+                    console.log(`📡 Tuning warble played at ${playTime} (note ${note.noteIndex})`);
+                    activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
+                }, pulseDelay);
+                activeTimeouts.push(timeoutId);
+            }
+
+            // Ramp down at note end
+            const rampDownDelay = noteEndAbs - now - hardwareLag;
+            if (rampDownDelay > 0) {
+                const timeoutId = setTimeout(() => {
+                    const activeCue = activeAudioCues.find(c => c.source === source);
+                    if (activeCue) {
+                        activeCue.gainNode.gain.setTargetAtTime(0, audioCtx.currentTime, 0.015);
+                        console.log(`🔉 Ramping down after note at ${note.startMs}ms`);
+                    }
+                    activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
+                }, rampDownDelay);
+                activeTimeouts.push(timeoutId);
+            }
+        });
+    }
+
+    function flashScreenForPulse() {
+        const canvas = document.getElementById('stage-canvas');
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        setTimeout(() => {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }, 100);
+    }
+
+    // --- THE UNIFIED 30FPS RENDER LOOP ---
+    function frame(now) {
+        const delta = now - lastFrameTime;
+
+        // Throttle to 30fps
+        if (delta < FRAME_DURATION) {
+            requestAnimationFrame(frame);
+            return;
+        }
+
+        // Performance Watchdog
+        if (delta > 50) {
+            isLowPerf = true;
+            db.ref(`devices/${mySeat.id}/performance`).update({ lowPerf: true, jitter: delta });
+        }
+
+        lastFrameTime = now;
+        const serverNow = Date.now() + serverOffset;
+
+        // Update movement indicator
+        if (currentMovement && movementStartTime > serverNow) {
+            const secondsToStart = ((movementStartTime - serverNow) / 1000).toFixed(1);
+            document.getElementById('movement-indicator').innerText =
+                `🎭 ${currentMovement} (T-${secondsToStart}s)`;
+        } else if (currentMovement) {
+            document.getElementById('movement-indicator').innerText = `🎭 ${currentMovement} (Playing)`;
+        }
+
+        // --- SPATIAL AUDIO UPDATE ---
+        // Calculate gain for each active audio cue based on current position
+        activeAudioCues.forEach((cue, index) => {
+            // Skip special cases handled elsewhere
+            if (cue.metadata?.purpose === 'seat_test') return;
+            if (calibrationMode && cue.type === 'TUNING_MOVEMENT') return;
+
+            // Calculate elapsed time and interpolation factor
+            const elapsed = serverNow - cue.startTime;
+            const t = Math.max(0, Math.min(1, elapsed / cue.duration));
+
+            // Sine-based ease-in-out for movement
+            const easedT = -(Math.cos(Math.PI * t) - 1) / 2;
+
+            // Interpolate between origin and destination
+            const curX = cue.originX + (cue.destX - cue.originX) * easedT;
+            const curY = cue.originY + (cue.destY - cue.originY) * easedT;
+
+            // Calculate distance to this seat
+            const dist = Math.sqrt(
+                Math.pow(mySeat.x - curX, 2) +
+                Math.pow(mySeat.y - curY, 2)
+            );
+
+            // Calculate gain based on distance and rolloff
+            let gain = 0;
+            if (dist < cue.radius) {
+                if (cue.rolloff === 'linear') {
+                    gain = 1 - (dist / cue.radius);
+                } else { // 'none' = constant volume inside radius
+                    gain = 1.0;
+                }
+            }
+
+            // Apply gain with anti-click ramp
+            cue.gainNode.gain.setTargetAtTime(
+                gain * (cue.volume || 1),
+                audioCtx.currentTime,
+                0.015
+            );
+
+            // Clean up finished cues
+            if (elapsed >= cue.duration) {
+                activeAudioCues.splice(index, 1);
             }
         });
 
-        logDetection(`🔊 Silent test pulse sent to ${seatId}`);
+        // --- VISUAL UPDATE ---
+        if (!isLowPerf) {
+            updateVisuals(serverNow);
+        } else {
+            const ctx = document.getElementById('stage-canvas').getContext('2d');
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
+        }
+
+        requestAnimationFrame(frame);
     }
 
-    // --- 5. PERFORMANCE REGISTRY & STATUS MONITORING ---
-    function initListeners() {
-        db.ref('devices').on('value', snap => {
-            deviceData = snap.val() || {};
-            updateCalibrationStats();
-            renderMap();
-            updatePerformanceRegistry();
+    // --- VISUAL RENDER with additive blending ---
+    function updateVisuals(serverNow) {
+        const canvas = document.getElementById('stage-canvas');
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.globalCompositeOperation = 'lighter';
+
+        activeLightCues = activeLightCues.filter(lc => {
+            const elapsedS = (serverNow - lc.startTime) / 1000;
+            const frameIndex = Math.floor(elapsedS * 20); // 20fps LSQ
+
+            if (frameIndex >= lc.frames.length) return false;
+
+            const row = lc.frames[frameIndex];
+            const rawMax = Math.max(...row); // 0.0-1.0
+
+            if (rawMax > 0.001) {
+                // Parse hex color
+                const r = parseInt(lc.color.slice(1, 3), 16);
+                const g = parseInt(lc.color.slice(3, 5), 16);
+                const b = parseInt(lc.color.slice(5, 7), 16);
+
+                ctx.fillStyle = `rgba(${r},${g},${b},${rawMax})`;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+            }
+
+            return true;
         });
 
-        refreshActiveDevices();
-
-        setInterval(() => {
-            if (isTuningActive) {
-                updateCalibrationStats();
-            }
-        }, 2000);
+        ctx.globalCompositeOperation = 'source-over';
     }
 
-    function updateCalibrationStats() {
-        const now = Date.now();
-        let happy = 0, syncing = 0, dead = 0;
+    // --- PERFORMANCE OVERLAY UPDATE ---
+    function updatePerformanceOverlay() {
+        const overlay = document.getElementById('performance-overlay');
+        const fps = Math.round(1000 / (performance.now() - lastFrameTime));
+        const lag = calibratedLag ? `${calibratedLag}ms` : '--';
+        const cueCount = activeAudioCues.length + activeLightCues.length;
+        overlay.innerHTML = `FPS: ${fps} | Lag: ${lag} | Cues: ${cueCount} | ${isHappy ? '✅' : '🔄'}`;
+    }
 
-        Object.entries(deviceData).forEach(([id, data]) => {
-            if (id.startsWith('PILLAR_')) return;
+    // --- DIRECT PLAYBACK FOR TUNING MOVEMENT (uses fluteUrl from tuning_mode) ---
+    async function playTuningMovement(cue) {
+        console.log("🎵 Starting tuning movement with cue:", cue);
+        console.log("🎵 Flute URL:", fluteUrl);
+        console.log("🎵 Current values:", {
+            cueStartTime: cue.startTime,
+            serverOffset: serverOffset,
+            hardwareLag: hardwareLag,
+            audioCtxCurrentTime: audioCtx.currentTime
+        });
 
-            if (data.status === 'HAPPY') {
-                happy++;
-            } else if (data.status === 'CALIBRATING' || data.status === 'SYNCING') {
-                syncing++;
+        if (!fluteUrl) {
+            console.error("No flute URL available for tuning movement");
+            return;
+        }
+
+        // Calculate timing with validation
+        if (!cue.startTime || isNaN(cue.startTime)) {
+            console.error("Invalid cue.startTime:", cue.startTime);
+            return;
+        }
+
+        const scheduledStart = cue.startTime - (serverOffset || 0) - (hardwareLag || 0);
+        console.log("Scheduled start (ms):", scheduledStart);
+
+        if (isNaN(scheduledStart)) {
+            console.error("scheduledStart is NaN");
+            return;
+        }
+
+        const startTime = Math.max(audioCtx.currentTime, scheduledStart / 1000);
+        console.log("Final startTime (seconds):", startTime);
+
+        if (isNaN(startTime) || !isFinite(startTime)) {
+            console.error("Invalid startTime:", startTime);
+            return;
+        }
+
+        // Load on-demand if not preloaded
+        if (!bufferCache[fluteUrl]) {
+            console.warn(`⚠️ Flute not preloaded, fetching: ${fluteUrl.split('/').pop()}`);
+            try {
+                const res = await fetch(fluteUrl);
+                const arrayBuf = await res.arrayBuffer();
+                bufferCache[fluteUrl] = await audioCtx.decodeAudioData(arrayBuf);
+            } catch (e) {
+                console.error(`Failed to fetch flute ${fluteUrl}:`, e);
+                return;
             }
+        }
 
-            if (data.lastSeen && (now - data.lastSeen > 15000)) {
-                dead++;
+        const source = audioCtx.createBufferSource();
+        source.buffer = bufferCache[fluteUrl];
+
+        const gainNode = audioCtx.createGain();
+
+        // Connect and start
+        source.connect(gainNode).connect(audioCtx.destination);
+
+        // Set target gain with validated time
+        try {
+            gainNode.gain.setTargetAtTime(1.0, startTime, 0.015);
+        } catch (e) {
+            console.error("Error in setTargetAtTime:", e, "startTime:", startTime);
+            return;
+        }
+
+        source.start(startTime);
+
+        // Store for render loop
+        activeAudioCues.push({
+            ...cue,
+            source,
+            gainNode,
+            startTime: cue.startTime,
+            localStartTime: Date.now() + (startTime * 1000) - audioCtx.currentTime * 1000
+        });
+
+        // Start monitoring for note assignments
+        if (currentTuningSchedule && assignedNotes.length > 0) {
+            monitorTuningPlayback(cue, source, startTime);
+        } else {
+            console.log("No notes assigned to this device");
+        }
+    }
+
+    // --- EVENT HANDLERS ---
+    document.getElementById('ready-btn').onclick = async () => {
+        // Wake Audio Hardware
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === 'suspended') await audioCtx.resume();
+
+        document.getElementById('setup-screen').style.display = 'none';
+        document.getElementById('show-screen').style.display = 'block';
+
+        const canvas = document.getElementById('stage-canvas');
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        // Start Render Loop
+        requestAnimationFrame(frame);
+
+        // 1. Listen for GO signals (Model B - Distributed Timeline)
+        db.ref('show/currentCue').on('value', snap => {
+            const cue = snap.val();
+            if (cue) {
+                if (cue.action === 'KILL') {
+                    console.log("💀 KILL signal received - reloading");
+                    location.reload();
+                } else if (cue.action === 'GO') {
+                    // Handle movement start signal with full timeline
+                    handleMovementStart(cue);
+                } else if (cue.type === 'TUNING_MOVEMENT') {
+                    // Handle tuning movement - use the flute URL from tuning_mode
+                    calibrationMode = true;
+                    playTuningMovement(cue);
+                }
             }
         });
 
-        const total = happy + syncing;
-        const percent = total > 0 ? Math.round((happy / total) * 100) : 0;
-
-        document.getElementById('happy-count').innerText = happy;
-        document.getElementById('syncing-count').innerText = syncing;
-        document.getElementById('dead-count').innerText = dead;
-        document.getElementById('happy-percent').innerText = percent + '%';
-        document.getElementById('happy-progress-bar').style.width = percent + '%';
-    }
-
-    function updatePerformanceRegistry() {
-        const registry = document.getElementById('performance-registry');
-        registry.innerHTML = '<div class="perf-row" style="font-weight:bold"><span>ID</span><span>JITTER</span><span>STATUS</span></div>';
-
-        Object.keys(deviceData).slice(0, 20).forEach(id => {
-            const dev = deviceData[id];
-            const row = document.createElement('div');
-            row.className = 'perf-row';
-
-            const lastSeen = dev.lastSeen ? Date.now() - dev.lastSeen : null;
-            if (lastSeen && lastSeen > 15000) row.className += ' critical';
-            else if (dev.performance?.lowPerf) row.className += ' warning';
-
-            row.innerHTML = `
-                <span>${id.substring(0, 8)}...</span>
-                <span>${dev.performance?.jitter || '--'}ms</span>
-                <span>${dev.status || 'IDLE'}</span>
-            `;
-            registry.appendChild(row);
+        // 2. Listen for Calibration Broadcast (Conductor Mic)
+        db.ref('tuning/last_heard').on('value', snap => {
+            const tHeard = snap.val();
+            if (tHeard) processAcousticReturn(tHeard);
         });
-    }
 
-    // --- UI BINDINGS ---
-    document.getElementById('start-mic-btn').onclick = initMicrophone;
-    document.getElementById('refresh-devices-btn').onclick = async () => {
-        await refreshActiveDevices();
-        renderMap();
-    };
-    document.getElementById('start-tuning-btn').onclick = startTuningMovement;
-    document.getElementById('stop-tuning-btn').onclick = stopTuning;
-    document.getElementById('load-default-pillars-btn').onclick = () => {
-        loadDefaultPillarUrls();
-        logDetection("Default pillar URLs loaded");
-    };
-    document.getElementById('kill-all-btn').onclick = () => {
-        if(confirm("Refresh all patron devices?")) {
-            db.ref('show/currentCue').set({ action: 'KILL', triggerTime: Date.now() });
-            logDetection("COMMAND: Global Kill Signal sent.");
+        // 3. Listen for Personal Calibration Polling (Bach Sequence)
+        db.ref(`tuning/active_poll/${mySeat.id}`).on('value', snap => {
+            const noteAsset = snap.val();
+            if (noteAsset) {
+                lastPingSent = Date.now() + serverOffset;
+                // This is legacy - we now use tuning_mode URLs
+                console.warn("Received legacy active_poll, ignoring");
+            }
+        });
+
+        // 4. Initialize tuning schedule listener
+        initTuningListener();
+
+        // 5. Register this device in Firebase
+        if (mySeat) {
+            db.ref(`devices/${mySeat.id}`).update({
+                lastSeen: Date.now() + serverOffset,
+                status: 'ACTIVE',
+                x: mySeat.x,
+                y: mySeat.y,
+                hardwareLag: hardwareLag,
+                calibratedLag: calibratedLag,
+                isHappy: isHappy
+            });
+
+            setInterval(() => {
+                db.ref(`devices/${mySeat.id}/lastSeen`).set(Date.now() + serverOffset);
+            }, 5000);
         }
     };
 
-    // Click on seat map to test individual seat
-    canvas.addEventListener('click', (e) => {
-        if (!isTuningActive) return;
-
-        const rect = canvas.getBoundingClientRect();
-        const mouseX = e.clientX - rect.left;
-        const mouseY = e.clientY - rect.top;
-
-        let closestSeat = null;
-        let minDist = Infinity;
-
-        seats.forEach(seat => {
-            const xValues = seats.map(s => s.x);
-            const yValues = seats.map(s => s.y);
-            const minX = Math.min(...xValues) - 1;
-            const maxX = Math.max(...xValues) + 1;
-            const minY = Math.min(...yValues) - 1;
-            const maxY = Math.max(...yValues) + 1;
-
-            const scaleX = canvas.width / (maxX - minX);
-            const scaleY = canvas.height / (maxY - minY);
-            const scale = Math.min(scaleX, scaleY) * 0.9;
-
-            const offsetX = (canvas.width - (maxX - minX) * scale) / 2 - minX * scale;
-            const offsetY = (canvas.height - (maxY - minY) * scale) / 2 - minY * scale;
-
-            const screenX = seat.x * scale + offsetX;
-            const screenY = seat.y * scale + offsetY;
-
-            const dist = Math.sqrt(Math.pow(mouseX - screenX, 2) + Math.pow(mouseY - screenY, 2));
-            if (dist < minDist) {
-                minDist = dist;
-                closestSeat = seat;
-            }
-        });
-
-        if (closestSeat && minDist < 20) {
-            testSeat(closestSeat.id);
-        }
-    });
-
-    function logDetection(msg) {
-        const log = document.getElementById('detection-log');
-        const now = new Date().toLocaleTimeString().split(' ')[0];
-        log.innerHTML = `[${now}] ${msg}<br>` + log.innerHTML;
-        if (log.children.length > 3) log.removeChild(log.lastChild);
-    }
-
-    // Initialize everything - load all configs from Firebase
     window.onload = async () => {
-        // Load all configurations uploaded by admin.html
-        await loadSeatConfig();
-        await loadTuningConfig();
-        await loadMovements();
+        syncClock();
+        await loadPillarPositions();
+        await loadTuningAssetUrls(); // Load tuning asset URLs from database
 
-        initListeners();
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
-        // Connection status
-        db.ref('.info/connected').on('value', snap => {
-            const el = document.getElementById('connection-status');
-            if (snap.val() === true) {
-                el.innerHTML = '<span class="status-dot status-active"></span>Firebase Connected';
-            } else {
-                el.innerHTML = '<span class="status-dot status-off"></span>Firebase Disconnected';
-            }
-        });
+        const assetsOk = await preloadAssets();
+        const idOk = await resolveIdentity();
+
+        if (idOk && assetsOk) {
+            document.getElementById('ready-btn').disabled = false;
+            document.getElementById('system-msg').innerText = "System Ready. Please Enter.";
+        }
     };
 
-    window.onresize = resizeCanvas;
+    window.onresize = () => {
+        const canvas = document.getElementById('stage-canvas');
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+    };
 
 </script>
 </body>
