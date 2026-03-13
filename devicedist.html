@@ -1539,7 +1539,7 @@ devicedist.html: Feature List
 
         // --- DIRECT PLAYBACK FOR TUNING MOVEMENT (uses fluteUrl from tuning_mode) ---
         async function playTuningMovement(cue) {
-            console.log("🎵 Received tuning movement cue, preparing with 5s buffer...");
+            console.log("🎵 Starting tuning movement with cue:", cue);
             console.log("🎵 Flute URL:", fluteUrl);
             console.log("🎵 Current values:", {
                 cueStartTime: cue.startTime,
@@ -1553,101 +1553,77 @@ devicedist.html: Feature List
                 return;
             }
 
-            // Use a 5-second buffer to ensure everything is ready
-            const BUFFER_MS = 5000;
-            const now = Date.now() + serverOffset;
-            const audioStartTime = now + BUFFER_MS;
+            // ❌ PROBLEMATIC TIMING CALCULATION
+            if (!cue.startTime || isNaN(cue.startTime)) {
+                console.error("Invalid cue.startTime:", cue.startTime);
+                return;
+            }
 
-            console.log(`⏰ Tuning preparation: ${BUFFER_MS/1000}s buffer`);
-            console.log(`   Current time: ${new Date(now).toLocaleTimeString()}`);
-            console.log(`   Audio will start at: ${new Date(audioStartTime).toLocaleTimeString()}`);
+            const scheduledStart = cue.startTime - (serverOffset || 0) - (hardwareLag || 0);
+            console.log("Scheduled start (ms):", scheduledStart);
 
-            // During the buffer period, ensure the flute audio is loaded
+            if (isNaN(scheduledStart)) {
+                console.error("scheduledStart is NaN");
+                return;
+            }
+
+            const startTime = Math.max(audioCtx.currentTime, scheduledStart / 1000);
+            console.log("Final startTime (seconds):", startTime);
+
+            if (isNaN(startTime) || !isFinite(startTime)) {
+                console.error("Invalid startTime:", startTime);
+                return;
+            }
+
+            // Load on-demand if not preloaded
             if (!bufferCache[fluteUrl]) {
-                console.log(`⏳ Preloading flute audio during buffer...`);
+                console.warn(`⚠️ Flute not preloaded, fetching: ${fluteUrl.split('/').pop()}`);
                 try {
                     const res = await fetch(fluteUrl);
                     const arrayBuf = await res.arrayBuffer();
                     bufferCache[fluteUrl] = await audioCtx.decodeAudioData(arrayBuf);
-                    console.log(`✅ Flute preloaded: ${fluteUrl.split('/').pop()}`);
                 } catch (e) {
-                    console.error(`❌ Failed to preload flute: ${e}`);
+                    console.error(`Failed to fetch flute ${fluteUrl}:`, e);
                     return;
                 }
-            } else {
-                console.log(`✅ Flute already in cache`);
             }
 
-            // Wait for the buffer to expire, then start playback
-            setTimeout(() => {
-                console.log(`🎯 Buffer complete, starting flute playback at ${new Date().toLocaleTimeString()}`);
+            const source = audioCtx.createBufferSource();
+            source.buffer = bufferCache[fluteUrl];
 
-                // Calculate timing with validation
-                if (!cue.startTime || isNaN(cue.startTime)) {
-                    console.error("Invalid cue.startTime:", cue.startTime);
-                    return;
-                }
+            const gainNode = audioCtx.createGain();
 
-                const scheduledStart = audioStartTime - (serverOffset || 0) - (hardwareLag || 0);
-                console.log("Scheduled start (ms):", scheduledStart);
+            // Connect and start
+            source.connect(gainNode).connect(audioCtx.destination);
 
-                if (isNaN(scheduledStart)) {
-                    console.error("scheduledStart is NaN");
-                    return;
-                }
+            // Set target gain with validated time
+            try {
+                gainNode.gain.setTargetAtTime(1.0, startTime, 0.015);
+            } catch (e) {
+                console.error("Error in setTargetAtTime:", e, "startTime:", startTime);
+                return;
+            }
 
-                const startTime = Math.max(audioCtx.currentTime, scheduledStart / 1000);
-                console.log("Final startTime (seconds):", startTime);
+            source.start(startTime);
 
-                if (isNaN(startTime) || !isFinite(startTime)) {
-                    console.error("Invalid startTime:", startTime);
-                    return;
-                }
+            // ✅ ADD THIS DEBUG LINE
+            console.log(`✅ Flute source started at ${startTime}, current audio time: ${audioCtx.currentTime}`);
 
-                const source = audioCtx.createBufferSource();
-                source.buffer = bufferCache[fluteUrl];
+            // Store for render loop
+            activeAudioCues.push({
+                ...cue,
+                source,
+                gainNode,
+                startTime: cue.startTime,
+                localStartTime: Date.now() + (startTime * 1000) - audioCtx.currentTime * 1000
+            });
 
-                const gainNode = audioCtx.createGain();
-
-                // Connect and start
-                source.connect(gainNode).connect(audioCtx.destination);
-
-                // Set target gain with validated time
-                try {
-                    gainNode.gain.setTargetAtTime(1.0, startTime, 0.015);
-                } catch (e) {
-                    console.error("Error in setTargetAtTime:", e, "startTime:", startTime);
-                    return;
-                }
-
-                source.start(startTime);
-                console.log(`✅ Flute source started at ${startTime}, current audio time: ${audioCtx.currentTime}`);
-                console.log(`   StartTime ${startTime > audioCtx.currentTime ? 'is in future' : 'is in past'}`);
-
-                // Store for render loop
-                activeAudioCues.push({
-                    ...cue,
-                    source,
-                    gainNode,
-                    startTime: cue.startTime,
-                    localStartTime: Date.now() + (startTime * 1000) - audioCtx.currentTime * 1000
-                });
-
-                // Start monitoring for note assignments
-                if (currentTuningSchedule && assignedNotes.length > 0) {
-                    console.log(`🎵 Starting monitor with ${assignedNotes.length} assigned notes`);
-                    monitorTuningPlayback(cue, source, startTime);
-                } else {
-                    console.log("No notes assigned to this device yet - will monitor when schedule arrives");
-                    // Schedule a check to see if notes arrive later
-                    setTimeout(() => {
-                        if (currentTuningSchedule && assignedNotes.length > 0) {
-                            console.log(`🔄 Notes now available, starting monitor`);
-                            monitorTuningPlayback(cue, source, startTime);
-                        }
-                    }, 1000);
-                }
-            }, BUFFER_MS);
+            // Start monitoring for note assignments
+            if (currentTuningSchedule && assignedNotes.length > 0) {
+                monitorTuningPlayback(cue, source, startTime);
+            } else {
+                console.log("No notes assigned to this device");
+            }
         }
 
         // --- EVENT HANDLERS ---
