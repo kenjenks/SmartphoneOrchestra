@@ -1317,20 +1317,20 @@ devicedist.html: Feature List
 
                 const now = Date.now() + serverOffset;
 
-                // Ramp up at note start
-                const rampUpDelay = noteStartAbs - now - hardwareLag;
-                if (rampUpDelay > 0) {
-                    const timeoutId = setTimeout(() => {
-                        const activeCue = activeAudioCues.find(c => c.source === source);
-                        if (activeCue) {
-                            activeCue.gainNode.gain.setTargetAtTime(1.0, audioCtx.currentTime, 0.015);
-                            console.log(`🔊 Ramping up for note at ${note.startMs}ms`);
-                            flashScreenForPulse();
-                        }
-                        activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
-                    }, rampUpDelay);
-                    activeTimeouts.push(timeoutId);
-                }
+                // Ramp up at note start - COMMENTED OUT FOR DEBUGGING
+                // const rampUpDelay = noteStartAbs - now - hardwareLag;
+                // if (rampUpDelay > 0) {
+                //     const timeoutId = setTimeout(() => {
+                //         const activeCue = activeAudioCues.find(c => c.source === source);
+                //         if (activeCue) {
+                //             activeCue.gainNode.gain.setTargetAtTime(1.0, audioCtx.currentTime, 0.015);
+                //             console.log(`🔊 Ramping up for note at ${note.startMs}ms`);
+                //             flashScreenForPulse();
+                //         }
+                //         activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
+                //     }, rampUpDelay);
+                //     activeTimeouts.push(timeoutId);
+                // }
 
                 // Pulse tracking at note center - devices will emit warble here
                 const pulseDelay = pulseAbs - now - hardwareLag;
@@ -1350,19 +1350,19 @@ devicedist.html: Feature List
                     activeTimeouts.push(timeoutId);
                 }
 
-                // Ramp down at note end
-                const rampDownDelay = noteEndAbs - now - hardwareLag;
-                if (rampDownDelay > 0) {
-                    const timeoutId = setTimeout(() => {
-                        const activeCue = activeAudioCues.find(c => c.source === source);
-                        if (activeCue) {
-                            activeCue.gainNode.gain.setTargetAtTime(0, audioCtx.currentTime, 0.015);
-                            console.log(`🔉 Ramping down after note at ${note.startMs}ms`);
-                        }
-                        activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
-                    }, rampDownDelay);
-                    activeTimeouts.push(timeoutId);
-                }
+                // Ramp down at note end - COMMENTED OUT FOR DEBUGGING
+                // const rampDownDelay = noteEndAbs - now - hardwareLag;
+                // if (rampDownDelay > 0) {
+                //     const timeoutId = setTimeout(() => {
+                //         const activeCue = activeAudioCues.find(c => c.source === source);
+                //         if (activeCue) {
+                //             activeCue.gainNode.gain.setTargetAtTime(0, audioCtx.currentTime, 0.015);
+                //             console.log(`🔉 Ramping down after note at ${note.startMs}ms`);
+                //         }
+                //         activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
+                //     }, rampDownDelay);
+                //     activeTimeouts.push(timeoutId);
+                // }
             });
         }
 
@@ -1600,17 +1600,18 @@ devicedist.html: Feature List
             // Connect and start
             source.connect(gainNode).connect(audioCtx.destination);
 
-            // Set target gain with validated time
+            // Set target gain with validated time - SET TO FULL VOLUME IMMEDIATELY
             try {
-                gainNode.gain.setTargetAtTime(1.0, startTime, 0.015);
+                gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime);
+                // gainNode.gain.setTargetAtTime(1.0, startTime, 0.015); // Original line commented out
             } catch (e) {
-                console.error("Error in setTargetAtTime:", e, "startTime:", startTime);
+                console.error("Error in setValueAtTime:", e);
                 return;
             }
 
             source.start(startTime);
 
-            // ✅ ADD THIS DEBUG LINE
+            // ✅ DEBUG LINE
             console.log(`✅ Flute source started at ${startTime}, current audio time: ${audioCtx.currentTime}`);
 
             // Store for render loop
