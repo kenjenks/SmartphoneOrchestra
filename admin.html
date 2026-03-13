@@ -25,9 +25,9 @@ Operational SOP for Admin:
   (4) Check Admin to ensure Pillars = 0 and Devices = 0 (a clean slate).
   (5) Upload visual_timeline.json, which schedules the audio and visual cues.
 
-* During Onboarding: Watch the Patron Nodes count climb.
+* During Onboarding: Run conductor.html.
 
-* Post-Show: Hit Purge Device Registry as the audience leaves to reset for the next performance.
+* Post-Show: Hit WIPE REALTIME DATA as the audience leaves to reset for the next performance.
 -->
 <html lang="en">
 <head>
@@ -51,6 +51,8 @@ Operational SOP for Admin:
         .btn-secondary { background: #222; }
         .btn-danger { background: #600; border-color: #a00; color: #fff; }
         .btn-danger:hover { background: #800; }
+        .btn-warning { background: #663d00; border-color: #cc7a00; color: #fff; }
+        .btn-warning:hover { background: #804d00; }
 
         #log { background: #000; color: #0f0; font-family: 'Consolas', 'Monaco', monospace; height: 150px; overflow-y: scroll; padding: 10px; border: 1px solid #333; margin-top: 20px; font-size: 12px; border-radius: 8px; }
         .log-entry { margin-bottom: 4px; border-bottom: 1px solid #111; }
@@ -151,6 +153,7 @@ Operational SOP for Admin:
         <div class="card">
             <h3>3. Maintenance</h3>
             <button class="btn btn-secondary" onclick="downloadDatabaseBackup()">Download DB Backup</button>
+            <button class="btn btn-warning" onclick="wipeRealtimeData()">WIPE REALTIME DATA</button>
             <button class="btn btn-danger" onclick="purgeEverything()">Wipe All Cloud Data</button>
         </div>
 
@@ -244,7 +247,7 @@ Operational SOP for Admin:
             document.getElementById('seat-view').innerHTML = html;
         });
 
-        // --- UPDATED: Observe Tuning Configuration with asset URLs ---
+        // --- Observe Tuning Configuration with asset URLs ---
         db.ref('tuning_mode').on('value', snap => {
             const config = snap.val();
             if (!config || !config.piano_notes) {
@@ -484,6 +487,35 @@ Operational SOP for Admin:
                 a.click();
                 log("ACTION: Tuning configuration downloaded.");
             } catch (e) { log(`ERROR: Download failed: ${e.message}`); }
+        }
+
+        // --- WIPE REALTIME DATA BUTTON ---
+        async function wipeRealtimeData() {
+            if (confirm("Wipe all realtime data? This will clear:\n• Device registrations\n• Current tuning state\n• Current cues\n• Survey results\n\nPillar config, seat config, tuning mode, and show timeline will be preserved.")) {
+                log("🧹 Wiping realtime data...");
+                
+                const updates = {};
+                
+                // List of realtime paths to wipe
+                const realtimePaths = [
+                    'devices',
+                    'tuning/current',
+                    'show/currentCue',
+                    'survey_results'
+                ];
+                
+                // Set each path to null (delete)
+                realtimePaths.forEach(path => {
+                    updates[path] = null;
+                });
+                
+                try {
+                    await db.ref().update(updates);
+                    log("✅ Realtime data wiped successfully!");
+                } catch (e) {
+                    log(`❌ ERROR: ${e.message}`);
+                }
+            }
         }
 
         // --- MAINTENANCE FUNCTIONS ---
