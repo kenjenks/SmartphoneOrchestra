@@ -347,13 +347,12 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
 
                 // Load flute URL from tuning_mode.json metadata
                 if (configData.metadata && configData.metadata.source_audio) {
-                    // Convert filename to CDN URL - adjust based on your hosting
-                    FLUTE_URL = `${configData.metadata.source_audio}`;
+                    FLUTE_URL = configData.metadata.source_audio_url;
                 }
 
                 // Load test pulse URL if present
                 if (configData.metadata && configData.metadata.test_pulse) {
-                    TEST_PULSE_URL = `https://static.wixstatic.com/mp3/${configData.metadata.test_pulse}`;
+                    TEST_PULSE_URL = configData.metadata.test_pulse_url;
                 }
 
                 logDetection(`Loaded ${noteTimings.length} notes from tuning config`);
