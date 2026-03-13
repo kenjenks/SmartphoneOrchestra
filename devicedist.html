@@ -671,6 +671,7 @@ devicedist.html: Feature List
                     // Store flute URL from schedule (if not already loaded from tuning_mode)
                     if (schedule.fluteUrl && !fluteUrl) {
                         fluteUrl = schedule.fluteUrl;
+                        console.log("🎵 Flute URL from schedule:", fluteUrl);
                     }
 
                     // Find notes assigned to this device
@@ -1614,20 +1615,25 @@ devicedist.html: Feature List
         // --- DIRECT PLAYBACK FOR TUNING MOVEMENT (uses fluteUrl from tuning_mode) ---
         async function playTuningMovement(cue) {
             console.log("🎵 Starting tuning movement with cue:", cue);
-            console.log("🎵 Flute URL:", fluteUrl);
-            console.log("🎵 Current values:", {
-                cueStartTime: cue.startTime,
-                serverOffset: serverOffset,
-                hardwareLag: hardwareLag,
-                audioCtxCurrentTime: audioCtx.currentTime
-            });
+            console.log("🎵 Flute URL from cue:", fluteUrl);
+
+            // Ensure we have the full URL (already loaded from tuning_mode.json)
+            let urlToUse = fluteUrl;
+
+            // If for some reason fluteUrl isn't set, try to get it from the cue
+            if (!urlToUse && cue.file) {
+                console.warn("⚠️ fluteUrl not set, using cue.file");
+                urlToUse = cue.file;
+            }
+
+            console.log("🎵 Final URL to use:", urlToUse);
 
             if (mySeat.id.startsWith('PILLAR_')) {
                 startPillarFabric(cue.startTime);
                 return;
             }
 
-            if (!fluteUrl) {
+            if (!urlToUse) {
                 console.error("No flute URL available for tuning movement");
                 return;
             }
@@ -1644,20 +1650,20 @@ devicedist.html: Feature List
             console.log("Seconds until start:", secondsUntilStart, "→ AudioContext startTime:", startTime);
 
             // Load on-demand if not preloaded
-            if (!bufferCache[fluteUrl]) {
-                console.warn(`⚠️ Flute not preloaded, fetching: ${fluteUrl.split('/').pop()}`);
+            if (!bufferCache[urlToUse]) {
+                console.warn(`⚠️ Flute not preloaded, fetching: ${urlToUse.split('/').pop()}`);
                 try {
-                    const res = await fetch(fluteUrl);
+                    const res = await fetch(urlToUse);
                     const arrayBuf = await res.arrayBuffer();
-                    bufferCache[fluteUrl] = await audioCtx.decodeAudioData(arrayBuf);
+                    bufferCache[urlToUse] = await audioCtx.decodeAudioData(arrayBuf);
                 } catch (e) {
-                    console.error(`Failed to fetch flute ${fluteUrl}:`, e);
+                    console.error(`Failed to fetch flute ${urlToUse}:`, e);
                     return;
                 }
             }
 
             const source = audioCtx.createBufferSource();
-            source.buffer = bufferCache[fluteUrl];
+            source.buffer = bufferCache[urlToUse];
 
             const gainNode = audioCtx.createGain();
             gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime);
