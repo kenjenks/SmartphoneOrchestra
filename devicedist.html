@@ -65,6 +65,8 @@ devicedist.html: Feature List
 - Battery & System Monitoring: Reports device battery level and
   charging status back to Firebase for real-time stage management.
 
+- "I'm Still Alive" message sent to conductor.html every 10 +/- 1 s
+
 - System Kill Switch: Listens for 'KILL' actions
   to force immediate browser reloads across all nodes.
 
@@ -324,9 +326,15 @@ devicedist.html: Feature List
         // Pillar positions (loaded from pillar_config.json via Firebase)
         let pillarPositions = {};
 
+        // Heartbeat tracking
+        let heartbeatInterval = null;
+        let heartbeatTimer = null;
+
         // Constants
         const SILENT_WARMUP_MS = 100; // 100ms silent warm-up pulse
         const WARMUP_ADVANCE_MS = 500; // Start warm-up 500ms before cue
+        const HEARTBEAT_BASE_INTERVAL_MS = 10000; // 10 seconds base interval
+        const HEARTBEAT_JITTER_MS = 2000; // ±1000ms jitter (total range 2000ms)
 
         // --- IDENTITY RESOLUTION - Reads from Firebase seat_config ---
         async function resolveIdentity() {
@@ -417,6 +425,71 @@ devicedist.html: Feature List
                 document.getElementById('id-ind').className = 'indicator error';
                 return false;
             }
+        }
+
+        // --- HEARTBEAT FUNCTION - staggered "I'm still active" signal ---
+        function startHeartbeat() {
+            if (!mySeat) return;
+
+            // Clear any existing heartbeat
+            if (heartbeatInterval) {
+                clearInterval(heartbeatInterval);
+                heartbeatInterval = null;
+            }
+            if (heartbeatTimer) {
+                clearTimeout(heartbeatTimer);
+                heartbeatTimer = null;
+            }
+
+            console.log(`💓 Starting heartbeat for ${mySeat.id} (base interval: ${HEARTBEAT_BASE_INTERVAL_MS}ms ±1000ms)`);
+
+            // Schedule the first heartbeat with random jitter
+            scheduleNextHeartbeat();
+        }
+
+        function scheduleNextHeartbeat() {
+            // Calculate next interval with random jitter (±1000ms)
+            const jitter = Math.floor(Math.random() * HEARTBEAT_JITTER_MS) - (HEARTBEAT_JITTER_MS / 2);
+            const nextInterval = Math.max(1000, HEARTBEAT_BASE_INTERVAL_MS + jitter); // Ensure at least 1 second
+
+            if (heartbeatTimer) {
+                clearTimeout(heartbeatTimer);
+            }
+
+            heartbeatTimer = setTimeout(() => {
+                sendHeartbeat();
+                // Schedule the next one
+                scheduleNextHeartbeat();
+            }, nextInterval);
+        }
+
+        async function sendHeartbeat() {
+            if (!mySeat) return;
+
+            try {
+                const now = Date.now() + serverOffset;
+                await db.ref(`devices/${mySeat.id}`).update({
+                    lastSeen: now,
+                    status: 'ACTIVE',
+                    x: mySeat.x,
+                    y: mySeat.y
+                });
+                console.log(`💓 Heartbeat sent for ${mySeat.id} at ${new Date(now).toLocaleTimeString()}`);
+            } catch (e) {
+                console.error(`💔 Heartbeat failed for ${mySeat.id}:`, e);
+            }
+        }
+
+        function stopHeartbeat() {
+            if (heartbeatInterval) {
+                clearInterval(heartbeatInterval);
+                heartbeatInterval = null;
+            }
+            if (heartbeatTimer) {
+                clearTimeout(heartbeatTimer);
+                heartbeatTimer = null;
+            }
+            console.log(`💓 Heartbeat stopped for ${mySeat?.id}`);
         }
 
         // --- LOAD PILLAR POSITIONS ---
@@ -1687,9 +1760,9 @@ devicedist.html: Feature List
             // 4. Initialize tuning schedule listener
             initTuningListener();
 
-            // 5. Register this device in Firebase
+            // 5. Register this device in Firebase and start heartbeat
             if (mySeat) {
-                db.ref(`devices/${mySeat.id}`).update({
+                await db.ref(`devices/${mySeat.id}`).update({
                     lastSeen: Date.now() + serverOffset,
                     status: 'ACTIVE',
                     x: mySeat.x,
@@ -1699,11 +1772,15 @@ devicedist.html: Feature List
                     isHappy: isHappy
                 });
 
-                setInterval(() => {
-                    db.ref(`devices/${mySeat.id}/lastSeen`).set(Date.now() + serverOffset);
-                }, 5000);
+                // Start staggered heartbeat
+                startHeartbeat();
             }
         };
+
+        // Clean up heartbeat when page unloads
+        window.addEventListener('beforeunload', () => {
+            stopHeartbeat();
+        });
 
         window.onload = async () => {
             syncClock();
