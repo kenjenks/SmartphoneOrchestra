@@ -1632,30 +1632,16 @@ devicedist.html: Feature List
                 return;
             }
 
-            // ❌ PROBLEMATIC TIMING CALCULATION
             if (!cue.startTime || isNaN(cue.startTime)) {
                 console.error("Invalid cue.startTime:", cue.startTime);
                 return;
             }
 
-            // Convert wall-clock startTime to AudioContext time
+            // Convert wall-clock Unix timestamp to AudioContext time
             const nowWall = Date.now() + serverOffset;
             const secondsUntilStart = (cue.startTime - nowWall - hardwareLag) / 1000;
-            const startTime = Math.max(audioCtx.currentTime, audioCtx.currentTime + secondsUntilStart);
-            console.log("Scheduled start (ms):", scheduledStart);
-
-            if (isNaN(scheduledStart)) {
-                console.error("scheduledStart is NaN");
-                return;
-            }
-
-            const startTime = Math.max(audioCtx.currentTime, scheduledStart / 1000);
-            console.log("Final startTime (seconds):", startTime);
-
-            if (isNaN(startTime) || !isFinite(startTime)) {
-                console.error("Invalid startTime:", startTime);
-                return;
-            }
+            const startTime = audioCtx.currentTime + Math.max(0, secondsUntilStart);
+            console.log("Seconds until start:", secondsUntilStart, "→ AudioContext startTime:", startTime);
 
             // Load on-demand if not preloaded
             if (!bufferCache[fluteUrl]) {
@@ -1674,23 +1660,13 @@ devicedist.html: Feature List
             source.buffer = bufferCache[fluteUrl];
 
             const gainNode = audioCtx.createGain();
+            gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime);
+            // gainNode.gain.setTargetAtTime(1.0, startTime, 0.015); // Restore when ramp logic is back
 
-            // Connect and start
             source.connect(gainNode).connect(audioCtx.destination);
-
-            // Set target gain with validated time - SET TO FULL VOLUME IMMEDIATELY
-            try {
-                gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime);
-                // gainNode.gain.setTargetAtTime(1.0, startTime, 0.015); // Original line commented out
-            } catch (e) {
-                console.error("Error in setValueAtTime:", e);
-                return;
-            }
-
             source.start(startTime);
 
-            // ✅ DEBUG LINE
-            console.log(`✅ Flute source started at ${startTime}, current audio time: ${audioCtx.currentTime}`);
+            console.log(`✅ Flute source started at AudioContext time ${startTime}, current: ${audioCtx.currentTime}`);
 
             // Store for render loop
             activeAudioCues.push({
