@@ -220,6 +220,7 @@ devicedist.html: Feature List
         </div>
 
         <button id="ready-btn" disabled>ENTER THE ISLE</button>
+        <button id="debug-test-btn" style="margin-top:10px; background:#333; color:#ffcc00; padding:10px; border-radius:4px;">🔊 DEBUG: Play Test Pulse</button>
         <p id="system-msg" style="margin-top:20px; font-size: 0.8rem; color: #888;">Waiting for Audio Context...</p>
     </div>
 
@@ -1555,6 +1556,42 @@ devicedist.html: Feature List
         }
 
         // --- EVENT HANDLERS ---
+
+        // DEBUG: Manual test pulse playback
+        document.getElementById('debug-test-btn').onclick = async () => {
+            console.log("🔊 DEBUG: Manual test pulse triggered");
+
+            // Ensure audio context is running
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioCtx.state === 'suspended') {
+                await audioCtx.resume();
+            }
+
+            const url = "https://static.wixstatic.com/mp3/9178d1_63e58ac50ec7434eba6785cd3291c227.mp3";
+
+            try {
+                // Fetch and decode
+                const response = await fetch(url);
+                const arrayBuffer = await response.arrayBuffer();
+                const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+
+                // Play it
+                const source = audioCtx.createBufferSource();
+                source.buffer = audioBuffer;
+                source.connect(audioCtx.destination);
+                source.start();
+
+                console.log("✅ Test pulse playing!");
+
+                // Flash screen for visual feedback
+                flashScreenForPulse();
+
+            } catch (e) {
+                console.error("❌ Debug playback failed:", e);
+            }
+        };
         document.getElementById('ready-btn').onclick = async () => {
             // Wake Audio Hardware
             if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
