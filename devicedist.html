@@ -1380,9 +1380,6 @@ devicedist.html: Feature List
 
             console.log(`🎵 Monitoring tuning playback for ${assignedNotes.length} assigned notes`);
 
-            // Start the pillar fabric when the flute starts (with warm-up)
-            startPillarFabric(cue.startTime);
-
             assignedNotes.forEach(note => {
                 const noteStartAbs = cue.startTime + note.startMs;
                 const noteEndAbs = noteStartAbs + note.durationMs;
@@ -1624,6 +1621,11 @@ devicedist.html: Feature List
                 hardwareLag: hardwareLag,
                 audioCtxCurrentTime: audioCtx.currentTime
             });
+
+            if (mySeat.id.startsWith('PILLAR_')) {
+                startPillarFabric(cue.startTime);
+                return;
+            }
 
             if (!fluteUrl) {
                 console.error("No flute URL available for tuning movement");
