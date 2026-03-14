@@ -43,6 +43,8 @@ devicedist.html: Feature List
 
 4. Decentralized Statistical Calibration (for the Bach
 "Jesu, Joy of Man's Desiring" sequence)
+- Conductor-Led Ramp Strategy: Each device receives custom ramp parameters
+  from conductor.html based on its note density
 - Multi-Launch Strategy: Uses relaunch points from tuning_mode.json
   to restart the flute MP3 multiple times during the piece
 - Progressive Calibration: Each relaunch improves timing using data from previous launches
@@ -259,6 +261,7 @@ devicedist.html: Feature List
             <div><span class="debug-label">Tuning start:</span> <span id="debug-tuning-start"></span></div>
             <div><span class="debug-label">Relaunch points:</span> <span id="debug-relaunch-count"></span></div>
             <div><span class="debug-label">Current launch:</span> <span id="debug-current-launch"></span></div>
+            <div><span class="debug-label">Ramp strategy:</span> <span id="debug-ramp-strategy"></span></div>
         </div>
         <canvas id="stage-canvas"></canvas>
     </div>
@@ -316,6 +319,15 @@ devicedist.html: Feature List
             minTimeBetweenRelaunchesMs: 3000
         };
 
+        // Ramp strategy from conductor
+        let rampStrategy = {
+            useRamps: true,          // Default to using ramps
+            fadeInMs: 30,             // Fade in time in ms
+            fadeOutMs: 40,            // Fade out time in ms
+            mergeThresholdMs: 50,      // Merge notes with gaps <= this into blocks
+            reason: "default"
+        };
+
         // Individual seat test state
         let pendingTestPulse = null; // Track individual seat test
 
@@ -346,7 +358,6 @@ devicedist.html: Feature List
         const HEARTBEAT_BASE_INTERVAL_MS = 10000; // 10 seconds base interval
         const HEARTBEAT_JITTER_MS = 2000; // ±1000ms jitter (total range 2000ms)
         const LAUNCH_FADE_SAFETY_MS = 50; // Safety margin for fade transitions
-        const NOTE_MERGE_THRESHOLD_MS = 50; // Merge notes with gaps <= 50ms into continuous blocks
 
         // --- IDENTITY RESOLUTION - Reads from Firebase seat_config ---
         async function resolveIdentity() {
@@ -486,7 +497,8 @@ devicedist.html: Feature List
                     x: mySeat.x,
                     y: mySeat.y,
                     launchIndex: currentLaunchIndex,
-                    calibratedLag: calibratedLag || hardwareLag
+                    calibratedLag: calibratedLag || hardwareLag,
+                    rampStrategy: rampStrategy.useRamps ? 'sparse' : 'dense'
                 });
                 console.log(`💓 Heartbeat sent for ${mySeat.id} at ${new Date(now).toLocaleTimeString()}`);
             } catch (e) {
@@ -734,7 +746,24 @@ devicedist.html: Feature List
                     currentLaunchIndex = 0;
                     launchEvents = [];
 
-                    // DO NOT clear relaunchPoints - they're static config
+                    // Load ramp strategy for this device from conductor
+                    if (schedule.rampStrategy && schedule.rampStrategy[mySeat.id]) {
+                        rampStrategy = {
+                            ...rampStrategy,
+                            ...schedule.rampStrategy[mySeat.id]
+                        };
+                        console.log(`🎚️ Ramp strategy for ${mySeat.id}:`, rampStrategy);
+                        document.getElementById('debug-ramp-strategy').innerText =
+                            rampStrategy.useRamps ? 'sparse' : 'dense';
+                    } else {
+                        // Default to using ramps if no strategy provided
+                        rampStrategy.useRamps = true;
+                        rampStrategy.fadeInMs = 30;
+                        rampStrategy.fadeOutMs = 40;
+                        rampStrategy.mergeThresholdMs = 50;
+                        console.log(`🎚️ No ramp strategy found, using defaults`);
+                        document.getElementById('debug-ramp-strategy').innerText = 'default';
+                    }
 
                     // Store flute URL from schedule (if not already loaded from tuning_mode)
                     if (schedule.fluteUrl && !fluteUrl) {
@@ -1549,7 +1578,25 @@ devicedist.html: Feature List
             // Sort notes by start time (should already be sorted, but just to be safe)
             const sortedNotes = [...segmentNotes].sort((a, b) => a.startMs - b.startMs);
 
-            // Merge consecutive notes into continuous blocks
+            if (!rampStrategy.useRamps) {
+                // DENSE PLAYBACK - no ramps, just play continuously
+                // Set gain to 1.0 at the first note and leave it
+                const firstNote = sortedNotes[0];
+                const firstNoteOffsetFromSeekMs = firstNote.startMs - seekOffsetMs;
+                if (firstNoteOffsetFromSeekMs >= 0) {
+                    const firstNoteAudioTime = audioStartTime + (firstNoteOffsetFromSeekMs / 1000);
+                    // Start ramping up slightly before the first note to avoid pop
+                    const rampStart = firstNoteAudioTime - 0.01;
+                    gainNode.gain.setValueAtTime(0, rampStart);
+                    gainNode.gain.linearRampToValueAtTime(1.0, firstNoteAudioTime);
+                    console.log(`   🎵 Dense playback: continuous from ${(firstNote.startMs/1000).toFixed(2)}s`);
+                }
+                // Still schedule pulse detections
+                schedulePulseDetections(sortedNotes, source, movementStartTime, seekOffsetMs, launchIndex);
+                return;
+            }
+
+            // SPARSE PLAYBACK - merge consecutive notes into blocks
             const blocks = [];
             let currentBlock = {
                 startMs: sortedNotes[0].startMs,
@@ -1562,7 +1609,7 @@ devicedist.html: Feature List
                 const prevNote = sortedNotes[i-1];
                 const gap = note.startMs - (prevNote.startMs + prevNote.durationMs);
 
-                if (gap <= NOTE_MERGE_THRESHOLD_MS) { // If gap is small, merge into same block (legato)
+                if (gap <= rampStrategy.mergeThresholdMs) { // If gap is small, merge into same block (legato)
                     currentBlock.endMs = note.startMs + note.durationMs;
                     currentBlock.notes.push(note);
                 } else {
@@ -1593,17 +1640,17 @@ devicedist.html: Feature List
                     const blockStartAudio = audioStartTime + (blockOffsetFromSeekMs / 1000);
                     const blockEndAudio = audioStartTime + ((blockEndMs - seekOffsetMs) / 1000);
 
-                    // Smooth fade in at block start (20ms)
-                    const fadeInStart = blockStartAudio - 0.01; // 10ms before for safety
-                    const fadeInEnd = blockStartAudio;
+                    // Smooth fade in at block start
+                    const fadeInStart = blockStartAudio - (rampStrategy.fadeInMs / 2000); // Half of fade in before
+                    const fadeInEnd = blockStartAudio + (rampStrategy.fadeInMs / 2000); // Half after
 
                     gainNode.gain.setValueAtTime(0, fadeInStart);
                     gainNode.gain.linearRampToValueAtTime(1.0, fadeInEnd);
                     gainNode.gain.setValueAtTime(1.0, fadeInEnd);
 
-                    // Smooth fade out at block end (20ms)
-                    const fadeOutStart = blockEndAudio - 0.02; // 20ms before end
-                    const fadeOutEnd = blockEndAudio;
+                    // Smooth fade out at block end
+                    const fadeOutStart = blockEndAudio - (rampStrategy.fadeOutMs / 2000); // Half before end
+                    const fadeOutEnd = blockEndAudio + (rampStrategy.fadeOutMs / 2000); // Half after
 
                     gainNode.gain.setValueAtTime(1.0, fadeOutStart);
                     gainNode.gain.linearRampToValueAtTime(0, fadeOutEnd);
@@ -1613,9 +1660,12 @@ devicedist.html: Feature List
                 }
             });
 
-            // Still need to schedule individual pulse detections for calibration
-            // These don't affect gain, just record when warbles occur
-            sortedNotes.forEach(note => {
+            // Schedule pulse detections for calibration
+            schedulePulseDetections(sortedNotes, source, movementStartTime, seekOffsetMs, launchIndex);
+        }
+
+        function schedulePulseDetections(notes, source, movementStartTime, seekOffsetMs, launchIndex) {
+            notes.forEach(note => {
                 const noteStartMs = parseFloat(note.startMs);
                 const notePulseMs = parseFloat(note.pulsePositionMs || (noteStartMs + note.durationMs/2));
                 const pulseWall = movementStartTime + notePulseMs;
@@ -1952,6 +2002,7 @@ devicedist.html: Feature List
                 document.getElementById('debug-notes-assigned').innerText = assignedNotes.length;
                 document.getElementById('debug-relaunch-count').innerText = relaunchPoints.length;
                 document.getElementById('debug-current-launch').innerText = `${currentLaunchIndex + 1}/${relaunchPoints.length + 1}`;
+                document.getElementById('debug-ramp-strategy').innerText = rampStrategy.useRamps ? 'sparse' : 'dense';
 
                 const now = Date.now() + serverOffset;
                 const nextNote = assignedNotes.find(n => {
@@ -2102,7 +2153,7 @@ devicedist.html: Feature List
             const fps = Math.round(1000 / (performance.now() - lastFrameTime));
             const lag = calibratedLag ? `${calibratedLag}ms` : '--';
             const cueCount = activeAudioCues.length + activeLightCues.length;
-            overlay.innerHTML = `FPS: ${fps} | Lag: ${lag} | Cues: ${cueCount} | Launch: ${currentLaunchIndex + 1}/${relaunchPoints.length + 1} | ${isHappy ? '✅' : '🔄'}`;
+            overlay.innerHTML = `FPS: ${fps} | Lag: ${lag} | Cues: ${cueCount} | Launch: ${currentLaunchIndex + 1}/${relaunchPoints.length + 1} | Ramp: ${rampStrategy.useRamps ? 'sparse' : 'dense'} | ${isHappy ? '✅' : '🔄'}`;
         }
 
         // --- EVENT HANDLERS ---
@@ -2172,7 +2223,8 @@ devicedist.html: Feature List
                     calibratedLag: calibratedLag,
                     isHappy: isHappy,
                     launchIndex: currentLaunchIndex,
-                    relaunchPoints: relaunchPoints.length
+                    relaunchPoints: relaunchPoints.length,
+                    rampStrategy: rampStrategy.useRamps ? 'sparse' : 'dense'
                 });
 
                 // Start staggered heartbeat
