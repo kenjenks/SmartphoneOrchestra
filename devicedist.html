@@ -725,6 +725,8 @@ devicedist.html: Feature List
                     currentLaunchIndex = 0;
                     launchEvents = [];
 
+                    // DO NOT clear relaunchPoints - they're static config
+
                     // Store flute URL from schedule (if not already loaded from tuning_mode)
                     if (schedule.fluteUrl && !fluteUrl) {
                         fluteUrl = schedule.fluteUrl;
@@ -768,9 +770,8 @@ devicedist.html: Feature List
                     calibrationMode = false;
                     currentTuningSchedule = null;
                     assignedNotes = [];
-                    relaunchPoints = []; // Clear relaunch points when tuning ends
+                    // DO NOT clear relaunchPoints - they persist
                     console.log("🎯 Tuning mode deactivated");
-                    // Don't clear fluteUrl - keep it for potential future use
                 }
             });
 
