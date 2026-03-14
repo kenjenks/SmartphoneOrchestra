@@ -863,33 +863,31 @@ devicedist.html: Feature List
         }
 
         function processPendingDetections(tHeard) {
-            // Look for pending pulses that haven't been matched
             const now = Date.now() + serverOffset;
             let matched = false;
 
             pendingPulseDetections.forEach(pending => {
-                // Skip already matched detections
                 if (pending.tHeard) return;
 
-                // Check if this detection could be for our pulse
-                // The conductor broadcasts immediately upon detection
-                if (Math.abs(tHeard - pending.playTime) < 1000) { // Within 1 second window
-                    // Stamp the heard time onto this detection for true latency calculation
+                // Calculate expected arrival time based on calibrated lag
+                const expectedArrival = pending.playTime + hardwareLag;
+
+                // Match if within 50ms of expected arrival
+                if (Math.abs(tHeard - expectedArrival) < 50) {
                     pending.tHeard = tHeard;
                     lastPingSent = pending.playTime;
                     processAcousticReturn(tHeard);
                     matched = true;
-                    console.log(`📡 Matched detection: note ${pending.noteId}, played at ${pending.playTime}, heard at ${tHeard}, lag=${tHeard - pending.playTime}ms`);
+                    console.log(`📡 Matched detection: note ${pending.noteId}, played at ${pending.playTime}, expected at ${expectedArrival}, heard at ${tHeard}, lag=${tHeard - pending.playTime}ms`);
                 }
             });
 
-            // Clean up old detections (older than 30 seconds) to prevent memory growth
+            // Clean up old detections
             pendingPulseDetections = pendingPulseDetections.filter(pending => {
-                return (now - pending.playTime) < 30000; // Keep only last 30 seconds
+                return (now - pending.playTime) < 30000;
             });
 
             if (matched) {
-                // Update performance overlay to show we got a match
                 updatePerformanceOverlay();
             }
         }
