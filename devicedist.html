@@ -748,20 +748,47 @@ devicedist.html: Feature List
 
                     // Load ramp strategy for this device from conductor
                     if (schedule.rampStrategy && schedule.rampStrategy[mySeat.id]) {
+                        const conductorStrategy = schedule.rampStrategy[mySeat.id];
+                        console.log(`🎚️ Received ramp strategy from conductor for ${mySeat.id}:`, conductorStrategy);
+
+                        // Log each property individually for clarity
+                        console.log(`🎚️   useRamps: ${conductorStrategy.useRamps}`);
+                        console.log(`🎚️   fadeInMs: ${conductorStrategy.fadeInMs}`);
+                        console.log(`🎚️   fadeOutMs: ${conductorStrategy.fadeOutMs}`);
+                        console.log(`🎚️   mergeThresholdMs: ${conductorStrategy.mergeThresholdMs}`);
+                        console.log(`🎚️   disableRelaunches: ${conductorStrategy.disableRelaunches}`);
+                        console.log(`🎚️   reason: ${conductorStrategy.reason}`);
+
+                        // Update ramp strategy with conductor's values
                         rampStrategy = {
                             ...rampStrategy,
-                            ...schedule.rampStrategy[mySeat.id]
+                            ...conductorStrategy
                         };
-                        console.log(`🎚️ Ramp strategy for ${mySeat.id}:`, rampStrategy);
-                        document.getElementById('debug-ramp-strategy').innerText =
-                            rampStrategy.useRamps ? 'sparse' : 'dense';
+
+                        console.log(`🎚️ Updated ramp strategy for ${mySeat.id}:`, rampStrategy);
+                        console.log(`🎚️ disableRelaunches = ${rampStrategy.disableRelaunches}`);
+
+                        // Update debug display
+                        let strategyText = 'unknown';
+                        if (rampStrategy.disableRelaunches) {
+                            strategyText = 'dense (no relaunch)';
+                        } else if (rampStrategy.useRamps) {
+                            strategyText = 'sparse';
+                        } else {
+                            strategyText = 'dense';
+                        }
+                        document.getElementById('debug-ramp-strategy').innerText = strategyText;
                     } else {
+                        console.log(`🎚️ No ramp strategy found for ${mySeat.id}, using defaults`);
                         // Default to using ramps if no strategy provided
-                        rampStrategy.useRamps = true;
-                        rampStrategy.fadeInMs = 30;
-                        rampStrategy.fadeOutMs = 40;
-                        rampStrategy.mergeThresholdMs = 50;
-                        console.log(`🎚️ No ramp strategy found, using defaults`);
+                        rampStrategy = {
+                            useRamps: true,
+                            fadeInMs: 30,
+                            fadeOutMs: 40,
+                            mergeThresholdMs: 50,
+                            disableRelaunches: false,
+                            reason: "default"
+                        };
                         document.getElementById('debug-ramp-strategy').innerText = 'default';
                     }
 
@@ -810,6 +837,7 @@ devicedist.html: Feature List
                     assignedNotes = [];
                     // DO NOT clear relaunchPoints - they persist
                     console.log("🎯 Tuning mode deactivated");
+                    document.getElementById('debug-ramp-strategy').innerText = 'inactive';
                 }
             });
 
