@@ -12,6 +12,7 @@ Features:
 - Real-time device monitoring and performance registry
 - Seat map visualization with status indicators
 - Heartbeat monitoring: devices marked dead if no heartbeat for 12.1s
+- Ramp strategy calculation: Each device receives custom ramp parameters based on its note density
 
 Note: All configuration uploads (seat_config.tsv, tuning_mode.json,
 pillar_config.json, visual_timeline.json) are handled by admin.html
@@ -229,6 +230,13 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
     let warbleBuffer = [];
     let lastWarbleTime = 0;
     const WARBLE_COOLDOWN_MS = 500; // Minimum time between detections
+
+    // Ramp strategy parameters
+    const RAMP_DENSE_THRESHOLD_NOTES_PER_SECOND = 2.0; // If device plays >2 notes/sec, treat as dense (no ramps)
+    const RAMP_DENSE_THRESHOLD_AVG_GAP_MS = 100; // If average gap <100ms, treat as dense
+    const RAMP_FADE_IN_MS = 30; // Default fade in time
+    const RAMP_FADE_OUT_MS = 40; // Default fade out time
+    const RAMP_MERGE_THRESHOLD_MS = 50; // Merge notes with gaps <=50ms into blocks
 
     // --- CLOCK SYNC ---
     const offsetRef = db.ref(".info/serverTimeOffset");
@@ -811,6 +819,69 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         logDetection(`🚀 GO: "${currentMovement.movement_name}" at ${startTimeStr} (buffer: ${bufferMs/1000}s)`);
     };
 
+    // --- RAMP STRATEGY CALCULATION ---
+    function calculateRampStrategyForDevice(deviceId, deviceNotes) {
+        if (!deviceNotes || deviceNotes.length === 0) {
+            // Device has no notes - shouldn't happen, but just in case
+            return {
+                useRamps: false,
+                fadeInMs: 0,
+                fadeOutMs: 0,
+                mergeThresholdMs: 0,
+                reason: "no_notes"
+            };
+        }
+
+        // Sort notes by start time
+        const sortedNotes = [...deviceNotes].sort((a, b) => a.startMs - b.startMs);
+
+        // Calculate average gap between notes
+        let totalGap = 0;
+        let gapCount = 0;
+        for (let i = 1; i < sortedNotes.length; i++) {
+            const gap = sortedNotes[i].startMs - (sortedNotes[i-1].startMs + sortedNotes[i-1].durationMs);
+            if (gap > 0) { // Only count positive gaps
+                totalGap += gap;
+                gapCount++;
+            }
+        }
+        const avgGap = gapCount > 0 ? totalGap / gapCount : 0;
+
+        // Calculate notes per second (density)
+        const firstNote = sortedNotes[0];
+        const lastNote = sortedNotes[sortedNotes.length - 1];
+        const totalDuration = (lastNote.startMs + lastNote.durationMs) - firstNote.startMs;
+        const notesPerSecond = (sortedNotes.length / totalDuration) * 1000;
+
+        // Determine if device is playing densely (should use continuous playback)
+        const isDense = (notesPerSecond > RAMP_DENSE_THRESHOLD_NOTES_PER_SECOND) ||
+                        (avgGap < RAMP_DENSE_THRESHOLD_AVG_GAP_MS && sortedNotes.length > 5);
+
+        if (isDense) {
+            console.log(`📊 Device ${deviceId}: DENSE (${sortedNotes.length} notes, ${notesPerSecond.toFixed(2)} notes/sec, avg gap ${avgGap.toFixed(1)}ms) - using continuous playback`);
+            return {
+                useRamps: false,
+                fadeInMs: 0,
+                fadeOutMs: 0,
+                mergeThresholdMs: 0,
+                reason: "dense_playback",
+                notesPerSecond: notesPerSecond,
+                avgGap: avgGap
+            };
+        } else {
+            console.log(`📊 Device ${deviceId}: SPARSE (${sortedNotes.length} notes, ${notesPerSecond.toFixed(2)} notes/sec, avg gap ${avgGap.toFixed(1)}ms) - using ramps`);
+            return {
+                useRamps: true,
+                fadeInMs: RAMP_FADE_IN_MS,
+                fadeOutMs: RAMP_FADE_OUT_MS,
+                mergeThresholdMs: RAMP_MERGE_THRESHOLD_MS,
+                reason: "sparse_playback",
+                notesPerSecond: notesPerSecond,
+                avgGap: avgGap
+            };
+        }
+    }
+
     // --- 4. DYNAMIC TUNING ENGINE ---
     async function refreshActiveDevices() {
         const snapshot = await db.ref('devices').once('value');
@@ -962,6 +1033,28 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
 
         await startPillars(tuningStartTime);
 
+        // Calculate ramp strategy for each device
+        const rampStrategy = {};
+        const notesByDevice = {};
+
+        // Group notes by device
+        tuningSchedule.notes.forEach(note => {
+            if (!notesByDevice[note.deviceId]) {
+                notesByDevice[note.deviceId] = [];
+            }
+            notesByDevice[note.deviceId].push(note);
+        });
+
+        // Calculate strategy for each device
+        Object.keys(notesByDevice).forEach(deviceId => {
+            rampStrategy[deviceId] = calculateRampStrategyForDevice(deviceId, notesByDevice[deviceId]);
+        });
+
+        // Log summary of ramp strategies
+        const denseCount = Object.values(rampStrategy).filter(s => !s.useRamps).length;
+        const sparseCount = Object.values(rampStrategy).filter(s => s.useRamps).length;
+        console.log(`📊 Ramp strategy: ${denseCount} dense devices (continuous), ${sparseCount} sparse devices (with ramps)`);
+
         await db.ref('tuning/current').set({
             status: 'ACTIVE',
             fluteUrl: FLUTE_URL,
@@ -977,22 +1070,15 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
                 x: d.x,
                 y: d.y,
                 isPillar: d.isPillar
-            }))
+            })),
+            rampStrategy: rampStrategy  // Per-device ramp parameters
         });
 
         // Include startTime property in the tuning cue
         await db.ref('show/currentCue').set({
             type: "TUNING_MOVEMENT",
             file: FLUTE_URL,
-            startTime: tuningStartTime,        // ADDED: This is what devicedist.html expects
-            triggerTime: tuningStartTime,      // KEPT: For backward compatibility
-            scheduledTime: tuningStartTime,    // KEPT: For backward compatibility
-            duration: noteTimings[noteTimings.length-1].startMs + 1000,
-            metadata: {
-                purpose: "tuning_movement",
-                scheduleRef: "tuning/current",
-                pulsePosition: "center"
-            }
+            startTime: tuningStartTime
         });
 
         isTuningActive = true;
