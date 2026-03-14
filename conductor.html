@@ -828,6 +828,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
                 fadeInMs: 0,
                 fadeOutMs: 0,
                 mergeThresholdMs: 0,
+                disableRelaunches: true,
                 reason: "no_notes"
             };
         }
@@ -857,24 +858,32 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         const isDense = (notesPerSecond > RAMP_DENSE_THRESHOLD_NOTES_PER_SECOND) ||
                         (avgGap < RAMP_DENSE_THRESHOLD_AVG_GAP_MS && sortedNotes.length > 5);
 
-        if (isDense) {
-            console.log(`📊 Device ${deviceId}: DENSE (${sortedNotes.length} notes, ${notesPerSecond.toFixed(2)} notes/sec, avg gap ${avgGap.toFixed(1)}ms) - using continuous playback`);
+        // Check if this is a solo device (playing most of the notes)
+        // This is a heuristic - in a real performance with many devices,
+        // each device would have far fewer notes
+        const totalNotesInPiece = noteTimings.length; // 579 from tuning_mode.json
+        const isSoloDevice = sortedNotes.length > totalNotesInPiece * 0.8; // >80% of notes
+
+        if (isDense || isSoloDevice) {
+            console.log(`📊 Device ${deviceId}: DENSE/SOLO (${sortedNotes.length} notes, ${notesPerSecond.toFixed(2)} notes/sec, avg gap ${avgGap.toFixed(1)}ms) - continuous playback, no relaunches`);
             return {
                 useRamps: false,
                 fadeInMs: 0,
                 fadeOutMs: 0,
                 mergeThresholdMs: 0,
-                reason: "dense_playback",
+                disableRelaunches: true,  // CRITICAL: Solo devices should not relaunch
+                reason: isSoloDevice ? "solo_device" : "dense_playback",
                 notesPerSecond: notesPerSecond,
                 avgGap: avgGap
             };
         } else {
-            console.log(`📊 Device ${deviceId}: SPARSE (${sortedNotes.length} notes, ${notesPerSecond.toFixed(2)} notes/sec, avg gap ${avgGap.toFixed(1)}ms) - using ramps`);
+            console.log(`📊 Device ${deviceId}: SPARSE (${sortedNotes.length} notes, ${notesPerSecond.toFixed(2)} notes/sec, avg gap ${avgGap.toFixed(1)}ms) - using ramps with relaunches`);
             return {
                 useRamps: true,
                 fadeInMs: RAMP_FADE_IN_MS,
                 fadeOutMs: RAMP_FADE_OUT_MS,
                 mergeThresholdMs: RAMP_MERGE_THRESHOLD_MS,
+                disableRelaunches: false,  // Normal devices use relaunches for calibration
                 reason: "sparse_playback",
                 notesPerSecond: notesPerSecond,
                 avgGap: avgGap
