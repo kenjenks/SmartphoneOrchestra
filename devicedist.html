@@ -43,14 +43,12 @@ devicedist.html: Feature List
 
 4. Decentralized Statistical Calibration (for the Bach
 "Jesu, Joy of Man's Desiring" sequence)
-- Ultrasonic Pulse Detection via Firebase: Listens for conductor's
-  detection timestamps at tuning/last_heard
-- One-Way Lag Calculation: Compares pulse playback time with heard time
-- Local Storage: Maintains calibrated lag value for precise synchronization
-- Single Flute MP3: Plays the encoded flute audio with volume ramping
-  only for notes assigned to this device
-- Pillar Fabric: All four pillars play their continuous MP3s
-  throughout the tuning movement, providing the musical foundation
+- Multi-Launch Strategy: Uses relaunch points from tuning_mode.json
+  to restart the flute MP3 multiple times during the piece to
+  better measure speaker delay times
+- Progressive Calibration: Each relaunch improves timing using data from previous launches
+- Statistical Confidence: Multiple independent launch samples per device
+- Pillar Foundation: Pillars provide continuous harmony, allowing flute dropouts
 
 5. Distributed Timeline Execution (Model B)
 - GO Signal Handler: Processes movement start commands with full timeline
@@ -260,6 +258,8 @@ devicedist.html: Feature List
             <div><span class="debug-label">Flute buffer:</span> <span id="debug-buffer-status"></span></div>
             <div><span class="debug-label">Current time:</span> <span id="debug-time"></span></div>
             <div><span class="debug-label">Tuning start:</span> <span id="debug-tuning-start"></span></div>
+            <div><span class="debug-label">Relaunch points:</span> <span id="debug-relaunch-count"></span></div>
+            <div><span class="debug-label">Current launch:</span> <span id="debug-current-launch"></span></div>
         </div>
         <canvas id="stage-canvas"></canvas>
     </div>
@@ -290,10 +290,13 @@ devicedist.html: Feature List
         let isHappy = false;
         let lastPingSent = 0;
 
-        // Ultrasonic Calibration State
+        // Multi-Launch Calibration State
         let calibrationMode = false;
         let currentTuningSchedule = null;
         let assignedNotes = []; // Notes assigned to this device during tuning
+        let relaunchPoints = []; // Relaunch points from tuning_mode.json
+        let launchEvents = []; // Track each launch instance
+        let currentLaunchIndex = 0; // Which launch we're on (0 = first)
         let pendingPulseDetections = []; // Track pulses waiting for conductor response
         let calibratedLag = null; // Final calibrated one-way lag
         let fluteUrl = null; // URL of the encoded flute MP3
@@ -305,6 +308,14 @@ devicedist.html: Feature List
             BR: null
         };
         let activePillarSources = []; // Track active pillar audio sources
+        let calibrationStrategy = {
+            method: 'progressive',
+            minSamplesForUpdate: 2,
+            useMedian: true,
+            confidenceThreshold: 8,
+            maxRelaunches: 25,
+            minTimeBetweenRelaunchesMs: 3000
+        };
 
         // Individual seat test state
         let pendingTestPulse = null; // Track individual seat test
@@ -335,6 +346,7 @@ devicedist.html: Feature List
         const WARMUP_ADVANCE_MS = 500; // Start warm-up 500ms before cue
         const HEARTBEAT_BASE_INTERVAL_MS = 10000; // 10 seconds base interval
         const HEARTBEAT_JITTER_MS = 2000; // ±1000ms jitter (total range 2000ms)
+        const LAUNCH_FADE_SAFETY_MS = 50; // Safety margin for fade transitions
 
         // --- IDENTITY RESOLUTION - Reads from Firebase seat_config ---
         async function resolveIdentity() {
@@ -472,7 +484,9 @@ devicedist.html: Feature List
                     lastSeen: now,
                     status: 'ACTIVE',
                     x: mySeat.x,
-                    y: mySeat.y
+                    y: mySeat.y,
+                    launchIndex: currentLaunchIndex,
+                    calibratedLag: calibratedLag || hardwareLag
                 });
                 console.log(`💓 Heartbeat sent for ${mySeat.id} at ${new Date(now).toLocaleTimeString()}`);
             } catch (e) {
@@ -508,7 +522,7 @@ devicedist.html: Feature List
             }
         }
 
-        // --- LOAD TUNING ASSET URLS from tuning_mode.json ---
+        // --- LOAD TUNING ASSET URLS AND RELAUNCH POINTS from tuning_mode.json ---
         async function loadTuningAssetUrls() {
             try {
                 const tuningSnap = await db.ref('tuning_mode').once('value');
@@ -586,6 +600,41 @@ devicedist.html: Feature List
                     }
                 }
 
+                // LOAD RELAUNCH POINTS FROM PERFORMANCE DATA
+                if (tuningData.performance && tuningData.performance.relaunch_points) {
+                    relaunchPoints = tuningData.performance.relaunch_points.map(point => ({
+                        ...point,
+                        note_index: parseInt(point.note_index),
+                        position_ms: parseFloat(point.position_ms),
+                        fade_out_ms: point.fade_out_ms || 100,
+                        fade_in_ms: point.fade_in_ms || 50,
+                        confidence: point.confidence || 0.7
+                    }));
+
+                    // Sort by position
+                    relaunchPoints.sort((a, b) => a.position_ms - b.position_ms);
+
+                    console.log(`🔄 Loaded ${relaunchPoints.length} relaunch points from tuning data:`);
+                    relaunchPoints.slice(0, 5).forEach((point, i) => {
+                        console.log(`   ${i}: At ${(point.position_ms/1000).toFixed(1)}s - ${point.description || point.reason}`);
+                    });
+                    if (relaunchPoints.length > 5) {
+                        console.log(`   ... and ${relaunchPoints.length - 5} more`);
+                    }
+                }
+
+                // Load calibration strategy
+                if (tuningData.performance && tuningData.performance.calibration_strategy) {
+                    calibrationStrategy = {
+                        ...calibrationStrategy,
+                        ...tuningData.performance.calibration_strategy
+                    };
+                    console.log(`📊 Calibration strategy: ${calibrationStrategy.method}, max relaunches: ${calibrationStrategy.maxRelaunches}`);
+                }
+
+                // Update debug display
+                document.getElementById('debug-relaunch-count').innerText = relaunchPoints.length;
+
                 // Preload tuning assets if they're not already in the timeline preload
                 if (fluteUrl && !bufferCache[fluteUrl]) {
                     preloadTuningAsset(fluteUrl);
@@ -613,7 +662,7 @@ devicedist.html: Feature List
             });
         }
 
-        // --- DECENTRALIZED CALIBRATION ENGINE (Bach Logic) ---
+        // --- DECENTRALIZED CALIBRATION ENGINE (Bach Logic with Multi-Launch) ---
         function processAcousticReturn(tHeard) {
             if (!lastPingSent) return;
 
@@ -621,31 +670,36 @@ devicedist.html: Feature List
             // This includes both hardware delay AND acoustic travel time
             const measuredLag = tHeard - lastPingSent;
 
-            // Store the calibrated value
-            calibratedLag = measuredLag;
-            hardwareLag = measuredLag; // Update working lag estimate
+            // Store the calibrated value (will be updated by progressive strategy)
+            if (calibrationStrategy.method !== 'progressive') {
+                // Legacy mode: update immediately
+                calibratedLag = measuredLag;
+                hardwareLag = measuredLag;
+            }
 
             // Append to rolling buffer (Sample pool of 12)
             lagSamples.push(measuredLag);
             if (lagSamples.length > 12) lagSamples.shift();
 
-            // Calculate Standard Deviation
+            // Calculate Standard Deviation for HAPPY status
             if (lagSamples.length >= 6) {
                 const mean = lagSamples.reduce((a, b) => a + b) / lagSamples.length;
                 const variance = lagSamples.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / lagSamples.length;
                 const stdDev = Math.sqrt(variance);
 
-                if (stdDev < 5 && !isHappy) {
+                if (stdDev < calibrationStrategy.confidenceThreshold && !isHappy) {
                     isHappy = true;
                     document.getElementById('cal-ind').className = 'indicator active happy';
                     db.ref(`devices/${mySeat.id}/status`).set('HAPPY');
 
                     // Store calibrated lag in Firebase for monitoring
                     db.ref(`devices/${mySeat.id}/calibration`).update({
-                        lag: calibratedLag,
+                        lag: calibratedLag || measuredLag,
                         samples: lagSamples.length,
                         stdDev: stdDev,
-                        calibratedAt: Date.now() + serverOffset
+                        calibratedAt: Date.now() + serverOffset,
+                        strategy: calibrationStrategy.method,
+                        launchIndex: currentLaunchIndex
                     });
                 } else if (!isHappy) {
                     document.getElementById('cal-ind').className = 'indicator syncing';
@@ -659,7 +713,7 @@ devicedist.html: Feature List
             pendingTestPulse = null;
         }
 
-        // --- TUNING SCHEDULE HANDLER ---
+        // --- TUNING SCHEDULE HANDLER with Multi-Launch Support ---
         function initTuningListener() {
             // Listen for tuning schedule
             db.ref('tuning/current').on('value', snap => {
@@ -667,6 +721,10 @@ devicedist.html: Feature List
                 if (schedule && schedule.status === 'ACTIVE') {
                     calibrationMode = true;
                     currentTuningSchedule = schedule;
+
+                    // Reset launch state for new tuning session
+                    currentLaunchIndex = 0;
+                    launchEvents = [];
 
                     // Store flute URL from schedule (if not already loaded from tuning_mode)
                     if (schedule.fluteUrl && !fluteUrl) {
@@ -681,6 +739,7 @@ devicedist.html: Feature List
                             .filter(note => note.deviceId === mySeat.id)
                             .map(note => ({
                                 ...note,
+                                index: note.noteIndex || note.index,
                                 startMs: parseFloat(note.startMs),
                                 durationMs: parseFloat(note.durationMs),
                                 pulsePositionMs: parseFloat(note.pulsePositionMs)
@@ -710,6 +769,7 @@ devicedist.html: Feature List
                     calibrationMode = false;
                     currentTuningSchedule = null;
                     assignedNotes = [];
+                    relaunchPoints = []; // Clear relaunch points when tuning ends
                     console.log("🎯 Tuning mode deactivated");
                     // Don't clear fluteUrl - keep it for potential future use
                 }
@@ -1375,66 +1435,388 @@ devicedist.html: Feature List
             source.start(0);
         }
 
-        // --- TUNING PLAYBACK MONITOR ---
-        function monitorTuningPlayback(cue, source, startTime) {
-            if (!assignedNotes.length || !currentTuningSchedule) return;
+        // --- MULTI-LAUNCH TUNING PLAYBACK ---
+        function getNotesForLaunch(launchIndex) {
+            if (!assignedNotes.length) return [];
 
-            console.log(`🎵 Monitoring tuning playback for ${assignedNotes.length} assigned notes`);
+            if (launchIndex === 0) {
+                // First launch: notes before first relaunch point
+                if (relaunchPoints.length === 0) return assignedNotes;
+                const firstRelaunch = relaunchPoints[0];
+                return assignedNotes.filter(n => n.index < firstRelaunch.note_index);
+            }
+            else if (launchIndex <= relaunchPoints.length) {
+                // Middle launches: notes between relaunch points
+                const startIdx = relaunchPoints[launchIndex - 1].note_index;
+                const endIdx = launchIndex < relaunchPoints.length ?
+                              relaunchPoints[launchIndex].note_index :
+                              assignedNotes.length;
+                return assignedNotes.filter(n => n.index >= startIdx && n.index < endIdx);
+            }
+            else {
+                // Final launch: notes after last relaunch point
+                const startIdx = relaunchPoints[relaunchPoints.length - 1].note_index;
+                return assignedNotes.filter(n => n.index >= startIdx);
+            }
+        }
 
-            assignedNotes.forEach(note => {
-                const noteStartAbs = cue.startTime + note.startMs;
-                const noteEndAbs = noteStartAbs + note.durationMs;
-                const pulseAbs = cue.startTime + note.pulsePositionMs;
+        async function scheduleLaunch(url, movementStartTime, launchIndex, scheduledWallTime, customLag = null, fadeInMs = 50) {
+            const lag = customLag !== null ? customLag : hardwareLag;
+            const nowWall = Date.now() + serverOffset;
+            const secondsUntilStart = (scheduledWallTime - nowWall - lag) / 1000;
+            const audioStartTime = audioCtx.currentTime + Math.max(0, secondsUntilStart);
 
-                const now = Date.now() + serverOffset;
-
-                // Ramp up at note start
-                const rampUpDelay = noteStartAbs - now - hardwareLag;
-                if (rampUpDelay > 0) {
-                    const timeoutId = setTimeout(() => {
-                        const activeCue = activeAudioCues.find(c => c.source === source);
-                        if (activeCue) {
-                            activeCue.gainNode.gain.setTargetAtTime(1.0, audioCtx.currentTime, 0.015);
-                            console.log(`🔊 Ramping up for note at ${note.startMs}ms`);
-                            flashScreenForPulse();
-                        }
-                        activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
-                    }, rampUpDelay);
-                    activeTimeouts.push(timeoutId);
+            // Load audio if needed
+            if (!bufferCache[url]) {
+                try {
+                    const res = await fetch(url);
+                    const arrayBuf = await res.arrayBuffer();
+                    bufferCache[url] = await audioCtx.decodeAudioData(arrayBuf);
+                } catch (e) {
+                    console.error(`Failed to load flute audio:`, e);
+                    return null;
                 }
+            }
 
-                // Pulse tracking at note center - devices will emit warble here
-                const pulseDelay = pulseAbs - now - hardwareLag;
-                if (pulseDelay > 0) {
-                    const timeoutId = setTimeout(() => {
-                        const playTime = Date.now() + serverOffset;
-                        lastPingSent = playTime;
+            const source = audioCtx.createBufferSource();
+            source.buffer = bufferCache[url];
 
-                        pendingPulseDetections.push({
-                            playTime: playTime,
-                            noteId: note.noteIndex
-                        });
+            const gainNode = audioCtx.createGain();
+            source.connect(gainNode).connect(audioCtx.destination);
 
-                        console.log(`📡 Tuning warble played at ${playTime} (note ${note.noteIndex})`);
-                        activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
-                    }, pulseDelay);
-                    activeTimeouts.push(timeoutId);
-                }
+            // Start with fade in
+            const fadeInSeconds = fadeInMs / 1000;
+            gainNode.gain.setValueAtTime(0, audioStartTime);
+            gainNode.gain.linearRampToValueAtTime(1.0, audioStartTime + fadeInSeconds);
 
-                // Ramp down at note end
-                const rampDownDelay = noteEndAbs - now - hardwareLag;
-                if (rampDownDelay > 0) {
-                    const timeoutId = setTimeout(() => {
-                        const activeCue = activeAudioCues.find(c => c.source === source);
-                        if (activeCue) {
-                            activeCue.gainNode.gain.setTargetAtTime(0, audioCtx.currentTime, 0.015);
-                            console.log(`🔉 Ramping down after note at ${note.startMs}ms`);
-                        }
-                        activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
-                    }, rampDownDelay);
-                    activeTimeouts.push(timeoutId);
-                }
+            source.start(audioStartTime);
+
+            console.log(`🚀 Launch ${launchIndex + 1} scheduled at ${audioStartTime.toFixed(3)}s (lag: ${lag}ms, fade: ${fadeInMs}ms)`);
+
+            // Record launch event
+            const launchEvent = {
+                scheduledWall: scheduledWallTime,
+                actualAudioStart: audioStartTime,
+                actualWallStart: Date.now() + serverOffset,
+                source,
+                gainNode,
+                index: launchIndex
+            };
+
+            launchEvents[launchIndex] = launchEvent;
+
+            // Get notes for this launch segment
+            const segmentNotes = getNotesForLaunch(launchIndex);
+
+            // Schedule their ramps
+            segmentNotes.forEach(note => {
+                scheduleNoteRamp(note, source, gainNode, movementStartTime, audioStartTime, launchIndex);
             });
+
+            console.log(`   → ${segmentNotes.length} notes assigned to this launch`);
+
+            return launchEvent;
+        }
+
+        function scheduleNoteRamp(note, source, gainNode, movementStartTime, audioStartTime, launchIndex) {
+            const noteStartMs = parseFloat(note.startMs);
+            const noteDurationMs = parseFloat(note.durationMs);
+            const notePulseMs = parseFloat(note.pulsePositionMs || (noteStartMs + noteDurationMs/2));
+
+            // Calculate times relative to this launch
+            const noteStartAudio = audioStartTime + (noteStartMs / 1000);
+            const noteEndAudio = audioStartTime + ((noteStartMs + noteDurationMs) / 1000);
+            const pulseWall = movementStartTime + notePulseMs;
+
+            // Ramp up (10ms before note)
+            const rampUpStart = noteStartAudio - 0.01;
+            const rampUpEnd = noteStartAudio;
+
+            gainNode.gain.setValueAtTime(0, rampUpStart);
+            gainNode.gain.linearRampToValueAtTime(1.0, rampUpEnd);
+            gainNode.gain.setValueAtTime(1.0, rampUpEnd);
+
+            // Ramp down (20ms before end to avoid clicks)
+            const rampDownStart = noteEndAudio - 0.02;
+            const rampDownEnd = noteEndAudio;
+
+            gainNode.gain.setValueAtTime(1.0, rampDownStart);
+            gainNode.gain.linearRampToValueAtTime(0, rampDownEnd);
+            gainNode.gain.setValueAtTime(0, rampDownEnd);
+
+            // Schedule pulse detection for calibration
+            const pulseDelay = pulseWall - (Date.now() + serverOffset) - hardwareLag;
+
+            if (pulseDelay > 0) {
+                const timeoutId = setTimeout(() => {
+                    const playTime = Date.now() + serverOffset;
+                    lastPingSent = playTime;
+
+                    pendingPulseDetections.push({
+                        playTime: playTime,
+                        noteId: note.noteIndex || note.index,
+                        launchIndex: launchIndex,
+                        expectedDelay: hardwareLag,
+                        startMs: noteStartMs
+                    });
+
+                    // Visual feedback
+                    flashScreenForPulse();
+
+                    activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
+                }, pulseDelay);
+
+                activeTimeouts.push(timeoutId);
+            }
+        }
+
+        async function fadeOutLaunch(launchEvent, fadeOutMs = 100) {
+            if (!launchEvent) return;
+
+            const fadeStart = audioCtx.currentTime;
+            const fadeEnd = fadeStart + (fadeOutMs / 1000);
+
+            launchEvent.gainNode.gain.linearRampToValueAtTime(0, fadeEnd);
+
+            // Stop after fade completes
+            setTimeout(() => {
+                try {
+                    launchEvent.source.stop();
+                    console.log(`🛑 Launch ${launchEvent.index + 1} stopped after ${fadeOutMs}ms fade`);
+                } catch (e) {}
+            }, fadeOutMs + 50);
+        }
+
+        function calculateImprovedLag() {
+            if (!calibrationStrategy || calibrationStrategy.method !== 'progressive') {
+                return hardwareLag;
+            }
+
+            // Gather all samples from completed launches and detections
+            const allSamples = [];
+
+            // Add launch delay samples from each completed launch
+            for (let i = 0; i <= currentLaunchIndex; i++) {
+                const launch = launchEvents[i];
+                if (!launch) continue;
+
+                // Launch delay sample (scheduled vs actual wall time)
+                const launchDelay = launch.actualWallStart - launch.scheduledWall;
+                if (Math.abs(launchDelay) < 1000) { // Sanity check: less than 1 second
+                    allSamples.push(launchDelay);
+                }
+            }
+
+            // Add warble detection samples
+            const warbleSamples = pendingPulseDetections
+                .filter(p => p.launchIndex !== undefined)
+                .map(p => {
+                    // We don't have heard time yet, but we'll use the difference between
+                    // when we expected it and when it was actually heard (processed in processAcousticReturn)
+                    return null;
+                })
+                .filter(v => v !== null);
+
+            // For now, just use launch delay samples
+            if (allSamples.length < calibrationStrategy.minSamplesForUpdate) {
+                console.log(`📊 Only ${allSamples.length} launch samples, need ${calibrationStrategy.minSamplesForUpdate} for update`);
+                return hardwareLag;
+            }
+
+            // Calculate new lag based on strategy
+            let newLag;
+            if (calibrationStrategy.useMedian) {
+                const sorted = [...allSamples].sort((a,b) => a-b);
+                newLag = sorted[Math.floor(sorted.length/2)];
+            } else {
+                newLag = allSamples.reduce((a,b) => a+b, 0) / allSamples.length;
+            }
+
+            // Round to integer
+            newLag = Math.round(newLag);
+
+            console.log(`📊 Improved lag: ${newLag}ms from ${allSamples.length} samples`);
+            return newLag;
+        }
+
+        // --- DIRECT PLAYBACK FOR TUNING MOVEMENT with Multi-Launch ---
+        async function playTuningMovement(cue) {
+            console.log("🎵 Starting tuning movement with multi-launch strategy");
+
+            // Reset launch state
+            currentLaunchIndex = 0;
+            launchEvents = [];
+
+            const urlToUse = currentTuningSchedule?.fluteUrl || fluteUrl || cue.file;
+            const movementStartTime = cue.startTime || currentTuningSchedule?.startTime;
+
+            if (!urlToUse || !movementStartTime) {
+                console.error("Missing URL or start time");
+                return;
+            }
+
+            console.log(`🎵 Flute URL: ${urlToUse.split('/').pop()}`);
+            console.log(`🎵 Relaunch points: ${relaunchPoints.length}`);
+
+            if (mySeat.id.startsWith('PILLAR_')) {
+                startPillarFabric(movementStartTime);
+                return;
+            }
+
+            // If no relaunch points, fall back to single launch
+            if (relaunchPoints.length === 0) {
+                console.log("⚠️ No relaunch points found, using single launch mode");
+                await playSingleLaunchTuning(cue, urlToUse, movementStartTime);
+                return;
+            }
+
+            // Start first launch
+            const launch0 = await scheduleLaunch(urlToUse, movementStartTime, 0, movementStartTime, hardwareLag, 50);
+            if (!launch0) return;
+
+            // Schedule subsequent launches based on relaunch points
+            for (let i = 0; i < relaunchPoints.length; i++) {
+                const point = relaunchPoints[i];
+                const launchNumber = i + 1;
+
+                // Find the note this relaunch point corresponds to
+                const targetNote = assignedNotes.find(n => n.index === point.note_index);
+                if (!targetNote) {
+                    console.log(`⚠️ Relaunch point ${i} references note ${point.note_index} not assigned to this device, skipping`);
+                    continue;
+                }
+
+                // Calculate when to relaunch: during the note, before it ends
+                const noteStartWall = movementStartTime + targetNote.startMs;
+                const noteEndWall = movementStartTime + targetNote.startMs + targetNote.durationMs;
+
+                // Relaunch during the note, giving time to fade out current and fade in new
+                const fadeOutMs = point.fade_out_ms || 100;
+                const relaunchWallTime = noteEndWall - fadeOutMs - LAUNCH_FADE_SAFETY_MS;
+
+                const nowWall = Date.now() + serverOffset;
+                const delay = relaunchWallTime - nowWall - hardwareLag;
+
+                if (delay > 0) {
+                    // Create a closure to capture current values
+                    const timeoutId = setTimeout(async () => {
+                        console.log(`🔄 Executing relaunch ${launchNumber + 1} at note ${point.note_index} (${point.description || point.reason})`);
+
+                        // Fade out current launch with specified duration
+                        await fadeOutLaunch(launchEvents[currentLaunchIndex], fadeOutMs);
+
+                        // Calculate improved lag from accumulated samples
+                        const improvedLag = calculateImprovedLag();
+
+                        // Schedule new launch
+                        const fadeInMs = point.fade_in_ms || 50;
+                        const nextLaunch = await scheduleLaunch(
+                            urlToUse,
+                            movementStartTime,
+                            launchNumber,
+                            relaunchWallTime + fadeOutMs + LAUNCH_FADE_SAFETY_MS,
+                            improvedLag,
+                            fadeInMs
+                        );
+
+                        if (nextLaunch) {
+                            currentLaunchIndex = launchNumber;
+                            console.log(`🚀 Launch ${launchNumber + 1} scheduled with lag ${improvedLag}ms (fade in: ${fadeInMs}ms)`);
+                        }
+
+                        activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
+                    }, delay);
+
+                    activeTimeouts.push(timeoutId);
+                } else {
+                    console.warn(`⚠️ Relaunch at ${relaunchWallTime} is in the past (delay=${delay}ms)`);
+                }
+            }
+
+            console.log(`✅ Multi-launch setup complete with ${relaunchPoints.length} relaunch points`);
+        }
+
+        // Fallback single launch mode (original behavior)
+        async function playSingleLaunchTuning(cue, urlToUse, movementStartTime) {
+            console.log("🎵 Using single launch mode");
+
+            const nowWall = Date.now() + serverOffset;
+            const secondsUntilStart = (movementStartTime - nowWall - hardwareLag) / 1000;
+            const startTime = audioCtx.currentTime + Math.max(0, secondsUntilStart);
+
+            if (!bufferCache[urlToUse]) {
+                try {
+                    const res = await fetch(urlToUse);
+                    const arrayBuf = await res.arrayBuffer();
+                    bufferCache[urlToUse] = await audioCtx.decodeAudioData(arrayBuf);
+                } catch (e) {
+                    console.error(`Failed to fetch flute ${urlToUse}:`, e);
+                    return;
+                }
+            }
+
+            const source = audioCtx.createBufferSource();
+            source.buffer = bufferCache[urlToUse];
+
+            const gainNode = audioCtx.createGain();
+            gainNode.gain.setValueAtTime(0.0, startTime);
+
+            source.connect(gainNode).connect(audioCtx.destination);
+            source.start(startTime);
+
+            activeAudioCues.push({
+                ...cue,
+                source,
+                gainNode,
+                startTime: movementStartTime,
+                localStartTime: Date.now()
+            });
+
+            if (assignedNotes.length > 0) {
+                // Legacy single-launch monitoring
+                assignedNotes.forEach(note => {
+                    const noteStartAbs = movementStartTime + note.startMs;
+                    const noteEndAbs = noteStartAbs + note.durationMs;
+                    const pulseAbs = movementStartTime + note.pulsePositionMs;
+                    const now = Date.now() + serverOffset;
+
+                    const rampUpDelay = noteStartAbs - now - hardwareLag;
+                    if (rampUpDelay > 0) {
+                        const timeoutId = setTimeout(() => {
+                            const activeCue = activeAudioCues.find(c => c.source === source);
+                            if (activeCue) {
+                                activeCue.gainNode.gain.setTargetAtTime(1.0, audioCtx.currentTime, 0.015);
+                                flashScreenForPulse();
+                            }
+                            activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
+                        }, rampUpDelay);
+                        activeTimeouts.push(timeoutId);
+                    }
+
+                    const pulseDelay = pulseAbs - now - hardwareLag;
+                    if (pulseDelay > 0) {
+                        const timeoutId = setTimeout(() => {
+                            const playTime = Date.now() + serverOffset;
+                            lastPingSent = playTime;
+                            pendingPulseDetections.push({ playTime, noteId: note.noteIndex });
+                            activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
+                        }, pulseDelay);
+                        activeTimeouts.push(timeoutId);
+                    }
+
+                    const rampDownDelay = noteEndAbs - now - hardwareLag;
+                    if (rampDownDelay > 0) {
+                        const timeoutId = setTimeout(() => {
+                            const activeCue = activeAudioCues.find(c => c.source === source);
+                            if (activeCue) {
+                                activeCue.gainNode.gain.setTargetAtTime(0, audioCtx.currentTime, 0.015);
+                            }
+                            activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
+                        }, rampDownDelay);
+                        activeTimeouts.push(timeoutId);
+                    }
+                });
+            }
         }
 
         function flashScreenForPulse() {
@@ -1459,6 +1841,8 @@ devicedist.html: Feature List
                 document.getElementById('debug-flute-url').innerText = fluteUrl ? fluteUrl.split('/').pop() : 'not set';
                 document.getElementById('debug-tuning-status').innerText = calibrationMode ? 'ACTIVE' : 'inactive';
                 document.getElementById('debug-notes-assigned').innerText = assignedNotes.length;
+                document.getElementById('debug-relaunch-count').innerText = relaunchPoints.length;
+                document.getElementById('debug-current-launch').innerText = `${currentLaunchIndex + 1}/${relaunchPoints.length + 1}`;
 
                 const now = Date.now() + serverOffset;
                 const nextNote = assignedNotes.find(n => {
@@ -1609,87 +1993,7 @@ devicedist.html: Feature List
             const fps = Math.round(1000 / (performance.now() - lastFrameTime));
             const lag = calibratedLag ? `${calibratedLag}ms` : '--';
             const cueCount = activeAudioCues.length + activeLightCues.length;
-            overlay.innerHTML = `FPS: ${fps} | Lag: ${lag} | Cues: ${cueCount} | ${isHappy ? '✅' : '🔄'}`;
-        }
-
-        // --- DIRECT PLAYBACK FOR TUNING MOVEMENT (uses fluteUrl from tuning_mode) ---
-        async function playTuningMovement(cue) {
-            console.log("🎵 Starting tuning movement with cue:", cue);
-            console.log("🎵 Flute URL from cue:", fluteUrl);
-
-            // Ensure we have the full URL (already loaded from tuning_mode.json)
-            let urlToUse = fluteUrl;
-
-            // If for some reason fluteUrl isn't set, try to get it from the cue
-            if (!urlToUse && cue.file) {
-                console.warn("⚠️ fluteUrl not set, using cue.file");
-                urlToUse = cue.file;
-            }
-
-            console.log("🎵 Final URL to use:", urlToUse);
-
-            if (mySeat.id.startsWith('PILLAR_')) {
-                startPillarFabric(cue.startTime);
-                return;
-            }
-
-            if (!urlToUse) {
-                console.error("No flute URL available for tuning movement");
-                return;
-            }
-
-            if (!cue.startTime || isNaN(cue.startTime)) {
-                console.error("Invalid cue.startTime:", cue.startTime);
-                return;
-            }
-
-            // Convert wall-clock Unix timestamp to AudioContext time
-            const nowWall = Date.now() + serverOffset;
-            const secondsUntilStart = (cue.startTime - nowWall - hardwareLag) / 1000;
-            const startTime = audioCtx.currentTime + Math.max(0, secondsUntilStart);
-            console.log("Seconds until start:", secondsUntilStart, "→ AudioContext startTime:", startTime);
-
-            // Load on-demand if not preloaded
-            if (!bufferCache[urlToUse]) {
-                console.warn(`⚠️ Flute not preloaded, fetching: ${urlToUse.split('/').pop()}`);
-                try {
-                    const res = await fetch(urlToUse);
-                    const arrayBuf = await res.arrayBuffer();
-                    bufferCache[urlToUse] = await audioCtx.decodeAudioData(arrayBuf);
-                } catch (e) {
-                    console.error(`Failed to fetch flute ${urlToUse}:`, e);
-                    return;
-                }
-            }
-
-            const source = audioCtx.createBufferSource();
-            source.buffer = bufferCache[urlToUse];
-
-            const gainNode = audioCtx.createGain();
-            // Start flute gain at 0.0, then ramp up and down as
-            // needed for each note assigned to this device.
-            gainNode.gain.setTargetAtTime(0.0, startTime, 0.015);
-
-            source.connect(gainNode).connect(audioCtx.destination);
-            source.start(startTime);
-
-            console.log(`✅ Flute source started at AudioContext time ${startTime}, current: ${audioCtx.currentTime}`);
-
-            // Store for render loop
-            activeAudioCues.push({
-                ...cue,
-                source,
-                gainNode,
-                startTime: cue.startTime,
-                localStartTime: Date.now() + (startTime * 1000) - audioCtx.currentTime * 1000
-            });
-
-            // Start monitoring for note assignments
-            if (currentTuningSchedule && assignedNotes.length > 0) {
-                monitorTuningPlayback(cue, source, startTime);
-            } else {
-                console.log("No notes assigned to this device");
-            }
+            overlay.innerHTML = `FPS: ${fps} | Lag: ${lag} | Cues: ${cueCount} | Launch: ${currentLaunchIndex + 1}/${relaunchPoints.length + 1} | ${isHappy ? '✅' : '🔄'}`;
         }
 
         // --- EVENT HANDLERS ---
@@ -1757,7 +2061,9 @@ devicedist.html: Feature List
                     y: mySeat.y,
                     hardwareLag: hardwareLag,
                     calibratedLag: calibratedLag,
-                    isHappy: isHappy
+                    isHappy: isHappy,
+                    launchIndex: currentLaunchIndex,
+                    relaunchPoints: relaunchPoints.length
                 });
 
                 // Start staggered heartbeat
