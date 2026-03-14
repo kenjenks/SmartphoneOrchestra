@@ -1388,20 +1388,20 @@ devicedist.html: Feature List
 
                 const now = Date.now() + serverOffset;
 
-                // Ramp up at note start - COMMENTED OUT FOR DEBUGGING
-                // const rampUpDelay = noteStartAbs - now - hardwareLag;
-                // if (rampUpDelay > 0) {
-                //     const timeoutId = setTimeout(() => {
-                //         const activeCue = activeAudioCues.find(c => c.source === source);
-                //         if (activeCue) {
-                //             activeCue.gainNode.gain.setTargetAtTime(1.0, audioCtx.currentTime, 0.015);
-                //             console.log(`🔊 Ramping up for note at ${note.startMs}ms`);
-                //             flashScreenForPulse();
-                //         }
-                //         activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
-                //     }, rampUpDelay);
-                //     activeTimeouts.push(timeoutId);
-                // }
+                // Ramp up at note start
+                const rampUpDelay = noteStartAbs - now - hardwareLag;
+                if (rampUpDelay > 0) {
+                    const timeoutId = setTimeout(() => {
+                        const activeCue = activeAudioCues.find(c => c.source === source);
+                        if (activeCue) {
+                            activeCue.gainNode.gain.setTargetAtTime(1.0, audioCtx.currentTime, 0.015);
+                            console.log(`🔊 Ramping up for note at ${note.startMs}ms`);
+                            flashScreenForPulse();
+                        }
+                        activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
+                    }, rampUpDelay);
+                    activeTimeouts.push(timeoutId);
+                }
 
                 // Pulse tracking at note center - devices will emit warble here
                 const pulseDelay = pulseAbs - now - hardwareLag;
@@ -1421,19 +1421,19 @@ devicedist.html: Feature List
                     activeTimeouts.push(timeoutId);
                 }
 
-                // Ramp down at note end - COMMENTED OUT FOR DEBUGGING
-                // const rampDownDelay = noteEndAbs - now - hardwareLag;
-                // if (rampDownDelay > 0) {
-                //     const timeoutId = setTimeout(() => {
-                //         const activeCue = activeAudioCues.find(c => c.source === source);
-                //         if (activeCue) {
-                //             activeCue.gainNode.gain.setTargetAtTime(0, audioCtx.currentTime, 0.015);
-                //             console.log(`🔉 Ramping down after note at ${note.startMs}ms`);
-                //         }
-                //         activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
-                //     }, rampDownDelay);
-                //     activeTimeouts.push(timeoutId);
-                // }
+                // Ramp down at note end
+                const rampDownDelay = noteEndAbs - now - hardwareLag;
+                if (rampDownDelay > 0) {
+                    const timeoutId = setTimeout(() => {
+                        const activeCue = activeAudioCues.find(c => c.source === source);
+                        if (activeCue) {
+                            activeCue.gainNode.gain.setTargetAtTime(0, audioCtx.currentTime, 0.015);
+                            console.log(`🔉 Ramping down after note at ${note.startMs}ms`);
+                        }
+                        activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
+                    }, rampDownDelay);
+                    activeTimeouts.push(timeoutId);
+                }
             });
         }
 
@@ -1666,8 +1666,9 @@ devicedist.html: Feature List
             source.buffer = bufferCache[urlToUse];
 
             const gainNode = audioCtx.createGain();
-            gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime);
-            // gainNode.gain.setTargetAtTime(1.0, startTime, 0.015); // Restore when ramp logic is back
+            // Start flute gain at 0.0, then ramp up and down as
+            // needed for each note assigned to this device.
+            gainNode.gain.setTargetAtTime(0.0, startTime, 0.015);
 
             source.connect(gainNode).connect(audioCtx.destination);
             source.start(startTime);
