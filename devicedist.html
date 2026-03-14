@@ -346,6 +346,7 @@ devicedist.html: Feature List
         const HEARTBEAT_BASE_INTERVAL_MS = 10000; // 10 seconds base interval
         const HEARTBEAT_JITTER_MS = 2000; // ±1000ms jitter (total range 2000ms)
         const LAUNCH_FADE_SAFETY_MS = 50; // Safety margin for fade transitions
+        const NOTE_MERGE_THRESHOLD_MS = 50; // Merge notes with gaps <= 50ms into continuous blocks
 
         // --- IDENTITY RESOLUTION - Reads from Firebase seat_config ---
         async function resolveIdentity() {
@@ -664,6 +665,14 @@ devicedist.html: Feature List
         // --- DECENTRALIZED CALIBRATION ENGINE (Bach Logic with Multi-Launch) ---
         function processAcousticReturn(tHeard) {
             if (!lastPingSent) return;
+
+            // Find the most recent unresolved detection
+            const unresolved = pendingPulseDetections.find(p => !p.tHeard);
+            if (unresolved) {
+                // Stamp the heard time onto this detection for true latency calculation
+                unresolved.tHeard = tHeard;
+                console.log(`📡 Warble detected: note ${unresolved.noteId}, heard at ${tHeard}`);
+            }
 
             // Calculate measured one-way lag (time from pulse play to conductor hearing)
             // This includes both hardware delay AND acoustic travel time
@@ -1503,14 +1512,12 @@ devicedist.html: Feature List
             const gainNode = audioCtx.createGain();
             source.connect(gainNode).connect(audioCtx.destination);
 
-            // Start with fade in at the seek position
-            const fadeInSeconds = fadeInMs / 1000;
+            // NO FADE-IN - just start at 0, let note blocks control volume
             gainNode.gain.setValueAtTime(0, audioStartTime);
-            gainNode.gain.linearRampToValueAtTime(1.0, audioStartTime + fadeInSeconds);
 
             source.start(audioStartTime, seekOffsetSeconds);
 
-            console.log(`🚀 Launch ${launchIndex + 1} scheduled at ${audioStartTime.toFixed(3)}s (lag: ${lag}ms, seek: ${seekOffsetMs}ms, fade: ${fadeInMs}ms)`);
+            console.log(`🚀 Launch ${launchIndex + 1} scheduled at ${audioStartTime.toFixed(3)}s (lag: ${lag}ms, seek: ${seekOffsetMs}ms)`);
 
             // Record launch event with seek offset
             const launchEvent = {
@@ -1528,51 +1535,91 @@ devicedist.html: Feature List
             // Get notes for this launch segment
             const segmentNotes = getNotesForLaunch(launchIndex);
 
-            // Schedule their ramps
-            segmentNotes.forEach(note => {
-                scheduleNoteRamp(note, source, gainNode, movementStartTime, audioStartTime, seekOffsetMs, launchIndex);
-            });
+            // Schedule their ramps, passing the full segment for lookahead
+            scheduleNoteRamps(segmentNotes, source, gainNode, movementStartTime, audioStartTime, seekOffsetMs, launchIndex);
 
             console.log(`   → ${segmentNotes.length} notes assigned to this launch`);
 
             return launchEvent;
         }
 
-        function scheduleNoteRamp(note, source, gainNode, movementStartTime, audioStartTime, seekOffsetMs, launchIndex) {
-            const noteStartMs = parseFloat(note.startMs);
-            const noteDurationMs = parseFloat(note.durationMs);
-            const notePulseMs = parseFloat(note.pulsePositionMs || (noteStartMs + noteDurationMs/2));
+        function scheduleNoteRamps(segmentNotes, source, gainNode, movementStartTime, audioStartTime, seekOffsetMs, launchIndex) {
+            if (!segmentNotes.length) return;
 
-            // Calculate times relative to this launch's seek position
-            // If we're seeking to 20000ms into the piece, then:
-            // - A note at 21000ms should play 1000ms after launch
-            // - A note at 19000ms should NOT play (it's before our seek point)
-            const noteOffsetFromSeekMs = noteStartMs - seekOffsetMs;
+            // Sort notes by start time (should already be sorted, but just to be safe)
+            const sortedNotes = [...segmentNotes].sort((a, b) => a.startMs - b.startMs);
 
-            // Only schedule notes that occur after our seek point
-            if (noteOffsetFromSeekMs >= 0) {
-                // Note start in audio time = launch time + offset from seek
-                const noteStartAudio = audioStartTime + (noteOffsetFromSeekMs / 1000);
-                const noteEndAudio = audioStartTime + ((noteStartMs + noteDurationMs - seekOffsetMs) / 1000);
+            // Merge consecutive notes into continuous blocks
+            const blocks = [];
+            let currentBlock = {
+                startMs: sortedNotes[0].startMs,
+                endMs: sortedNotes[0].startMs + sortedNotes[0].durationMs,
+                notes: [sortedNotes[0]]
+            };
+
+            for (let i = 1; i < sortedNotes.length; i++) {
+                const note = sortedNotes[i];
+                const prevNote = sortedNotes[i-1];
+                const gap = note.startMs - (prevNote.startMs + prevNote.durationMs);
+
+                if (gap <= NOTE_MERGE_THRESHOLD_MS) { // If gap is small, merge into same block (legato)
+                    currentBlock.endMs = note.startMs + note.durationMs;
+                    currentBlock.notes.push(note);
+                } else {
+                    // Gap is significant - end current block and start new one
+                    blocks.push(currentBlock);
+                    currentBlock = {
+                        startMs: note.startMs,
+                        endMs: note.startMs + note.durationMs,
+                        notes: [note]
+                    };
+                }
+            }
+            blocks.push(currentBlock); // Add the last block
+
+            console.log(`   📦 Merged ${sortedNotes.length} notes into ${blocks.length} continuous blocks`);
+
+            // Schedule each block
+            blocks.forEach(block => {
+                const blockStartMs = block.startMs;
+                const blockEndMs = block.endMs;
+
+                // Calculate times relative to this launch's seek position
+                const blockOffsetFromSeekMs = blockStartMs - seekOffsetMs;
+
+                // Only schedule blocks that occur after our seek point
+                if (blockOffsetFromSeekMs >= 0) {
+                    // Block start in audio time
+                    const blockStartAudio = audioStartTime + (blockOffsetFromSeekMs / 1000);
+                    const blockEndAudio = audioStartTime + ((blockEndMs - seekOffsetMs) / 1000);
+
+                    // Smooth fade in at block start (20ms)
+                    const fadeInStart = blockStartAudio - 0.01; // 10ms before for safety
+                    const fadeInEnd = blockStartAudio;
+
+                    gainNode.gain.setValueAtTime(0, fadeInStart);
+                    gainNode.gain.linearRampToValueAtTime(1.0, fadeInEnd);
+                    gainNode.gain.setValueAtTime(1.0, fadeInEnd);
+
+                    // Smooth fade out at block end (20ms)
+                    const fadeOutStart = blockEndAudio - 0.02; // 20ms before end
+                    const fadeOutEnd = blockEndAudio;
+
+                    gainNode.gain.setValueAtTime(1.0, fadeOutStart);
+                    gainNode.gain.linearRampToValueAtTime(0, fadeOutEnd);
+                    gainNode.gain.setValueAtTime(0, fadeOutEnd);
+
+                    console.log(`   🎵 Block: ${(blockStartMs/1000).toFixed(2)}s-${(blockEndMs/1000).toFixed(2)}s (${block.notes.length} notes)`);
+                }
+            });
+
+            // Still need to schedule individual pulse detections for calibration
+            // These don't affect gain, just record when warbles occur
+            sortedNotes.forEach(note => {
+                const noteStartMs = parseFloat(note.startMs);
+                const notePulseMs = parseFloat(note.pulsePositionMs || (noteStartMs + note.durationMs/2));
                 const pulseWall = movementStartTime + notePulseMs;
 
-                // Ramp up: start 30ms before the note and reach full volume at note start
-                const rampUpStart = noteStartAudio - 0.03; // 30ms before
-                const rampUpEnd = noteStartAudio;
-
-                // Ramp down: start at note end - 40ms, reach 0 at note end + 10ms
-                const rampDownStart = noteEndAudio - 0.04; // 40ms before end
-                const rampDownEnd = noteEndAudio + 0.01;   // 10ms after note end
-
-                gainNode.gain.setValueAtTime(0, rampUpStart);
-                gainNode.gain.linearRampToValueAtTime(1.0, rampUpEnd);
-                gainNode.gain.setValueAtTime(1.0, rampUpEnd);
-
-                gainNode.gain.setValueAtTime(1.0, rampDownStart);
-                gainNode.gain.linearRampToValueAtTime(0, rampDownEnd);
-                gainNode.gain.setValueAtTime(0, rampDownEnd);
-
-                // Schedule pulse detection for calibration
                 const pulseDelay = pulseWall - (Date.now() + serverOffset) - hardwareLag;
 
                 if (pulseDelay > 0) {
@@ -1586,7 +1633,7 @@ devicedist.html: Feature List
                             launchIndex: launchIndex,
                             expectedDelay: hardwareLag,
                             startMs: noteStartMs,
-                            seekOffsetMs: seekOffsetMs,  // Store seek offset for calibration
+                            seekOffsetMs: seekOffsetMs,
                         });
 
                         // Visual feedback
@@ -1597,10 +1644,7 @@ devicedist.html: Feature List
 
                     activeTimeouts.push(timeoutId);
                 }
-            } else {
-                // Note is before our seek point - we shouldn't play it
-                console.log(`⏭️ Skipping note at ${noteStartMs}ms (before seek ${seekOffsetMs}ms)`);
-            }
+            });
         }
 
         async function fadeOutLaunch(launchEvent, fadeOutMs = 100) {
@@ -1768,8 +1812,7 @@ devicedist.html: Feature List
                         // Calculate improved lag from accumulated samples
                         const improvedLag = calculateImprovedLag();
 
-                        // Schedule new launch with seek offset
-                        const fadeInMs = point.fade_in_ms || 50;
+                        // Schedule new launch with seek offset (NO fade-in - let note blocks control volume)
                         const nextLaunch = await scheduleLaunch(
                             urlToUse,
                             movementStartTime,
@@ -1777,12 +1820,12 @@ devicedist.html: Feature List
                             relaunchWallTime + fadeOutMs + LAUNCH_FADE_SAFETY_MS,
                             seekOffsetMs,
                             improvedLag,
-                            fadeInMs
+                            0 // No fade-in
                         );
 
                         if (nextLaunch) {
                             currentLaunchIndex = launchNumber;
-                            console.log(`🚀 Launch ${launchNumber + 1} scheduled with lag ${improvedLag}ms (seek: ${seekOffsetMs}ms, fade in: ${fadeInMs}ms)`);
+                            console.log(`🚀 Launch ${launchNumber + 1} scheduled with lag ${improvedLag}ms (seek: ${seekOffsetMs}ms)`);
                         }
 
                         activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
