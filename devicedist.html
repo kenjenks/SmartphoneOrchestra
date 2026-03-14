@@ -1517,6 +1517,7 @@ devicedist.html: Feature List
         }
 
         async function scheduleLaunch(url, movementStartTime, launchIndex, scheduledWallTime, seekOffsetMs, customLag = null, fadeInMs = 50) {
+            // fadeInMs parameter is kept for backward compatibility but ignored
             const lag = customLag !== null ? customLag : hardwareLag;
             const nowWall = Date.now() + serverOffset;
             const secondsUntilStart = (scheduledWallTime - nowWall - lag) / 1000;
@@ -1541,7 +1542,7 @@ devicedist.html: Feature List
             const gainNode = audioCtx.createGain();
             source.connect(gainNode).connect(audioCtx.destination);
 
-            // NO FADE-IN - just start at 0, let note blocks control volume
+            // Start at 0 - let scheduleNoteRamps handle all volume control
             gainNode.gain.setValueAtTime(0, audioStartTime);
 
             source.start(audioStartTime, seekOffsetSeconds);
@@ -1579,13 +1580,14 @@ devicedist.html: Feature List
             const sortedNotes = [...segmentNotes].sort((a, b) => a.startMs - b.startMs);
 
             if (!rampStrategy.useRamps) {
-                // DENSE PLAYBACK - no ramps, just play continuously
+                // DENSE PLAYBACK - no ramps between notes, just play continuously
                 // Set gain to 1.0 at the first note and leave it
                 const firstNote = sortedNotes[0];
                 const firstNoteOffsetFromSeekMs = firstNote.startMs - seekOffsetMs;
                 if (firstNoteOffsetFromSeekMs >= 0) {
                     const firstNoteAudioTime = audioStartTime + (firstNoteOffsetFromSeekMs / 1000);
                     // Start ramping up slightly before the first note to avoid pop
+                    // This ramp happens exactly once, at the beginning of the first note
                     const rampStart = firstNoteAudioTime - 0.01;
                     gainNode.gain.setValueAtTime(0, rampStart);
                     gainNode.gain.linearRampToValueAtTime(1.0, firstNoteAudioTime);
@@ -1818,6 +1820,10 @@ devicedist.html: Feature List
                 return;
             }
 
+            // SPECIAL CASE: If this device plays most notes (single device test),
+            // we want to ensure each launch gets a fair share of notes
+            const isSoloDevice = assignedNotes.length > 500; // Rough heuristic for single device
+
             // Start first launch at beginning of file (seek offset 0)
             const launch0 = await scheduleLaunch(urlToUse, movementStartTime, 0, movementStartTime, 0, hardwareLag, 50);
             if (!launch0) return;
@@ -1849,20 +1855,44 @@ devicedist.html: Feature List
                 const relaunchWallTime = noteEndWall - fadeOutMs - LAUNCH_FADE_SAFETY_MS;
 
                 const nowWall = Date.now() + serverOffset;
-                const delay = relaunchWallTime - nowWall - hardwareLag;
+                const initialDelay = relaunchWallTime - nowWall - hardwareLag;
 
-                if (delay > 0) {
-                    // Create a closure to capture current values
-                    const timeoutId = setTimeout(async () => {
+                if (initialDelay > 0) {
+                    // Store relaunch parameters for adaptive scheduling
+                    const relaunchInfo = {
+                        launchNumber: launchNumber,
+                        point: point,
+                        targetNote: targetNote,
+                        fadeOutMs: fadeOutMs,
+                        seekOffsetMs: seekOffsetMs,
+                        relaunchWallTime: relaunchWallTime,
+                        urlToUse: urlToUse,
+                        movementStartTime: movementStartTime
+                    };
+
+                    // Schedule with adaptive checking
+                    const scheduleRelaunch = async () => {
+                        const now = Date.now() + serverOffset;
+                        const currentDelay = relaunchWallTime - now - hardwareLag;
+
+                        if (currentDelay > 5) { // More than 5ms remaining
+                            // Reschedule with shorter timeout
+                            const nextDelay = Math.min(currentDelay, 50); // Check at most every 50ms
+                            const timeoutId = setTimeout(scheduleRelaunch, nextDelay);
+                            activeTimeouts.push(timeoutId);
+                            return;
+                        }
+
+                        // Time to execute the relaunch
                         console.log(`🔄 Executing relaunch ${launchNumber + 1} at note ${point.note_index} (${point.description || point.reason}), seek to ${seekOffsetMs}ms`);
 
                         // Fade out current launch with specified duration
                         await fadeOutLaunch(launchEvents[currentLaunchIndex], fadeOutMs);
 
-                        // Calculate improved lag from accumulated samples
+                        // Calculate improved lag from accumulated samples (up-to-date)
                         const improvedLag = calculateImprovedLag();
 
-                        // Schedule new launch with seek offset (NO fade-in - let note blocks control volume)
+                        // Schedule new launch with seek offset
                         const nextLaunch = await scheduleLaunch(
                             urlToUse,
                             movementStartTime,
@@ -1877,17 +1907,51 @@ devicedist.html: Feature List
                             currentLaunchIndex = launchNumber;
                             console.log(`🚀 Launch ${launchNumber + 1} scheduled with lag ${improvedLag}ms (seek: ${seekOffsetMs}ms)`);
                         }
+                    };
 
-                        activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
-                    }, delay);
-
+                    // Start the adaptive scheduling with initial delay
+                    const timeoutId = setTimeout(scheduleRelaunch, initialDelay);
                     activeTimeouts.push(timeoutId);
+
+                } else if (initialDelay > -100) {
+                    // Slightly late - execute immediately
+                    console.log(`🔄 Executing relaunch ${launchNumber + 1} immediately (${initialDelay.toFixed(1)}ms late)`);
+
+                    // Fade out current launch
+                    await fadeOutLaunch(launchEvents[currentLaunchIndex], fadeOutMs);
+
+                    // Get current lag
+                    const improvedLag = calculateImprovedLag();
+
+                    // Schedule new launch
+                    const nextLaunch = await scheduleLaunch(
+                        urlToUse,
+                        movementStartTime,
+                        launchNumber,
+                        relaunchWallTime + fadeOutMs + LAUNCH_FADE_SAFETY_MS,
+                        seekOffsetMs,
+                        improvedLag,
+                        0
+                    );
+
+                    if (nextLaunch) {
+                        currentLaunchIndex = launchNumber;
+                    }
                 } else {
-                    console.warn(`⚠️ Relaunch at ${relaunchWallTime} is in the past (delay=${delay}ms)`);
+                    console.warn(`⚠️ Relaunch at ${relaunchWallTime} is too late (delay=${initialDelay}ms) - skipping`);
                 }
             }
 
             console.log(`✅ Multi-launch setup complete with ${deviceRelaunchPoints.length} device-specific relaunch points`);
+
+            // For solo device testing, log the distribution
+            if (isSoloDevice) {
+                console.log(`📊 Solo device mode: 579 notes distributed across ${deviceRelaunchPoints.length + 1} launches`);
+                for (let i = 0; i <= deviceRelaunchPoints.length; i++) {
+                    const notes = getNotesForLaunch(i);
+                    console.log(`   Launch ${i + 1}: ${notes.length} notes (${(notes[0]?.startMs/1000).toFixed(1)}s - ${(notes[notes.length-1]?.startMs/1000).toFixed(1)}s)`);
+                }
+            }
         }
 
         // Fallback single launch mode (original behavior)
