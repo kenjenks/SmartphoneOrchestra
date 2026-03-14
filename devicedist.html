@@ -1451,23 +1451,28 @@ devicedist.html: Feature List
         function getNotesForLaunch(launchIndex) {
             if (!assignedNotes.length) return [];
 
+            // Filter relaunch points to only those that reference notes this device plays
+            const deviceRelaunchPoints = relaunchPoints.filter(point =>
+                assignedNotes.some(note => note.index === point.note_index)
+            );
+
             if (launchIndex === 0) {
-                // First launch: notes before first relaunch point
-                if (relaunchPoints.length === 0) return assignedNotes;
-                const firstRelaunch = relaunchPoints[0];
+                // First launch: notes before first device relaunch point
+                if (deviceRelaunchPoints.length === 0) return assignedNotes;
+                const firstRelaunch = deviceRelaunchPoints[0];
                 return assignedNotes.filter(n => n.index < firstRelaunch.note_index);
             }
-            else if (launchIndex <= relaunchPoints.length) {
-                // Middle launches: notes between relaunch points
-                const startIdx = relaunchPoints[launchIndex - 1].note_index;
-                const endIdx = launchIndex < relaunchPoints.length ?
-                              relaunchPoints[launchIndex].note_index :
+            else if (launchIndex <= deviceRelaunchPoints.length) {
+                // Middle launches: notes between device relaunch points
+                const startIdx = deviceRelaunchPoints[launchIndex - 1].note_index;
+                const endIdx = launchIndex < deviceRelaunchPoints.length ?
+                              deviceRelaunchPoints[launchIndex].note_index :
                               assignedNotes.length;
                 return assignedNotes.filter(n => n.index >= startIdx && n.index < endIdx);
             }
             else {
-                // Final launch: notes after last relaunch point
-                const startIdx = relaunchPoints[relaunchPoints.length - 1].note_index;
+                // Final launch: notes after last device relaunch point
+                const startIdx = deviceRelaunchPoints[deviceRelaunchPoints.length - 1].note_index;
                 return assignedNotes.filter(n => n.index >= startIdx);
             }
         }
@@ -1685,16 +1690,35 @@ devicedist.html: Feature List
             }
 
             console.log(`🎵 Flute URL: ${urlToUse.split('/').pop()}`);
-            console.log(`🎵 Relaunch points: ${relaunchPoints.length}`);
+            console.log(`🎵 Total relaunch points in config: ${relaunchPoints.length}`);
 
             if (mySeat.id.startsWith('PILLAR_')) {
                 startPillarFabric(movementStartTime);
                 return;
             }
 
-            // If no relaunch points, fall back to single launch (seek at 0)
+            // If no relaunch points at all, fall back to single launch
             if (relaunchPoints.length === 0) {
-                console.log("⚠️ No relaunch points found, using single launch mode");
+                console.log("⚠️ No relaunch points found in config, using single launch mode");
+                await playSingleLaunchTuning(cue, urlToUse, movementStartTime);
+                return;
+            }
+
+            // Filter relaunch points to only those that reference notes assigned to THIS device
+            const deviceRelaunchPoints = relaunchPoints.filter(point =>
+                assignedNotes.some(note => note.index === point.note_index)
+            );
+
+            console.log(`🎵 Device has ${deviceRelaunchPoints.length} relevant relaunch points out of ${relaunchPoints.length} total`);
+
+            // Log which relaunch points this device will use
+            deviceRelaunchPoints.forEach((point, i) => {
+                console.log(`   Device relaunch ${i + 1}: Note ${point.note_index} at ${(point.position_ms/1000).toFixed(1)}s - ${point.description || point.reason}`);
+            });
+
+            // If no device-specific relaunch points, fall back to single launch
+            if (deviceRelaunchPoints.length === 0) {
+                console.log("⚠️ No device-specific relaunch points found, using single launch mode");
                 await playSingleLaunchTuning(cue, urlToUse, movementStartTime);
                 return;
             }
@@ -1703,15 +1727,15 @@ devicedist.html: Feature List
             const launch0 = await scheduleLaunch(urlToUse, movementStartTime, 0, movementStartTime, 0, hardwareLag, 50);
             if (!launch0) return;
 
-            // Schedule subsequent launches based on relaunch points
-            for (let i = 0; i < relaunchPoints.length; i++) {
-                const point = relaunchPoints[i];
+            // Schedule subsequent launches based on device-specific relaunch points
+            for (let i = 0; i < deviceRelaunchPoints.length; i++) {
+                const point = deviceRelaunchPoints[i];
                 const launchNumber = i + 1;
 
-                // Find the note this relaunch point corresponds to
+                // Find the note this relaunch point corresponds to (guaranteed to exist due to filter)
                 const targetNote = assignedNotes.find(n => n.index === point.note_index);
                 if (!targetNote) {
-                    console.log(`⚠️ Relaunch point ${i} references note ${point.note_index} not assigned to this device, skipping`);
+                    console.error(`❌ Critical: Filtered relaunch point ${i} has no matching note - this should never happen`);
                     continue;
                 }
 
@@ -1726,6 +1750,7 @@ devicedist.html: Feature List
                 // The seek offset should be the musical time of the relaunch point
                 const seekOffsetMs = point.position_ms;
 
+                // Calculate when to trigger the relaunch (during the note, before it ends)
                 const relaunchWallTime = noteEndWall - fadeOutMs - LAUNCH_FADE_SAFETY_MS;
 
                 const nowWall = Date.now() + serverOffset;
@@ -1768,7 +1793,7 @@ devicedist.html: Feature List
                 }
             }
 
-            console.log(`✅ Multi-launch setup complete with ${relaunchPoints.length} relaunch points`);
+            console.log(`✅ Multi-launch setup complete with ${deviceRelaunchPoints.length} device-specific relaunch points`);
         }
 
         // Fallback single launch mode (original behavior)
