@@ -826,20 +826,33 @@ devicedist.html: Feature List
         function processPendingDetections(tHeard) {
             // Look for pending pulses that haven't been matched
             const now = Date.now() + serverOffset;
+            let matched = false;
 
-            pendingPulseDetections = pendingPulseDetections.filter(pending => {
-                // Only consider pulses from last 5 seconds
-                if (now - pending.playTime > 5000) return false;
+            pendingPulseDetections.forEach(pending => {
+                // Skip already matched detections
+                if (pending.tHeard) return;
 
                 // Check if this detection could be for our pulse
                 // The conductor broadcasts immediately upon detection
                 if (Math.abs(tHeard - pending.playTime) < 1000) { // Within 1 second window
+                    // Stamp the heard time onto this detection for true latency calculation
+                    pending.tHeard = tHeard;
                     lastPingSent = pending.playTime;
                     processAcousticReturn(tHeard);
-                    return false; // Remove from pending
+                    matched = true;
+                    console.log(`📡 Matched detection: note ${pending.noteId}, played at ${pending.playTime}, heard at ${tHeard}, lag=${tHeard - pending.playTime}ms`);
                 }
-                return true; // Keep in pending
             });
+
+            // Clean up old detections (older than 30 seconds) to prevent memory growth
+            pendingPulseDetections = pendingPulseDetections.filter(pending => {
+                return (now - pending.playTime) < 30000; // Keep only last 30 seconds
+            });
+
+            if (matched) {
+                // Update performance overlay to show we got a match
+                updatePerformanceOverlay();
+            }
         }
 
         // --- ASSET PRELOADING from Firebase show/movements ---
@@ -1537,17 +1550,17 @@ devicedist.html: Feature List
                 const noteEndAudio = audioStartTime + ((noteStartMs + noteDurationMs - seekOffsetMs) / 1000);
                 const pulseWall = movementStartTime + notePulseMs;
 
-                // Ramp up (10ms before note)
-                const rampUpStart = noteStartAudio - 0.01;
+                // Ramp up: start 30ms before the note and reach full volume at note start
+                const rampUpStart = noteStartAudio - 0.03; // 30ms before
                 const rampUpEnd = noteStartAudio;
+
+                // Ramp down: start at note end - 40ms, reach 0 at note end + 10ms
+                const rampDownStart = noteEndAudio - 0.04; // 40ms before end
+                const rampDownEnd = noteEndAudio + 0.01;   // 10ms after note end
 
                 gainNode.gain.setValueAtTime(0, rampUpStart);
                 gainNode.gain.linearRampToValueAtTime(1.0, rampUpEnd);
                 gainNode.gain.setValueAtTime(1.0, rampUpEnd);
-
-                // Ramp down (20ms before end to avoid clicks)
-                const rampDownStart = noteEndAudio - 0.02;
-                const rampDownEnd = noteEndAudio;
 
                 gainNode.gain.setValueAtTime(1.0, rampDownStart);
                 gainNode.gain.linearRampToValueAtTime(0, rampDownEnd);
@@ -1608,24 +1621,27 @@ devicedist.html: Feature List
 
             // Gather all samples from completed detections that have tHeard
             const allSamples = [];
+            const now = Date.now() + serverOffset;
 
             for (const detection of pendingPulseDetections) {
-                // Only use detections that have been heard by conductor
+                // Only use detections that have been heard by conductor and are reasonably recent
                 if (!detection.tHeard) continue;
+                if (now - detection.playTime > 30000) continue; // Ignore very old detections
 
                 const launch = launchEvents[detection.launchIndex];
                 if (!launch) continue;
 
                 // True one-way acoustic latency:
                 // The time from when the audio hardware actually started playing
-                // (launch.actualWallStart + (detection.startMs - detection.seekOffsetMs))
+                // (launch.actualWallStart + (detection.startMs - launch.seekOffsetMs))
                 // to when the conductor heard it (detection.tHeard)
-                const actualPlayTime = launch.actualWallStart + (detection.startMs - detection.seekOffsetMs);
+                const actualPlayTime = launch.actualWallStart + (detection.startMs - launch.seekOffsetMs);
                 const trueLag = detection.tHeard - actualPlayTime;
 
                 // Sanity check: lag should be positive and reasonable (< 2 seconds)
                 if (trueLag > 0 && trueLag < 2000) {
                     allSamples.push(trueLag);
+                    console.log(`📊 Sample from launch ${detection.launchIndex}, note ${detection.noteId}: ${trueLag.toFixed(1)}ms`);
                 }
             }
 
@@ -1639,8 +1655,10 @@ devicedist.html: Feature List
             if (calibrationStrategy.useMedian) {
                 const sorted = [...allSamples].sort((a,b) => a-b);
                 newLag = sorted[Math.floor(sorted.length/2)];
+                console.log(`📊 Median of ${allSamples.length} samples: ${newLag}ms`);
             } else {
                 newLag = allSamples.reduce((a,b) => a+b, 0) / allSamples.length;
+                console.log(`📊 Mean of ${allSamples.length} samples: ${newLag}ms`);
             }
 
             // Round to integer
