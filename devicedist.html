@@ -1799,6 +1799,31 @@ devicedist.html: Feature List
                 return;
             }
 
+            // SPECIAL CASE: If conductor says to disable relaunches (solo/dense device)
+            if (rampStrategy.disableRelaunches) {
+                console.log("🎵 Dense/solo device - playing continuously without relaunches");
+
+                // Schedule a single continuous launch from the beginning
+                const launch0 = await scheduleLaunch(
+                    urlToUse,
+                    movementStartTime,
+                    0,
+                    movementStartTime,
+                    0, // seek from beginning
+                    hardwareLag,
+                    0  // no fade-in
+                );
+
+                if (launch0) {
+                    console.log(`✅ Continuous playback scheduled for entire piece (${assignedNotes.length} notes)`);
+
+                    // In dense mode, we still need pulse detections for calibration
+                    // scheduleNoteRamps will handle setting gain at first note and scheduling pulses
+                }
+                return;
+            }
+
+            // Normal case: Use relaunch points for calibration
             // Filter relaunch points to only those that reference notes assigned to THIS device
             const deviceRelaunchPoints = relaunchPoints.filter(point =>
                 assignedNotes.some(note => note.index === point.note_index)
@@ -1943,11 +1968,15 @@ devicedist.html: Feature List
             console.log(`✅ Multi-launch setup complete with ${deviceRelaunchPoints.length} device-specific relaunch points`);
 
             // For solo device testing, log the distribution
-            if (isSoloDevice) {
-                console.log(`📊 Solo device mode: 579 notes distributed across ${deviceRelaunchPoints.length + 1} launches`);
+            if (isSoloDevice && !rampStrategy.disableRelaunches) {
+                console.log(`📊 Solo device mode: ${assignedNotes.length} notes distributed across ${deviceRelaunchPoints.length + 1} launches`);
                 for (let i = 0; i <= deviceRelaunchPoints.length; i++) {
                     const notes = getNotesForLaunch(i);
-                    console.log(`   Launch ${i + 1}: ${notes.length} notes (${(notes[0]?.startMs/1000).toFixed(1)}s - ${(notes[notes.length-1]?.startMs/1000).toFixed(1)}s)`);
+                    if (notes.length > 0) {
+                        const startTime = (notes[0]?.startMs/1000).toFixed(1);
+                        const endTime = (notes[notes.length-1]?.startMs/1000).toFixed(1);
+                        console.log(`   Launch ${i + 1}: ${notes.length} notes (${startTime}s - ${endTime}s)`);
+                    }
                 }
             }
         }
