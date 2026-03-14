@@ -1792,14 +1792,8 @@ devicedist.html: Feature List
                 return;
             }
 
-            // If no relaunch points at all, fall back to single launch
-            if (relaunchPoints.length === 0) {
-                console.log("⚠️ No relaunch points found in config, using single launch mode");
-                await playSingleLaunchTuning(cue, urlToUse, movementStartTime);
-                return;
-            }
-
             // SPECIAL CASE: If conductor says to disable relaunches (solo/dense device)
+            // This MUST come before any relaunch point processing
             if (rampStrategy.disableRelaunches) {
                 console.log("🎵 Dense/solo device - playing continuously without relaunches");
 
@@ -1816,14 +1810,17 @@ devicedist.html: Feature List
 
                 if (launch0) {
                     console.log(`✅ Continuous playback scheduled for entire piece (${assignedNotes.length} notes)`);
-
-                    // In dense mode, we still need pulse detections for calibration
-                    // scheduleNoteRamps will handle setting gain at first note and scheduling pulses
                 }
                 return;
             }
 
-            // Normal case: Use relaunch points for calibration
+            // If no relaunch points at all, fall back to single launch
+            if (relaunchPoints.length === 0) {
+                console.log("⚠️ No relaunch points found in config, using single launch mode");
+                await playSingleLaunchTuning(cue, urlToUse, movementStartTime);
+                return;
+            }
+
             // Filter relaunch points to only those that reference notes assigned to THIS device
             const deviceRelaunchPoints = relaunchPoints.filter(point =>
                 assignedNotes.some(note => note.index === point.note_index)
