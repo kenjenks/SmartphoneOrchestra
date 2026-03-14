@@ -44,8 +44,7 @@ devicedist.html: Feature List
 4. Decentralized Statistical Calibration (for the Bach
 "Jesu, Joy of Man's Desiring" sequence)
 - Multi-Launch Strategy: Uses relaunch points from tuning_mode.json
-  to restart the flute MP3 multiple times during the piece to
-  better measure speaker delay times
+  to restart the flute MP3 multiple times during the piece
 - Progressive Calibration: Each relaunch improves timing using data from previous launches
 - Statistical Confidence: Multiple independent launch samples per device
 - Pillar Foundation: Pillars provide continuous harmony, allowing flute dropouts
@@ -1460,11 +1459,12 @@ devicedist.html: Feature List
             }
         }
 
-        async function scheduleLaunch(url, movementStartTime, launchIndex, scheduledWallTime, customLag = null, fadeInMs = 50) {
+        async function scheduleLaunch(url, movementStartTime, launchIndex, scheduledWallTime, seekOffsetMs, customLag = null, fadeInMs = 50) {
             const lag = customLag !== null ? customLag : hardwareLag;
             const nowWall = Date.now() + serverOffset;
             const secondsUntilStart = (scheduledWallTime - nowWall - lag) / 1000;
             const audioStartTime = audioCtx.currentTime + Math.max(0, secondsUntilStart);
+            const seekOffsetSeconds = seekOffsetMs / 1000;
 
             // Load audio if needed
             if (!bufferCache[url]) {
@@ -1484,20 +1484,21 @@ devicedist.html: Feature List
             const gainNode = audioCtx.createGain();
             source.connect(gainNode).connect(audioCtx.destination);
 
-            // Start with fade in
+            // Start with fade in at the seek position
             const fadeInSeconds = fadeInMs / 1000;
             gainNode.gain.setValueAtTime(0, audioStartTime);
             gainNode.gain.linearRampToValueAtTime(1.0, audioStartTime + fadeInSeconds);
 
-            source.start(audioStartTime);
+            source.start(audioStartTime, seekOffsetSeconds);
 
-            console.log(`🚀 Launch ${launchIndex + 1} scheduled at ${audioStartTime.toFixed(3)}s (lag: ${lag}ms, fade: ${fadeInMs}ms)`);
+            console.log(`🚀 Launch ${launchIndex + 1} scheduled at ${audioStartTime.toFixed(3)}s (lag: ${lag}ms, seek: ${seekOffsetMs}ms, fade: ${fadeInMs}ms)`);
 
-            // Record launch event
+            // Record launch event with seek offset
             const launchEvent = {
                 scheduledWall: scheduledWallTime,
                 actualAudioStart: audioStartTime,
                 actualWallStart: Date.now() + serverOffset,
+                seekOffsetMs: seekOffsetMs,
                 source,
                 gainNode,
                 index: launchIndex
@@ -1510,7 +1511,7 @@ devicedist.html: Feature List
 
             // Schedule their ramps
             segmentNotes.forEach(note => {
-                scheduleNoteRamp(note, source, gainNode, movementStartTime, audioStartTime, launchIndex);
+                scheduleNoteRamp(note, source, gainNode, movementStartTime, audioStartTime, seekOffsetMs, launchIndex);
             });
 
             console.log(`   → ${segmentNotes.length} notes assigned to this launch`);
@@ -1518,14 +1519,15 @@ devicedist.html: Feature List
             return launchEvent;
         }
 
-        function scheduleNoteRamp(note, source, gainNode, movementStartTime, audioStartTime, launchIndex) {
+        function scheduleNoteRamp(note, source, gainNode, movementStartTime, audioStartTime, seekOffsetMs, launchIndex) {
             const noteStartMs = parseFloat(note.startMs);
             const noteDurationMs = parseFloat(note.durationMs);
             const notePulseMs = parseFloat(note.pulsePositionMs || (noteStartMs + noteDurationMs/2));
 
             // Calculate times relative to this launch
-            const noteStartAudio = audioStartTime + (noteStartMs / 1000);
-            const noteEndAudio = audioStartTime + ((noteStartMs + noteDurationMs) / 1000);
+            // Note start in audio time = audioStartTime + (noteStartMs - seekOffsetMs)/1000
+            const noteStartAudio = audioStartTime + ((noteStartMs - seekOffsetMs) / 1000);
+            const noteEndAudio = audioStartTime + ((noteStartMs + noteDurationMs - seekOffsetMs) / 1000);
             const pulseWall = movementStartTime + notePulseMs;
 
             // Ramp up (10ms before note)
@@ -1558,6 +1560,7 @@ devicedist.html: Feature List
                         launchIndex: launchIndex,
                         expectedDelay: hardwareLag,
                         startMs: noteStartMs
+                        // NO tHeard here - that comes from conductor
                     });
 
                     // Visual feedback
@@ -1592,34 +1595,31 @@ devicedist.html: Feature List
                 return hardwareLag;
             }
 
-            // Gather all samples from completed launches and detections
+            // Gather all samples from completed detections that have tHeard
             const allSamples = [];
 
-            // Add launch delay samples from each completed launch
-            for (let i = 0; i <= currentLaunchIndex; i++) {
-                const launch = launchEvents[i];
+            for (const detection of pendingPulseDetections) {
+                // Only use detections that have been heard by conductor
+                if (!detection.tHeard) continue;
+
+                const launch = launchEvents[detection.launchIndex];
                 if (!launch) continue;
 
-                // Launch delay sample (scheduled vs actual wall time)
-                const launchDelay = launch.actualWallStart - launch.scheduledWall;
-                if (Math.abs(launchDelay) < 1000) { // Sanity check: less than 1 second
-                    allSamples.push(launchDelay);
+                // True one-way acoustic latency:
+                // tHeard - launch.actualWallStart = total time from start() call to detection
+                // Subtract (detection.startMs - launch.seekOffsetMs) to get time from when the audio
+                // actually started playing to when the warble was heard
+                const offsetIntoLaunchMs = detection.startMs - launch.seekOffsetMs;
+                const trueLag = detection.tHeard - launch.actualWallStart - offsetIntoLaunchMs;
+
+                // Sanity check: lag should be positive and reasonable (< 2 seconds)
+                if (trueLag > 0 && trueLag < 2000) {
+                    allSamples.push(trueLag);
                 }
             }
 
-            // Add warble detection samples
-            const warbleSamples = pendingPulseDetections
-                .filter(p => p.launchIndex !== undefined)
-                .map(p => {
-                    // We don't have heard time yet, but we'll use the difference between
-                    // when we expected it and when it was actually heard (processed in processAcousticReturn)
-                    return null;
-                })
-                .filter(v => v !== null);
-
-            // For now, just use launch delay samples
             if (allSamples.length < calibrationStrategy.minSamplesForUpdate) {
-                console.log(`📊 Only ${allSamples.length} launch samples, need ${calibrationStrategy.minSamplesForUpdate} for update`);
+                console.log(`📊 Only ${allSamples.length} valid acoustic samples, need ${calibrationStrategy.minSamplesForUpdate} for update`);
                 return hardwareLag;
             }
 
@@ -1635,7 +1635,7 @@ devicedist.html: Feature List
             // Round to integer
             newLag = Math.round(newLag);
 
-            console.log(`📊 Improved lag: ${newLag}ms from ${allSamples.length} samples`);
+            console.log(`📊 Improved acoustic lag: ${newLag}ms from ${allSamples.length} samples`);
             return newLag;
         }
 
@@ -1663,15 +1663,15 @@ devicedist.html: Feature List
                 return;
             }
 
-            // If no relaunch points, fall back to single launch
+            // If no relaunch points, fall back to single launch (seek at 0)
             if (relaunchPoints.length === 0) {
                 console.log("⚠️ No relaunch points found, using single launch mode");
                 await playSingleLaunchTuning(cue, urlToUse, movementStartTime);
                 return;
             }
 
-            // Start first launch
-            const launch0 = await scheduleLaunch(urlToUse, movementStartTime, 0, movementStartTime, hardwareLag, 50);
+            // Start first launch at beginning of file (seek offset 0)
+            const launch0 = await scheduleLaunch(urlToUse, movementStartTime, 0, movementStartTime, 0, hardwareLag, 50);
             if (!launch0) return;
 
             // Schedule subsequent launches based on relaunch points
@@ -1692,6 +1692,11 @@ devicedist.html: Feature List
 
                 // Relaunch during the note, giving time to fade out current and fade in new
                 const fadeOutMs = point.fade_out_ms || 100;
+
+                // We want to start the new launch at the same musical position as the old one is leaving
+                // The seek offset should be the musical time of the relaunch point
+                const seekOffsetMs = point.position_ms;
+
                 const relaunchWallTime = noteEndWall - fadeOutMs - LAUNCH_FADE_SAFETY_MS;
 
                 const nowWall = Date.now() + serverOffset;
@@ -1700,7 +1705,7 @@ devicedist.html: Feature List
                 if (delay > 0) {
                     // Create a closure to capture current values
                     const timeoutId = setTimeout(async () => {
-                        console.log(`🔄 Executing relaunch ${launchNumber + 1} at note ${point.note_index} (${point.description || point.reason})`);
+                        console.log(`🔄 Executing relaunch ${launchNumber + 1} at note ${point.note_index} (${point.description || point.reason}), seek to ${seekOffsetMs}ms`);
 
                         // Fade out current launch with specified duration
                         await fadeOutLaunch(launchEvents[currentLaunchIndex], fadeOutMs);
@@ -1708,20 +1713,21 @@ devicedist.html: Feature List
                         // Calculate improved lag from accumulated samples
                         const improvedLag = calculateImprovedLag();
 
-                        // Schedule new launch
+                        // Schedule new launch with seek offset
                         const fadeInMs = point.fade_in_ms || 50;
                         const nextLaunch = await scheduleLaunch(
                             urlToUse,
                             movementStartTime,
                             launchNumber,
                             relaunchWallTime + fadeOutMs + LAUNCH_FADE_SAFETY_MS,
+                            seekOffsetMs,
                             improvedLag,
                             fadeInMs
                         );
 
                         if (nextLaunch) {
                             currentLaunchIndex = launchNumber;
-                            console.log(`🚀 Launch ${launchNumber + 1} scheduled with lag ${improvedLag}ms (fade in: ${fadeInMs}ms)`);
+                            console.log(`🚀 Launch ${launchNumber + 1} scheduled with lag ${improvedLag}ms (seek: ${seekOffsetMs}ms, fade in: ${fadeInMs}ms)`);
                         }
 
                         activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
@@ -1798,7 +1804,12 @@ devicedist.html: Feature List
                         const timeoutId = setTimeout(() => {
                             const playTime = Date.now() + serverOffset;
                             lastPingSent = playTime;
-                            pendingPulseDetections.push({ playTime, noteId: note.noteIndex });
+                            pendingPulseDetections.push({
+                                playTime,
+                                noteId: note.noteIndex,
+                                startMs: note.startMs,
+                                // No launch index or seek offset in legacy mode
+                            });
                             activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
                         }, pulseDelay);
                         activeTimeouts.push(timeoutId);
