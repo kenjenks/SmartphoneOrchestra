@@ -14,6 +14,7 @@ Features:
 - Seat map visualization with status indicators
 - Heartbeat monitoring: devices marked dead if no heartbeat for 12.1s
 - Ramp strategy calculation: Each device receives custom ramp parameters based on its note density
+- Copyable pattern match log: Detailed detection history that can be selected and copied
 
 Note: All configuration uploads (seat_config.tsv, tuning_mode.json,
 pillar_config.json, visual_timeline.json) are handled by admin.html
@@ -73,6 +74,45 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
 
         /* Heartbeat status indicators */
         .heartbeat-dead { opacity: 0.3; filter: grayscale(100%); }
+
+        /* Copyable Pattern Match Log */
+        #pattern-log-container {
+            margin-top: 15px;
+            background: #1a1a1a;
+            padding: 10px;
+            border-radius: 4px;
+            border-left: 3px solid #00ffcc;
+            font-family: 'Courier New', monospace;
+            font-size: 11px;
+            max-height: 200px;
+            overflow-y: auto;
+            user-select: text;
+            -webkit-user-select: text;
+            cursor: text;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .pattern-log-entry {
+            margin-bottom: 4px;
+            padding: 2px 0;
+            border-bottom: 1px dotted #333;
+            font-family: 'Courier New', monospace;
+        }
+        .pattern-log-match { color: #00ffcc; }
+        .pattern-log-break { color: #ffcc00; }
+        .pattern-log-unmatched { color: #ff4444; }
+        .pattern-log-info { color: #888; }
+        .pattern-log-timestamp { color: #666; margin-right: 8px; }
+        .copy-hint {
+            font-size: 9px;
+            color: #666;
+            text-align: right;
+            margin-top: 5px;
+            cursor: pointer;
+        }
+        .copy-hint:hover {
+            color: #00ffcc;
+        }
     </style>
 </head>
 <body>
@@ -146,7 +186,17 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             </div>
 
             <canvas id="fft-viz"></canvas>
-            <div id="detection-log" style="font-size: 10px; color: #00ffcc; margin-top: 5px; height: 40px; overflow: hidden;"></div>
+
+            <!-- Copyable Pattern Match Log -->
+            <div style="margin-top: 10px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                    <span style="color: #00ffcc; font-size: 0.8rem; font-weight: bold;">📋 PATTERN MATCH LOG (click to copy)</span>
+                    <span class="copy-hint" onclick="copyPatternLog()">📋 Copy all</span>
+                </div>
+                <div id="pattern-log-container" onclick="selectPatternLog()">
+                    <div class="pattern-log-entry pattern-log-info">[System] Pattern matcher ready. Detections will appear here...</div>
+                </div>
+            </div>
         </div>
 
         <div class="section">
@@ -250,6 +300,10 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
     // Device-specific timing stats
     let deviceTimingStats = {}; // Tracks average lag per device
 
+    // Pattern match log (copyable)
+    let patternLog = []; // Array of log entries for display
+    const MAX_LOG_ENTRIES = 50; // Maximum number of log entries to keep
+
     // --- CLOCK SYNC ---
     const offsetRef = db.ref(".info/serverTimeOffset");
     offsetRef.on("value", snap => {
@@ -340,12 +394,12 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
                 document.getElementById('device-count-value').innerText = Object.keys(deviceData).length;
                 resizeCanvas();
                 renderMap();
-                logDetection(`Loaded ${seats.length} seats from config.`);
+                addPatternLogEntry('info', `Loaded ${seats.length} seats from config`);
             } else {
-                logDetection("No seat configuration found in Firebase. Please upload via admin.html");
+                addPatternLogEntry('info', "No seat configuration found in Firebase");
             }
         } catch (e) {
-            logDetection("Error loading seat config: " + e.message);
+            addPatternLogEntry('info', "Error loading seat config: " + e.message);
         }
     }
 
@@ -375,15 +429,15 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
                     TEST_PULSE_URL = configData.metadata.test_pulse_url;
                 }
 
-                logDetection(`Loaded ${noteTimings.length} notes from tuning config`);
+                addPatternLogEntry('info', `Loaded ${noteTimings.length} notes from tuning config`);
                 if (FLUTE_URL) {
-                    logDetection(`Flute URL: ${FLUTE_URL}`);
+                    addPatternLogEntry('info', `Flute URL: ${FLUTE_URL.split('/').pop()}`);
                 }
             } else {
-                logDetection("No tuning configuration found in Firebase. Please upload via admin.html");
+                addPatternLogEntry('info', "No tuning configuration found in Firebase");
             }
         } catch (e) {
-            logDetection("Error loading tuning config: " + e.message);
+            addPatternLogEntry('info', "Error loading tuning config: " + e.message);
         }
     }
 
@@ -432,12 +486,12 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
                     await selectMovement(0);
                 }
 
-                logDetection(`Loaded ${movements.length} movements`);
+                addPatternLogEntry('info', `Loaded ${movements.length} movements`);
             } else {
-                logDetection("No movements found in show data");
+                addPatternLogEntry('info', "No movements found in show data");
             }
         } catch (e) {
-            logDetection("Error loading movements: " + e.message);
+            addPatternLogEntry('info', "Error loading movements: " + e.message);
         }
     }
 
@@ -492,7 +546,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         document.getElementById('current-movement-name').innerText = movement.movement_name;
         document.getElementById('go-button').disabled = false;
 
-        logDetection(`Selected: ${movement.movement_name} | ${pillarCount} pillars, ${cueCount} cues, buffer: ${movement.buffer_s}s`);
+        addPatternLogEntry('info', `Selected: ${movement.movement_name} | ${pillarCount} pillars, ${cueCount} cues, buffer: ${movement.buffer_s}s`);
     }
 
     // Function to load default pillar URLs for tuning mode
@@ -500,7 +554,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         PILLAR_URLS = { ...DEFAULT_PILLAR_URLS };
         const pillarCount = Object.keys(PILLAR_URLS).length;
         document.getElementById('pillar-count').innerText = pillarCount;
-        logDetection(`Loaded ${pillarCount} default pillar URLs for tuning`);
+        addPatternLogEntry('info', `Loaded ${pillarCount} default pillar URLs for tuning`);
     }
 
     // --- 1. SEAT MAP GUI ---
@@ -593,6 +647,85 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         });
     }
 
+    // --- PATTERN LOG FUNCTIONS (Copyable) ---
+    function addPatternLogEntry(type, message, details = {}) {
+        const timestamp = new Date().toLocaleTimeString();
+        const entry = {
+            timestamp,
+            type,
+            message,
+            details
+        };
+
+        patternLog.push(entry);
+        if (patternLog.length > MAX_LOG_ENTRIES) {
+            patternLog.shift();
+        }
+
+        updatePatternLogDisplay();
+    }
+
+    function updatePatternLogDisplay() {
+        const container = document.getElementById('pattern-log-container');
+        if (!container) return;
+
+        let html = '';
+        patternLog.forEach(entry => {
+            let className = 'pattern-log-entry ';
+            switch(entry.type) {
+                case 'match':
+                    className += 'pattern-log-match';
+                    break;
+                case 'break':
+                    className += 'pattern-log-break';
+                    break;
+                case 'unmatched':
+                    className += 'pattern-log-unmatched';
+                    break;
+                default:
+                    className += 'pattern-log-info';
+            }
+
+            html += `<div class="${className}"><span class="pattern-log-timestamp">[${entry.timestamp}]</span> ${entry.message}</div>`;
+        });
+
+        if (patternLog.length === 0) {
+            html = '<div class="pattern-log-entry pattern-log-info">[System] Pattern matcher ready. Detections will appear here...</div>';
+        }
+
+        container.innerHTML = html;
+        container.scrollTop = container.scrollHeight;
+    }
+
+    // Make the log selectable and copyable
+    function selectPatternLog() {
+        const container = document.getElementById('pattern-log-container');
+        const range = document.createRange();
+        range.selectNodeContents(container);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+    }
+
+    function copyPatternLog() {
+        const container = document.getElementById('pattern-log-container');
+        const range = document.createRange();
+        range.selectNodeContents(container);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+
+        try {
+            document.execCommand('copy');
+            addPatternLogEntry('info', '📋 Pattern log copied to clipboard');
+        } catch (err) {
+            console.error('Copy failed:', err);
+            addPatternLogEntry('info', '❌ Failed to copy log');
+        }
+
+        selection.removeAllRanges();
+    }
+
     // --- 2. THE CONDUCTOR'S EAR (WARBLE DETECTION WITH PATTERN MATCHER) ---
     async function initMicrophone() {
         try {
@@ -609,9 +742,12 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             // Start warble detection (replaces ultrasonic detection)
             detectWarble();
             drawFFT();
+
+            addPatternLogEntry('info', '🎤 Microphone initialized');
         } catch (e) {
             alert("Mic Access Required for Calibration");
             document.getElementById('mic-status').innerHTML = '<span style="color:#ff4444">ERROR</span>';
+            addPatternLogEntry('info', '❌ Microphone access failed');
         }
     }
 
@@ -622,12 +758,14 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         patternConfidence = 0;
         lastPatternMatchTime = 0;
         deviceTimingStats = {};
+        patternLog = []; // Clear the log
 
         if (patternMatchTimeout) {
             clearTimeout(patternMatchTimeout);
             patternMatchTimeout = null;
         }
 
+        addPatternLogEntry('info', '🔄 Pattern matcher reset');
         console.log("🔄 Pattern matcher reset");
     }
 
@@ -720,7 +858,9 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         const match = findMatchingNote(detectedPitch, detectedTime);
 
         if (!match) {
-            logDetection(`❓ No match found for ${detectedPitch} at ${(detectedTime/1000).toFixed(2)}s`);
+            const message = `❓ No match found for ${detectedPitch} at ${(detectedTime/1000).toFixed(2)}s`;
+            console.log(message);
+            addPatternLogEntry('unmatched', message);
             return null;
         }
 
@@ -758,17 +898,24 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
 
         lastPatternMatchTime = detectedTime;
 
+        // Format the log message
+        const timeDiffStr = match.timeDiff > 0 ? `+${match.timeDiff.toFixed(1)}ms late` : `${match.timeDiff.toFixed(1)}ms early`;
+        const deviceInfo = match.deviceId ? ` from ${match.deviceId}` : '';
+        const message = `✓ Note ${match.noteIndex} (${detectedPitch})${deviceInfo}, ${timeDiffStr} (conf: ${(match.score*100).toFixed(0)}%)`;
+
+        addPatternLogEntry('match', message, match);
+
         // Schedule pattern reset if no matches for a while
         if (patternMatchTimeout) clearTimeout(patternMatchTimeout);
         patternMatchTimeout = setTimeout(() => {
             if (Date.now() + serverOffset - lastPatternMatchTime > 3000) {
-                console.log("⚠️ Pattern timeout - resetting matcher");
+                const timeoutMsg = "⚠️ Pattern timeout - resetting matcher";
+                console.log(timeoutMsg);
+                addPatternLogEntry('break', timeoutMsg);
                 expectedNoteIndex = Math.max(0, expectedNoteIndex - 3); // Rewind a bit
                 patternConfidence *= 0.5;
             }
         }, 3500);
-
-        logDetection(`🎯 Pattern match: Note ${match.noteIndex} (${detectedPitch}) at ${(detectedTime/1000).toFixed(2)}s, diff=${match.timeDiff.toFixed(1)}ms, conf=${patternConfidence.toFixed(2)}`);
 
         // Broadcast the detection time for device calibration
         broadcastDetection(detectedTime);
@@ -924,14 +1071,6 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
                             // Process with pattern matcher
                             const match = processPatternMatch(detectedPitch, detectedTime);
 
-                            // Log with note info for debugging
-                            const songPosSec = (songPosition / 1000).toFixed(1);
-                            if (match) {
-                                logDetection(`🎯 Pattern matched: Note ${match.noteIndex} (${detectedPitch}) at ${songPosSec}s (diff: ${match.timeDiff.toFixed(1)}ms)`);
-                            } else {
-                                logDetection(`👂 Warble heard: ${detectedPitch} at ${songPosSec}s (energy: ${energy.toFixed(4)})`);
-                            }
-
                             // Flash detection indicator on FFT viz
                             const vCtx = document.getElementById('fft-viz').getContext('2d');
                             vCtx.fillStyle = '#00ffcc';
@@ -995,7 +1134,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             cues:      currentMovement.cues   // the array from visual_timeline.json, verbatim
         });
 
-        logDetection(`🚀 GO: "${currentMovement.movement_name}" at ${startTimeStr} (buffer: ${bufferMs/1000}s)`);
+        addPatternLogEntry('info', `🚀 GO: "${currentMovement.movement_name}" at ${startTimeStr} (buffer: ${bufferMs/1000}s)`);
     };
 
     // --- RAMP STRATEGY CALCULATION ---
@@ -1152,11 +1291,11 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
     async function startPillars(startTime) {
         // Check if we have pillar URLs, if not try to load defaults
         if (Object.keys(PILLAR_URLS).length === 0) {
-            logDetection("No pillar URLs loaded - attempting to load defaults");
+            addPatternLogEntry('info', "No pillar URLs loaded - attempting to load defaults");
             loadDefaultPillarUrls();
 
             if (Object.keys(PILLAR_URLS).length === 0) {
-                logDetection("ERROR: No pillar URLs available - skipping pillar playback");
+                addPatternLogEntry('info', "ERROR: No pillar URLs available - skipping pillar playback");
                 return;
             }
         }
@@ -1182,7 +1321,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             });
         }
 
-        logDetection(`Started ${Object.keys(PILLAR_URLS).length} pillars`);
+        addPatternLogEntry('info', `Started ${Object.keys(PILLAR_URLS).length} pillars`);
     }
 
     async function startTuningMovement() {
@@ -1218,7 +1357,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
 
         // Ensure we have pillar URLs before starting
         if (Object.keys(PILLAR_URLS).length === 0) {
-            logDetection("No pillar URLs from movement, loading defaults");
+            addPatternLogEntry('info', "No pillar URLs from movement, loading defaults");
             loadDefaultPillarUrls();
         }
 
@@ -1274,7 +1413,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
 
         isTuningActive = true;
         document.getElementById('tuning-progress').style.display = 'block';
-        logDetection(`🎯 Tuning started: ${deviceOrder.length} devices, ${noteTimings.length} notes`);
+        addPatternLogEntry('info', `🎯 Tuning started: ${deviceOrder.length} devices, ${noteTimings.length} notes`);
         renderMap();
     }
 
@@ -1290,7 +1429,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         tuningSchedule = null;
 
         document.getElementById('tuning-progress').style.display = 'none';
-        logDetection("⏹️ Tuning stopped");
+        addPatternLogEntry('info', "⏹️ Tuning stopped");
     }
 
     // --- PERFORMANCE REGISTRY & STATUS MONITORING ---
@@ -1373,12 +1512,12 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
     document.getElementById('stop-tuning-btn').onclick = stopTuning;
     document.getElementById('load-default-pillars-btn').onclick = () => {
         loadDefaultPillarUrls();
-        logDetection("Default pillar URLs loaded");
+        addPatternLogEntry('info', "Default pillar URLs loaded");
     };
     document.getElementById('kill-all-btn').onclick = () => {
         if(confirm("Refresh all patron devices?")) {
             db.ref('show/currentCue').set({ action: 'KILL', triggerTime: Date.now() });
-            logDetection("COMMAND: Global Kill Signal sent.");
+            addPatternLogEntry('info', "COMMAND: Global Kill Signal sent.");
         }
     };
 
@@ -1434,16 +1573,13 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
                     seatId: closestSeat.id
                 }
             });
-            logDetection(`🔊 Seat test sent to ${closestSeat.id}`);
+            addPatternLogEntry('info', `🔊 Seat test sent to ${closestSeat.id}`);
         }
     });
 
-    function logDetection(msg) {
-        const log = document.getElementById('detection-log');
-        const now = new Date().toLocaleTimeString().split(' ')[0];
-        log.innerHTML = `[${now}] ${msg}<br>` + log.innerHTML;
-        if (log.children.length > 3) log.removeChild(log.lastChild);
-    }
+    // Make pattern log functions globally available for onclick handlers
+    window.selectPatternLog = selectPatternLog;
+    window.copyPatternLog = copyPatternLog;
 
     // Initialize everything - load all configs from Firebase
     window.onload = async () => {
@@ -1466,6 +1602,9 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
                 el.innerHTML = '<span class="status-dot status-off"></span>Firebase Disconnected';
             }
         });
+
+        // Initial pattern log display
+        updatePatternLogDisplay();
     };
 
     window.onresize = resizeCanvas;
