@@ -1,0 +1,749 @@
+<!--
+
+This test program will:
+
+Initialize the microphone and show its status
+
+Play the flute MP3 for 30 seconds
+
+Detect warbles using the same algorithm as conductor.html
+
+Generate a comprehensive report showing:
+
+When playback started and stopped
+
+All detected warbles with timestamps
+
+Pattern matches vs unmatched detections
+
+Audio statistics (peak energy, average energy, noise floor)
+
+Browser and audio hardware information
+
+Complete detection log
+
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Warble Detection Test</title>
+    <style>
+        body {
+            background: #1a1a1a;
+            color: #eee;
+            font-family: 'Segoe UI', sans-serif;
+            padding: 20px;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        h1 { color: #00ffcc; }
+        .status-panel {
+            background: #252525;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+            border-left: 4px solid #00ffcc;
+        }
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        .status-active { background: #00ffcc; box-shadow: 0 0 10px #00ffcc; }
+        .status-inactive { background: #ff4444; }
+        .status-warning { background: #ffcc00; }
+        
+        button {
+            background: #333;
+            color: white;
+            border: 1px solid #555;
+            padding: 12px 24px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 5px;
+        }
+        button.primary {
+            background: #00ffcc;
+            color: #000;
+            border: none;
+        }
+        button.primary:hover { background: #00cca3; }
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        #report-box {
+            width: 100%;
+            height: 300px;
+            background: #000;
+            color: #00ff00;
+            font-family: monospace;
+            font-size: 12px;
+            padding: 10px;
+            border: 1px solid #333;
+            border-radius: 4px;
+            margin: 20px 0;
+            white-space: pre;
+            overflow: auto;
+        }
+        
+        .log-entry {
+            font-family: monospace;
+            font-size: 11px;
+            color: #888;
+            border-bottom: 1px solid #333;
+            padding: 2px 0;
+        }
+        .log-match { color: #00ffcc; }
+        .log-unmatched { color: #ff4444; }
+        .log-info { color: #888; }
+        
+        #fft-viz {
+            width: 100%;
+            height: 100px;
+            background: #000;
+            border: 1px solid #333;
+            margin: 20px 0;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            margin: 20px 0;
+        }
+        .stat-card {
+            background: #252525;
+            padding: 15px;
+            border-radius: 4px;
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #00ffcc;
+        }
+        .stat-label {
+            font-size: 12px;
+            color: #888;
+            margin-top: 5px;
+        }
+        
+        .control-group {
+            display: flex;
+            gap: 10px;
+            margin: 20px 0;
+            flex-wrap: wrap;
+        }
+        
+        .flute-url-input {
+            flex: 1;
+            background: #333;
+            color: white;
+            border: 1px solid #555;
+            padding: 12px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🎵 Warble Detection Test</h1>
+    
+    <div class="status-panel">
+        <div style="display: flex; align-items: center; margin-bottom: 10px;">
+            <span class="status-indicator" id="mic-indicator"></span>
+            <span id="mic-status">Microphone: Not initialized</span>
+        </div>
+        <div style="display: flex; align-items: center; margin-bottom: 10px;">
+            <span class="status-indicator" id="audio-indicator"></span>
+            <span id="audio-status">Audio Context: Not created</span>
+        </div>
+        <div style="display: flex; align-items: center;">
+            <span class="status-indicator" id="play-indicator"></span>
+            <span id="play-status">Playback: Not started</span>
+        </div>
+    </div>
+    
+    <div class="control-group">
+        <input type="text" id="flute-url" class="flute-url-input" 
+               placeholder="Enter flute MP3 URL (or use default)" 
+               value="https://static.wixstatic.com/mp3/9178d1_f151780a64db4af297d38519c1b2b825.mp3">
+        <button id="load-default-btn" class="secondary">Load Default</button>
+    </div>
+    
+    <div class="control-group">
+        <button id="init-mic-btn" class="primary">🎤 Initialize Microphone</button>
+        <button id="start-test-btn" class="primary" disabled>▶️ Start 30s Test</button>
+        <button id="stop-test-btn" style="background:#600;">⏹️ Stop</button>
+        <button id="copy-report-btn">📋 Copy Report</button>
+    </div>
+    
+    <canvas id="fft-viz"></canvas>
+    
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="stat-value" id="detection-count">0</div>
+            <div class="stat-label">Warbles Detected</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value" id="match-count">0</div>
+            <div class="stat-label">Pattern Matches</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value" id="unmatched-count">0</div>
+            <div class="stat-label">Unmatched</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value" id="peak-energy">0.000</div>
+            <div class="stat-label">Peak Energy</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value" id="avg-energy">0.000</div>
+            <div class="stat-label">Avg Energy</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value" id="noise-floor">0.000</div>
+            <div class="stat-label">Noise Floor</div>
+        </div>
+    </div>
+    
+    <h3>Detection Log</h3>
+    <div id="report-box" readonly></div>
+    
+    <p style="color: #666; font-size: 11px; margin-top: 10px;">
+        Test runs for 30 seconds. The report will show when the MP3 started playing,
+        all detected warbles, and statistics about the audio environment.
+    </p>
+    
+    <script>
+        // Configuration
+        const WARBLE_ENERGY_THRESHOLD = 0.0008;
+        const WARBLE_FREQ_BINS = 3;
+        const WARBLE_MIN_CONFIDENCE = 0.6;
+        const WARBLE_LOOKBACK_FRAMES = 10;
+        const TEST_DURATION_MS = 30000; // 30 seconds
+        
+        // State
+        let audioCtx = null;
+        let analyser = null;
+        let dataArray = null;
+        let source = null;
+        let gainNode = null;
+        let isMicActive = false;
+        let isPlaying = false;
+        let testStartTime = 0;
+        let testEndTime = 0;
+        let detectionLog = [];
+        let warbleBuffer = [];
+        let lastWarbleTime = 0;
+        let fftCanvas = document.getElementById('fft-viz');
+        let fftCtx = fftCanvas.getContext('2d');
+        
+        // Statistics
+        let stats = {
+            totalDetections: 0,
+            matches: 0,
+            unmatched: 0,
+            peakEnergy: 0,
+            energySamples: [],
+            noiseFloor: 0,
+            frequenciesDetected: []
+        };
+        
+        // Note timings for pattern matching (simplified from tuning_mode.json)
+        // These are approximate positions of significant notes in the Bach piece
+        const expectedNotes = [
+            { pitch: 'G5', timeMs: 3300 },
+            { pitch: 'B4', timeMs: 5300 },
+            { pitch: 'G5', timeMs: 13500 },
+            { pitch: 'B4', timeMs: 15500 },
+            { pitch: 'Gb4', timeMs: 18200 },
+            { pitch: 'E4', timeMs: 20900 },
+            { pitch: 'D5', timeMs: 23600 },
+            { pitch: 'C5', timeMs: 26400 },
+            { pitch: 'B4', timeMs: 29100 },
+            { pitch: 'A4', timeMs: 31800 }
+        ];
+        
+        // Pitch to frequency mapping (same as conductor)
+        function pitchToFreq(pitch) {
+            if (!pitch) return 440.0;
+            
+            const flat_to_sharp = {
+                'Db': 'C#', 'Eb': 'D#', 'Gb': 'F#', 'Ab': 'G#', 'Bb': 'A#',
+                'Cb': 'B', 'Fb': 'E'
+            };
+            const note_names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+            
+            const match = pitch.match(/([A-G][b#]?)(\d+)/);
+            if (!match) return 440.0;
+            
+            let note = match[1];
+            let octave = parseInt(match[2]);
+            
+            if (flat_to_sharp[note]) {
+                note = flat_to_sharp[note];
+            }
+            
+            const a4_idx = note_names.indexOf('A') + 4 * 12;
+            const note_idx = note_names.indexOf(note) + octave * 12;
+            const semitone_diff = note_idx - a4_idx;
+            
+            return 440 * Math.pow(2, semitone_diff / 12);
+        }
+        
+        // Logging function
+        function addLog(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString('en-US', { 
+                hour12: false,
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                fractionalSecondDigits: 3
+            });
+            
+            const logEntry = {
+                timestamp,
+                message,
+                type,
+                time: performance.now()
+            };
+            
+            detectionLog.push(logEntry);
+            updateReport();
+            
+            // Also log to console
+            console.log(`[${timestamp}] ${message}`);
+        }
+        
+        function updateReport() {
+            const reportBox = document.getElementById('report-box');
+            
+            // Build report header
+            let report = `WARBLE DETECTION TEST REPORT\n`;
+            report += `Generated: ${new Date().toISOString()}\n`;
+            report += `Test Duration: ${TEST_DURATION_MS/1000}s\n`;
+            report += `========================================\n\n`;
+            
+            // Test configuration
+            report += `CONFIGURATION:\n`;
+            report += `  Energy Threshold: ${WARBLE_ENERGY_THRESHOLD}\n`;
+            report += `  Min Confidence: ${WARBLE_MIN_CONFIDENCE}\n`;
+            report += `  Lookback Frames: ${WARBLE_LOOKBACK_FRAMES}\n`;
+            report += `  Flute URL: ${document.getElementById('flute-url').value}\n\n`;
+            
+            // Timing information
+            report += `TIMING:\n`;
+            report += `  Test Start: ${testStartTime ? new Date(testStartTime).toISOString() : 'Not started'}\n`;
+            report += `  Test End: ${testEndTime ? new Date(testEndTime).toISOString() : 'Not finished'}\n`;
+            report += `  Audio Context State: ${audioCtx?.state || 'not created'}\n`;
+            report += `  Audio Context Time: ${audioCtx?.currentTime.toFixed(3) || '0'}s\n\n`;
+            
+            // Statistics
+            report += `STATISTICS:\n`;
+            report += `  Total Detections: ${stats.totalDetections}\n`;
+            report += `  Pattern Matches: ${stats.matches}\n`;
+            report += `  Unmatched: ${stats.unmatched}\n`;
+            report += `  Peak Energy: ${stats.peakEnergy.toFixed(6)}\n`;
+            report += `  Average Energy: ${(stats.energySamples.reduce((a,b)=>a+b,0) / (stats.energySamples.length || 1)).toFixed(6)}\n`;
+            report += `  Noise Floor: ${stats.noiseFloor.toFixed(6)}\n\n`;
+            
+            // Detection Log
+            report += `DETECTION LOG:\n`;
+            report += `----------------------------------------\n`;
+            
+            detectionLog.forEach(entry => {
+                let prefix = '';
+                switch(entry.type) {
+                    case 'match': prefix = '✅'; break;
+                    case 'unmatched': prefix = '❌'; break;
+                    case 'warning': prefix = '⚠️'; break;
+                    default: prefix = 'ℹ️';
+                }
+                report += `[${entry.timestamp}] ${prefix} ${entry.message}\n`;
+            });
+            
+            // Audio hardware info
+            report += `\nAUDIO HARDWARE:\n`;
+            report += `  Sample Rate: ${audioCtx?.sampleRate || 'unknown'} Hz\n`;
+            report += `  FFT Size: ${analyser?.fftSize || 'unknown'}\n`;
+            report += `  Frequency Bin Count: ${analyser?.frequencyBinCount || 'unknown'}\n`;
+            
+            // Browser info
+            report += `\nBROWSER:\n`;
+            report += `  User Agent: ${navigator.userAgent}\n`;
+            report += `  Platform: ${navigator.platform}\n`;
+            report += `  Vendor: ${navigator.vendor}\n`;
+            
+            reportBox.innerText = report;
+        }
+        
+        // Initialize microphone
+        async function initMicrophone() {
+            try {
+                addLog('Requesting microphone access...');
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const source = audioCtx.createMediaStreamSource(stream);
+                analyser = audioCtx.createAnalyser();
+                analyser.fftSize = 4096;
+                source.connect(analyser);
+                
+                dataArray = new Uint8Array(analyser.frequencyBinCount);
+                
+                isMicActive = true;
+                document.getElementById('mic-indicator').className = 'status-indicator status-active';
+                document.getElementById('mic-status').innerHTML = 'Microphone: <span style="color:#00ffcc">ACTIVE</span>';
+                document.getElementById('audio-indicator').className = 'status-indicator status-active';
+                document.getElementById('audio-status').innerHTML = 'Audio Context: <span style="color:#00ffcc">Ready</span>';
+                document.getElementById('start-test-btn').disabled = false;
+                
+                addLog('Microphone initialized successfully');
+                addLog(`Audio context state: ${audioCtx.state}, sample rate: ${audioCtx.sampleRate}Hz`);
+                
+                // Start visualization
+                drawFFT();
+                
+            } catch (e) {
+                addLog(`Microphone access failed: ${e.message}`, 'warning');
+                document.getElementById('mic-indicator').className = 'status-indicator status-inactive';
+                document.getElementById('mic-status').innerHTML = 'Microphone: <span style="color:#ff4444">ERROR</span>';
+            }
+        }
+        
+        // FFT Visualization
+        function drawFFT() {
+            if (!analyser || !dataArray) {
+                requestAnimationFrame(drawFFT);
+                return;
+            }
+            
+            analyser.getByteFrequencyData(dataArray);
+            fftCtx.fillStyle = '#000';
+            fftCtx.fillRect(0, 0, fftCanvas.width, fftCanvas.height);
+            fftCtx.fillStyle = '#00ffcc';
+            
+            // Draw frequency spectrum (0-2kHz)
+            const startBin = 0;
+            const endBin = Math.round(2000 / (audioCtx.sampleRate / 4096));
+            
+            // Calculate average energy for statistics
+            let totalEnergy = 0;
+            for(let i = startBin; i < endBin && i < dataArray.length; i++) {
+                const x = (i - startBin) * (fftCanvas.width / (endBin - startBin));
+                const height = Math.min(fftCanvas.height, dataArray[i] / 2);
+                fftCtx.fillRect(x, fftCanvas.height - height, 2, height);
+                totalEnergy += dataArray[i];
+            }
+            
+            // Update noise floor estimate (minimum energy)
+            const avgEnergy = totalEnergy / (endBin - startBin);
+            stats.energySamples.push(avgEnergy);
+            if (stats.energySamples.length > 100) stats.energySamples.shift();
+            
+            const sortedEnergies = [...stats.energySamples].sort((a,b) => a-b);
+            stats.noiseFloor = sortedEnergies[Math.floor(sortedEnergies.length * 0.1)] || 0;
+            
+            document.getElementById('avg-energy').innerText = avgEnergy.toFixed(3);
+            document.getElementById('noise-floor').innerText = stats.noiseFloor.toFixed(3);
+            
+            requestAnimationFrame(drawFFT);
+        }
+        
+        // Warble Detection
+        function detectWarble() {
+            if (!analyser || !dataArray || !audioCtx || !isPlaying) {
+                requestAnimationFrame(detectWarble);
+                return;
+            }
+            
+            const now = performance.now() + (performance.timeOrigin - Date.now() + (audioCtx.currentTime * 1000));
+            
+            // Throttle to 50ms
+            if (now - lastWarbleTime < 50) {
+                requestAnimationFrame(detectWarble);
+                return;
+            }
+            
+            // Get float frequency data
+            const floatData = new Float32Array(analyser.frequencyBinCount);
+            analyser.getFloatFrequencyData(floatData);
+            
+            // Convert to linear scale
+            const linearData = floatData.map(val => Math.pow(10, val / 20));
+            
+            // Update peak energy
+            const maxEnergy = Math.max(...linearData);
+            if (maxEnergy > stats.peakEnergy) {
+                stats.peakEnergy = maxEnergy;
+                document.getElementById('peak-energy').innerText = stats.peakEnergy.toFixed(6);
+            }
+            
+            // Store in buffer
+            warbleBuffer.push({
+                time: now,
+                data: linearData.slice()
+            });
+            
+            if (warbleBuffer.length > WARBLE_LOOKBACK_FRAMES * 2) {
+                warbleBuffer.shift();
+            }
+            
+            if (warbleBuffer.length < WARBLE_LOOKBACK_FRAMES) {
+                requestAnimationFrame(detectWarble);
+                return;
+            }
+            
+            const recentFrames = warbleBuffer.slice(-WARBLE_LOOKBACK_FRAMES);
+            const songPosition = now - testStartTime;
+            
+            // Check expected notes near this time
+            const expectedNearby = expectedNotes.filter(note => 
+                Math.abs(note.timeMs - songPosition) < 1000
+            );
+            
+            expectedNearby.forEach(note => {
+                const freq = pitchToFreq(note.pitch);
+                const nyquist = audioCtx.sampleRate / 2;
+                const binIndex = Math.floor(freq / nyquist * analyser.frequencyBinCount);
+                
+                if (binIndex < 0 || binIndex >= analyser.frequencyBinCount) return;
+                
+                // Calculate energy in region
+                let energy = 0;
+                let binCount = 0;
+                for (let i = -WARBLE_FREQ_BINS; i <= WARBLE_FREQ_BINS; i++) {
+                    const idx = binIndex + i;
+                    if (idx >= 0 && idx < analyser.frequencyBinCount) {
+                        energy += linearData[idx];
+                        binCount++;
+                    }
+                }
+                energy = energy / binCount;
+                
+                // Check for modulation pattern
+                if (energy > WARBLE_ENERGY_THRESHOLD) {
+                    let modulationScore = 0;
+                    
+                    // Extract frequency peaks over time
+                    const peakFreqs = [];
+                    for (let i = 0; i < recentFrames.length; i++) {
+                        const frame = recentFrames[i];
+                        let maxEnergy = 0;
+                        let maxIdx = binIndex;
+                        for (let j = -5; j <= 5; j++) {
+                            const idx = binIndex + j;
+                            if (idx >= 0 && idx < frame.data.length && frame.data[idx] > maxEnergy) {
+                                maxEnergy = frame.data[idx];
+                                maxIdx = idx;
+                            }
+                        }
+                        const peakFreq = (maxIdx / analyser.frequencyBinCount) * nyquist;
+                        peakFreqs.push(peakFreq);
+                    }
+                    
+                    // Look for warble pattern
+                    if (peakFreqs.length > 3) {
+                        const freqChanges = [];
+                        for (let i = 1; i < peakFreqs.length; i++) {
+                            freqChanges.push(peakFreqs[i] - peakFreqs[i-1]);
+                        }
+                        
+                        let signChanges = 0;
+                        for (let i = 1; i < freqChanges.length; i++) {
+                            if (Math.sign(freqChanges[i]) !== Math.sign(freqChanges[i-1]) &&
+                                Math.abs(freqChanges[i]) > 5) {
+                                signChanges++;
+                            }
+                        }
+                        
+                        const freqRange = Math.max(...peakFreqs) - Math.min(...peakFreqs);
+                        
+                        if (freqRange > 20 && freqRange < 80 && signChanges >= 2) {
+                            modulationScore += 0.7;
+                        }
+                        
+                        if (energy > WARBLE_ENERGY_THRESHOLD * 2) {
+                            modulationScore += 0.3;
+                        }
+                    }
+                    
+                    if (modulationScore >= WARBLE_MIN_CONFIDENCE) {
+                        if (now - lastWarbleTime > 500) {
+                            lastWarbleTime = now;
+                            stats.totalDetections++;
+                            
+                            // Check if this matches expected pitch at this time
+                            const expectedAtTime = expectedNotes.find(n => 
+                                Math.abs(n.timeMs - songPosition) < 500 && n.pitch === note.pitch
+                            );
+                            
+                            if (expectedAtTime) {
+                                stats.matches++;
+                                addLog(`✓ Warble detected: ${note.pitch} at ${(songPosition/1000).toFixed(2)}s (energy: ${energy.toFixed(6)})`, 'match');
+                            } else {
+                                stats.unmatched++;
+                                addLog(`? Warble detected: ${note.pitch} at ${(songPosition/1000).toFixed(2)}s (unexpected pitch for this time)`, 'unmatched');
+                            }
+                            
+                            // Update counters
+                            document.getElementById('detection-count').innerText = stats.totalDetections;
+                            document.getElementById('match-count').innerText = stats.matches;
+                            document.getElementById('unmatched-count').innerText = stats.unmatched;
+                            
+                            // Flash FFT
+                            fftCtx.fillStyle = '#00ffcc';
+                            fftCtx.globalAlpha = 0.3;
+                            fftCtx.fillRect(0, 0, fftCanvas.width, fftCanvas.height);
+                            fftCtx.globalAlpha = 1.0;
+                        }
+                    }
+                }
+            });
+            
+            requestAnimationFrame(detectWarble);
+        }
+        
+        // Start test
+        async function startTest() {
+            if (!audioCtx || !isMicActive) {
+                addLog('Please initialize microphone first', 'warning');
+                return;
+            }
+            
+            if (audioCtx.state === 'suspended') {
+                await audioCtx.resume();
+            }
+            
+            const url = document.getElementById('flute-url').value;
+            if (!url) {
+                addLog('No flute URL provided', 'warning');
+                return;
+            }
+            
+            // Reset stats
+            stats = {
+                totalDetections: 0,
+                matches: 0,
+                unmatched: 0,
+                peakEnergy: 0,
+                energySamples: [],
+                noiseFloor: 0,
+                frequenciesDetected: []
+            };
+            detectionLog = [];
+            warbleBuffer = [];
+            
+            document.getElementById('detection-count').innerText = '0';
+            document.getElementById('match-count').innerText = '0';
+            document.getElementById('unmatched-count').innerText = '0';
+            document.getElementById('peak-energy').innerText = '0.000';
+            
+            addLog(`Loading flute MP3 from: ${url}`);
+            
+            try {
+                const response = await fetch(url);
+                const arrayBuffer = await response.arrayBuffer();
+                const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+                
+                addLog(`MP3 loaded: ${audioBuffer.duration.toFixed(2)}s, ${audioBuffer.numberOfChannels} channels, ${audioBuffer.sampleRate}Hz`);
+                
+                // Create source and gain
+                source = audioCtx.createBufferSource();
+                source.buffer = audioBuffer;
+                
+                gainNode = audioCtx.createGain();
+                gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime);
+                
+                source.connect(gainNode).connect(audioCtx.destination);
+                
+                // Start playback
+                testStartTime = performance.now() + (performance.timeOrigin - Date.now() + (audioCtx.currentTime * 1000));
+                source.start(0);
+                isPlaying = true;
+                
+                document.getElementById('play-indicator').className = 'status-indicator status-active';
+                document.getElementById('play-status').innerHTML = 'Playback: <span style="color:#00ffcc">PLAYING</span>';
+                document.getElementById('start-test-btn').disabled = true;
+                
+                addLog(`▶️ Playback started at ${new Date(testStartTime).toISOString()}`);
+                addLog(`Audio context time: ${audioCtx.currentTime.toFixed(3)}s`);
+                
+                // Start detection
+                detectWarble();
+                
+                // Schedule end
+                setTimeout(() => {
+                    stopTest();
+                }, TEST_DURATION_MS);
+                
+            } catch (e) {
+                addLog(`Failed to load/play MP3: ${e.message}`, 'warning');
+            }
+        }
+        
+        // Stop test
+        function stopTest() {
+            if (source) {
+                try {
+                    source.stop();
+                } catch (e) {}
+                source = null;
+            }
+            
+            isPlaying = false;
+            testEndTime = Date.now();
+            
+            document.getElementById('play-indicator').className = 'status-indicator status-inactive';
+            document.getElementById('play-status').innerHTML = 'Playback: <span style="color:#ff4444">STOPPED</span>';
+            document.getElementById('start-test-btn').disabled = false;
+            
+            addLog(`⏹️ Playback stopped at ${new Date().toISOString()}`);
+            addLog(`Test completed. Total detections: ${stats.totalDetections}, Matches: ${stats.matches}, Unmatched: ${stats.unmatched}`);
+            
+            // Final report update
+            updateReport();
+        }
+        
+        // Copy report to clipboard
+        function copyReport() {
+            const reportBox = document.getElementById('report-box');
+            reportBox.select();
+            document.execCommand('copy');
+            addLog('📋 Report copied to clipboard');
+        }
+        
+        // Load default URL
+        document.getElementById('load-default-btn').onclick = () => {
+            document.getElementById('flute-url').value = 'https://static.wixstatic.com/mp3/9178d1_f151780a64db4af297d38519c1b2b825.mp3';
+            addLog('Default flute URL loaded');
+        };
+        
+        // Event listeners
+        document.getElementById('init-mic-btn').onclick = initMicrophone;
+        document.getElementById('start-test-btn').onclick = startTest;
+        document.getElementById('stop-test-btn').onclick = stopTest;
+        document.getElementById('copy-report-btn').onclick = copyReport;
+        
+        // Initialize canvas size
+        function resizeCanvas() {
+            fftCanvas.width = fftCanvas.clientWidth;
+            fftCanvas.height = fftCanvas.clientHeight;
+        }
+        window.onresize = resizeCanvas;
+        resizeCanvas();
+        
+        // Initial log
+        addLog('Test page loaded. Click "Initialize Microphone" to begin.');
+    </script>
+</body>
+</html>
