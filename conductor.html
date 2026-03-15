@@ -1700,7 +1700,12 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
 
     // Click on seat map to test individual seat
     canvas.addEventListener('click', (e) => {
-        if (!isTuningActive) return;
+        // Remove the isTuningActive check - single seat test should work anytime
+        // Just make sure mic is active
+        if (!audioCtx || !analyser) {
+            alert("Please initialize microphone first");
+            return;
+        }
 
         const rect = canvas.getBoundingClientRect();
         const mouseX = e.clientX - rect.left;
