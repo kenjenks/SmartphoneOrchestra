@@ -2298,21 +2298,37 @@ devicedist.html: Feature List
             // Start debug update loop
             updateTuningDebug();
 
-            // 1. Listen for GO signals (Model B - Distributed Timeline)
+            // 1. Listen for all cues
             db.ref('show/currentCue').on('value', snap => {
                 const cue = snap.val();
-                if (cue) {
-                    if (cue.action === 'KILL') {
-                        console.log("💀 KILL signal received - reloading");
-                        location.reload();
-                    } else if (cue.action === 'GO') {
-                        // Handle movement start signal with full timeline
-                        handleMovementStart(cue);
-                    } else if (cue.type === 'TUNING_MOVEMENT') {
-                        // Handle tuning movement - use the flute URL from tuning_mode
-                        calibrationMode = true;
-                        playTuningMovement(cue);
+
+                // Always log what we receive
+                console.log("📨 Received cue:", JSON.stringify(cue, null, 2));
+
+                if (!cue) return;
+
+                // Handle based on type/action
+                if (cue.action === 'KILL') {
+                    console.log("💀 KILL signal received - reloading");
+                    location.reload();
+                }
+                else if (cue.action === 'GO') {
+                    console.log("🎬 GO signal received for movement:", cue.movement);
+                    handleMovementStart(cue);
+                }
+                else if (cue.type === 'TUNING_MOVEMENT') {
+                    console.log("🎵 TUNING_MOVEMENT received");
+                    calibrationMode = true;
+                    playTuningMovement(cue);
+                }
+                else if (cue.type === 'AUDIO' && cue.metadata?.purpose === 'seat_test') {
+                    console.log("🎯 Seat test received for:", cue.metadata.seatId);
+                    if (cue.metadata.seatId === mySeat.id) {
+                        handleSeatTest(cue);
                     }
+                }
+                else {
+                    console.log("❓ Unhandled cue type:", cue.type || cue.action);
                 }
             });
 
