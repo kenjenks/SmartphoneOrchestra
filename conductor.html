@@ -1066,10 +1066,11 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
 
                             // Get the detected pitch
                             const detectedPitch = note.pitch;
-                            const detectedTime = now + serverOffset;
+                            const detectedTime = now + serverOffset;  // Keep this for broadcast
+                            const songPosition = detectedTime - tuningStartTime; // Convert to song position in ms
 
-                            // Process with pattern matcher
-                            const match = processPatternMatch(detectedPitch, detectedTime);
+                            // Process with pattern matcher using song position
+                            const match = processPatternMatch(detectedPitch, songPosition);
 
                             // Flash detection indicator on FFT viz
                             const vCtx = document.getElementById('fft-viz').getContext('2d');
