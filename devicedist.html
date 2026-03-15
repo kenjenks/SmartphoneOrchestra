@@ -1589,12 +1589,19 @@ devicedist.html: Feature List
             launchEvents[launchIndex] = launchEvent;
 
             // Get notes for this launch segment
-            const segmentNotes = getNotesForLaunch(launchIndex);
+            let segmentNotes;
+            if (rampStrategy.disableRelaunches) {
+                // In solo/continuous mode, use ALL notes
+                segmentNotes = assignedNotes;
+                console.log(`   📋 Continuous mode: using all ${segmentNotes.length} notes`);
+            } else {
+                // Normal mode: use only notes for this launch segment
+                segmentNotes = getNotesForLaunch(launchIndex);
+                console.log(`   → ${segmentNotes.length} notes assigned to this launch`);
+            }
 
             // Schedule their ramps, passing the full segment for lookahead
             scheduleNoteRamps(segmentNotes, source, gainNode, movementStartTime, audioStartTime, seekOffsetMs, launchIndex);
-
-            console.log(`   → ${segmentNotes.length} notes assigned to this launch`);
 
             return launchEvent;
         }
