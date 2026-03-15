@@ -8,6 +8,7 @@ sending cues to patron devices over Firebase.
 Features:
 - Show control with GO button and timeline execution
 - Warble frequency detection (frequency modulation pattern) for calibration
+- Pattern matcher: Tracks expected vs actual note sequence to identify device timing
 - Individual seat testing during tuning mode
 - Real-time device monitoring and performance registry
 - Seat map visualization with status indicators
@@ -237,6 +238,17 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
     const RAMP_FADE_IN_MS = 30; // Default fade in time
     const RAMP_FADE_OUT_MS = 40; // Default fade out time
     const RAMP_MERGE_THRESHOLD_MS = 50; // Merge notes with gaps <=50ms into blocks
+
+    // Pattern matcher state
+    let expectedNoteIndex = 0; // Next note we expect to hear
+    let detectedPattern = []; // History of detected notes with timing
+    let patternWindowMs = 5000; // Look back window for pattern analysis (5 seconds)
+    let patternConfidence = 0; // How confident we are in the current pattern match (0-1)
+    let lastPatternMatchTime = 0; // When we last successfully matched a note
+    let patternMatchTimeout = null; // Timeout for resetting pattern if no matches
+
+    // Device-specific timing stats
+    let deviceTimingStats = {}; // Tracks average lag per device
 
     // --- CLOCK SYNC ---
     const offsetRef = db.ref(".info/serverTimeOffset");
@@ -581,7 +593,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         });
     }
 
-    // --- 2. THE CONDUCTOR'S EAR (WARBLE DETECTION - REPLACES ULTRASONIC) ---
+    // --- 2. THE CONDUCTOR'S EAR (WARBLE DETECTION WITH PATTERN MATCHER) ---
     async function initMicrophone() {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
@@ -601,6 +613,167 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             alert("Mic Access Required for Calibration");
             document.getElementById('mic-status').innerHTML = '<span style="color:#ff4444">ERROR</span>';
         }
+    }
+
+    // Reset pattern matcher when tuning starts
+    function resetPatternMatcher() {
+        expectedNoteIndex = 0;
+        detectedPattern = [];
+        patternConfidence = 0;
+        lastPatternMatchTime = 0;
+        deviceTimingStats = {};
+
+        if (patternMatchTimeout) {
+            clearTimeout(patternMatchTimeout);
+            patternMatchTimeout = null;
+        }
+
+        console.log("🔄 Pattern matcher reset");
+    }
+
+    // Update device timing statistics
+    function updateDeviceTiming(deviceId, measuredLag) {
+        if (!deviceTimingStats[deviceId]) {
+            deviceTimingStats[deviceId] = {
+                samples: [],
+                avgLag: 0,
+                lastSeen: Date.now() + serverOffset
+            };
+        }
+
+        const stats = deviceTimingStats[deviceId];
+        stats.samples.push(measuredLag);
+        if (stats.samples.length > 10) stats.samples.shift();
+
+        // Calculate rolling average
+        stats.avgLag = stats.samples.reduce((a, b) => a + b, 0) / stats.samples.length;
+        stats.lastSeen = Date.now() + serverOffset;
+
+        console.log(`📊 Device ${deviceId} avg lag: ${stats.avgLag.toFixed(1)}ms (${stats.samples.length} samples)`);
+    }
+
+    // Find the most likely note that matches this detection
+    function findMatchingNote(detectedPitch, detectedTime) {
+        if (!tuningSchedule || !tuningSchedule.notes) return null;
+
+        const now = Date.now() + serverOffset;
+        const songPosition = now - tuningStartTime;
+
+        // Look at notes around the expected index (±5 notes)
+        const searchStart = Math.max(0, expectedNoteIndex - 5);
+        const searchEnd = Math.min(noteTimings.length - 1, expectedNoteIndex + 5);
+
+        let bestMatch = null;
+        let bestScore = -1;
+
+        for (let i = searchStart; i <= searchEnd; i++) {
+            const expectedNote = noteTimings[i];
+            const expectedDevice = tuningSchedule.notes[i]?.deviceId;
+
+            // Check if pitch matches (allow for enharmonic equivalents?)
+            if (expectedNote.pitch !== detectedPitch) continue;
+
+            // Calculate time difference
+            const expectedTime = expectedNote.startMs;
+            const timeDiff = Math.abs(detectedTime - expectedTime);
+
+            // Skip if time difference is too large (>500ms)
+            if (timeDiff > 500) continue;
+
+            // Calculate confidence score based on:
+            // 1. How close we are to expected index (lower is better)
+            const indexDistance = Math.abs(i - expectedNoteIndex);
+
+            // 2. Time difference (smaller is better)
+            const timeScore = Math.max(0, 1 - (timeDiff / 500));
+
+            // 3. Device timing history if available
+            let deviceScore = 0.5;
+            if (expectedDevice && deviceTimingStats[expectedDevice]) {
+                const avgLag = deviceTimingStats[expectedDevice].avgLag;
+                const expectedArrival = expectedTime + avgLag;
+                const deviceTimeDiff = Math.abs(detectedTime - expectedArrival);
+                deviceScore = Math.max(0, 1 - (deviceTimeDiff / 200));
+            }
+
+            // Combined score (weighted)
+            const score = (1 - (indexDistance / 10)) * 0.3 + timeScore * 0.4 + deviceScore * 0.3;
+
+            if (score > bestScore) {
+                bestScore = score;
+                bestMatch = {
+                    noteIndex: i,
+                    expectedTime: expectedTime,
+                    detectedTime: detectedTime,
+                    deviceId: expectedDevice,
+                    score: score,
+                    timeDiff: detectedTime - expectedTime
+                };
+            }
+        }
+
+        return bestMatch;
+    }
+
+    // Process a detected warble with pattern matching
+    function processPatternMatch(detectedPitch, detectedTime) {
+        const match = findMatchingNote(detectedPitch, detectedTime);
+
+        if (!match) {
+            logDetection(`❓ No match found for ${detectedPitch} at ${(detectedTime/1000).toFixed(2)}s`);
+            return null;
+        }
+
+        // Record the detection
+        detectedPattern.push({
+            noteIndex: match.noteIndex,
+            detectedTime: match.detectedTime,
+            expectedTime: match.expectedTime,
+            deviceId: match.deviceId,
+            timeDiff: match.timeDiff,
+            score: match.score
+        });
+
+        // Trim old detections
+        const cutoffTime = detectedTime - patternWindowMs;
+        detectedPattern = detectedPattern.filter(d => d.detectedTime > cutoffTime);
+
+        // Update device timing stats
+        if (match.deviceId) {
+            updateDeviceTiming(match.deviceId, match.timeDiff);
+        }
+
+        // Update pattern confidence based on recent matches
+        const recentMatches = detectedPattern.filter(d =>
+            d.detectedTime > detectedTime - 2000
+        ).length;
+
+        const expectedRecent = Math.min(10, (2000 / 278)); // ~7 notes expected in 2 seconds
+        patternConfidence = Math.min(1, recentMatches / expectedRecent);
+
+        // Update expected next note index
+        if (match.noteIndex >= expectedNoteIndex) {
+            expectedNoteIndex = match.noteIndex + 1;
+        }
+
+        lastPatternMatchTime = detectedTime;
+
+        // Schedule pattern reset if no matches for a while
+        if (patternMatchTimeout) clearTimeout(patternMatchTimeout);
+        patternMatchTimeout = setTimeout(() => {
+            if (Date.now() + serverOffset - lastPatternMatchTime > 3000) {
+                console.log("⚠️ Pattern timeout - resetting matcher");
+                expectedNoteIndex = Math.max(0, expectedNoteIndex - 3); // Rewind a bit
+                patternConfidence *= 0.5;
+            }
+        }, 3500);
+
+        logDetection(`🎯 Pattern match: Note ${match.noteIndex} (${detectedPitch}) at ${(detectedTime/1000).toFixed(2)}s, diff=${match.timeDiff.toFixed(1)}ms, conf=${patternConfidence.toFixed(2)}`);
+
+        // Broadcast the detection time for device calibration
+        broadcastDetection(detectedTime);
+
+        return match;
     }
 
     // Warble Detection: Look for frequency modulation patterns
@@ -744,14 +917,20 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
                         if (now - lastWarbleTime > WARBLE_COOLDOWN_MS) {
                             lastWarbleTime = now;
 
-                            // Broadcast the detection time immediately - NO OFFSET
-                            // Devices will use their calibrated lag to adjust
-                            const tHeard = now + serverOffset;
-                            broadcastDetection(tHeard);
+                            // Get the detected pitch
+                            const detectedPitch = note.pitch;
+                            const detectedTime = now + serverOffset;
+
+                            // Process with pattern matcher
+                            const match = processPatternMatch(detectedPitch, detectedTime);
 
                             // Log with note info for debugging
                             const songPosSec = (songPosition / 1000).toFixed(1);
-                            logDetection(`🎯 Warble detected: Note ${note.index} (${note.pitch}) at ${songPos}s (energy: ${energy.toFixed(4)})`);
+                            if (match) {
+                                logDetection(`🎯 Pattern matched: Note ${match.noteIndex} (${detectedPitch}) at ${songPosSec}s (diff: ${match.timeDiff.toFixed(1)}ms)`);
+                            } else {
+                                logDetection(`👂 Warble heard: ${detectedPitch} at ${songPosSec}s (energy: ${energy.toFixed(4)})`);
+                            }
 
                             // Flash detection indicator on FFT viz
                             const vCtx = document.getElementById('fft-viz').getContext('2d');
@@ -1034,6 +1213,9 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         tuningSchedule = distributeNotes(deviceOrder);
         tuningStartTime = Date.now() + 3000;
 
+        // Reset pattern matcher for new tuning session
+        resetPatternMatcher();
+
         // Ensure we have pillar URLs before starting
         if (Object.keys(PILLAR_URLS).length === 0) {
             logDetection("No pillar URLs from movement, loading defaults");
@@ -1168,8 +1350,12 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             if (lastSeen && lastSeen > HEARTBEAT_TIMEOUT_MS) row.className += ' critical';
             else if (dev.performance?.lowPerf) row.className += ' warning';
 
+            // Add timing stats if available
+            const timingInfo = deviceTimingStats[id] ?
+                ` (${deviceTimingStats[id].avgLag.toFixed(0)}ms)` : '';
+
             row.innerHTML = `
-                <span>${id.substring(0, 8)}...</span>
+                <span>${id.substring(0, 8)}...${timingInfo}</span>
                 <span>${dev.performance?.jitter || '--'}ms</span>
                 <span>${dev.status || 'IDLE'}</span>
             `;
