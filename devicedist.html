@@ -1593,7 +1593,7 @@ devicedist.html: Feature List
             if (rampStrategy.disableRelaunches) {
                 // In solo/continuous mode, use ALL notes
                 segmentNotes = assignedNotes;
-                console.log(`   📋 Continuous mode: using all ${segmentNotes.length} notes`);
+                console.log(`   📋 Continuous mode: using all ${segmentNotes.length} notes for continuous playback`);
             } else {
                 // Normal mode: use only notes for this launch segment
                 segmentNotes = getNotesForLaunch(launchIndex);
