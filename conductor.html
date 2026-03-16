@@ -1152,6 +1152,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
 
                 // Look for energy above threshold (from bach_tester.py calibration)
                 if (energy > WARBLE_ENERGY_THRESHOLD) {
+                    console.log(`🔊 Energy detected: ${energy.toFixed(6)} at ${freq}Hz (threshold: ${WARBLE_ENERGY_THRESHOLD})`);
                     // Now check for frequency modulation (warble pattern) in recent frames
                     let modulationScore = 0;
 
