@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zynth Player - Test Tone Generator</title>
+    <style>
+        body {
+            background: #1a1a1a;
+            color: #eee;
+            font-family: 'Segoe UI', sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            background: #252525;
+            border: 1px solid #333;
+            border-radius: 20px;
+            padding: 30px;
+            max-width: 500px;
+            width: 100%;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+        h1 {
+            color: #00ffcc;
+            margin-top: 0;
+            text-align: center;
+            font-size: 2rem;
+        }
+        .subtitle {
+            text-align: center;
+            color: #888;
+            margin-bottom: 30px;
+        }
+        .control-group {
+            background: #1a1a1a;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .control-label {
+            color: #00ffcc;
+            font-weight: bold;
+            margin-bottom: 10px;
+            font-size: 1.1rem;
+        }
+        .slider-container {
+            margin: 15px 0;
+        }
+        .slider-label {
+            display: flex;
+            justify-content: space-between;
+            color: #888;
+            margin-bottom: 5px;
+        }
+        input[type=range] {
+            width: 100%;
+            height: 8px;
+            background: #333;
+            border-radius: 4px;
+            -webkit-appearance: none;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 20px;
+            height: 20px;
+            background: #00ffcc;
+            border-radius: 50%;
+            cursor: pointer;
+            box-shadow: 0 0 10px #00ffcc;
+        }
+        .value-display {
+            color: #00ffcc;
+            font-weight: bold;
+        }
+        .button-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+            margin: 20px 0;
+        }
+        button {
+            background: #333;
+            color: #fff;
+            border: 1px solid #555;
+            padding: 15px;
+            border-radius: 30px;
+            font-size: 1.1rem;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        button:hover {
+            background: #444;
+            transform: scale(1.02);
+        }
+        button.primary {
+            background: #00ffcc;
+            color: #000;
+            border: none;
+            grid-column: span 2;
+        }
+        button.primary:hover {
+            background: #00cca3;
+        }
+        button.warning {
+            background: #442288;
+            color: #fff;
+        }
+        .status-box {
+            background: #000;
+            border-radius: 8px;
+            padding: 15px;
+            font-family: monospace;
+            margin: 20px 0;
+            border-left: 4px solid #00ffcc;
+        }
+        .indicator {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 20px 0;
+        }
+        .led {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            background: #222;
+            margin: 0 10px;
+            transition: all 0.1s ease;
+        }
+        .led.playing {
+            background: #00ffcc;
+            box-shadow: 0 0 40px #00ffcc;
+        }
+        .log {
+            background: #000;
+            border-radius: 8px;
+            padding: 10px;
+            height: 150px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 11px;
+            color: #888;
+            border: 1px solid #333;
+        }
+        .log-entry {
+            margin-bottom: 4px;
+            border-bottom: 1px dotted #222;
+        }
+        .preset-box {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            margin: 15px 0;
+        }
+        .preset-btn {
+            background: #1a1a1a;
+            border: 1px solid #444;
+            padding: 10px;
+            border-radius: 20px;
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎵 Zynth Player</h1>
+        <div class="subtitle">Synthesized note generator with warble</div>
+
+        <div class="control-group">
+            <div class="control-label">Note Settings</div>
+
+            <div class="slider-container">
+                <div class="slider-label">
+                    <span>Frequency</span>
+                    <span class="value-display" id="freq-value">440 Hz</span>
+                </div>
+                <input type="range" id="freq-slider" min="220" max="880" value="440" step="1">
+            </div>
+
+            <div class="slider-container">
+                <div class="slider-label">
+                    <span>Note duration</span>
+                    <span class="value-display" id="duration-value">500 ms</span>
+                </div>
+                <input type="range" id="duration-slider" min="100" max="2000" value="500" step="10">
+            </div>
+
+            <div class="preset-box">
+                <button class="preset-btn" onclick="setPreset('C4')">C4 (262Hz)</button>
+                <button class="preset-btn" onclick="setPreset('E4')">E4 (330Hz)</button>
+                <button class="preset-btn" onclick="setPreset('G4')">G4 (392Hz)</button>
+                <button class="preset-btn" onclick="setPreset('A4')">A4 (440Hz)</button>
+                <button class="preset-btn" onclick="setPreset('C5')">C5 (523Hz)</button>
+                <button class="preset-btn" onclick="setPreset('A5')">A5 (880Hz)</button>
+            </div>
+        </div>
+
+        <div class="control-group">
+            <div class="control-label">Warble Settings</div>
+
+            <div class="slider-container">
+                <div class="slider-label">
+                    <span>Warble depth</span>
+                    <span class="value-display" id="depth-value">30 Hz</span>
+                </div>
+                <input type="range" id="depth-slider" min="0" max="100" value="30" step="1">
+            </div>
+
+            <div class="slider-container">
+                <div class="slider-label">
+                    <span>Warble rate</span>
+                    <span class="value-display" id="rate-value">2.5 Hz</span>
+                </div>
+                <input type="range" id="rate-slider" min="0.5" max="10" value="2.5" step="0.1">
+            </div>
+
+            <div style="display: flex; align-items: center; margin: 15px 0;">
+                <input type="checkbox" id="warble-toggle" checked style="margin-right: 10px; width: 20px; height: 20px;">
+                <label for="warble-toggle">Enable warble</label>
+            </div>
+        </div>
+
+        <div class="button-grid">
+            <button class="primary" onclick="playNote()">▶️ PLAY NOTE</button>
+            <button class="warning" onclick="playRepeating()">🔄 Play 5x</button>
+            <button onclick="stopAll()">⏹️ Stop</button>
+            <button onclick="initAudio()">🔊 Init Audio</button>
+        </div>
+
+        <div class="status-box">
+            <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
+                <span>Audio context:</span>
+                <span id="audio-state" style="color: #ffcc00;">not initialized</span>
+            </div>
+            <div style="display: flex; justify-content: space-between;">
+                <span>Last played:</span>
+                <span id="last-played" style="color: #00ffcc;">-</span>
+            </div>
+        </div>
+
+        <div class="indicator">
+            <div class="led" id="play-led"></div>
+        </div>
+
+        <div class="log" id="log">
+            <div class="log-entry">[System] Zynth Player ready</div>
+        </div>
+    </div>
+
+    <script>
+        // ============================================
+        // Global state
+        // ============================================
+        let audioCtx = null;
+        let isPlaying = false;
+        let repeatTimeout = null;
+
+        // ============================================
+        // Initialize audio on first user interaction
+        // ============================================
+        async function initAudio() {
+            try {
+                if (!audioCtx) {
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                    log("✅ AudioContext created");
+                }
+
+                if (audioCtx.state === 'suspended') {
+                    await audioCtx.resume();
+                    log("✅ AudioContext resumed");
+                }
+
+                document.getElementById('audio-state').innerText = audioCtx.state;
+                document.getElementById('audio-state').style.color = '#00ffcc';
+
+                // Play a silent tone to prime
+                const oscillator = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                gain.gain.value = 0;
+                oscillator.connect(gain).connect(audioCtx.destination);
+                oscillator.start();
+                oscillator.stop(audioCtx.currentTime + 0.1);
+
+                log("🔊 Audio system primed");
+
+            } catch (e) {
+                log(`❌ Audio init failed: ${e.message}`);
+            }
+        }
+
+        // ============================================
+        // UI Controls
+        // ============================================
+        document.getElementById('freq-slider').addEventListener('input', (e) => {
+            document.getElementById('freq-value').innerText = e.target.value + ' Hz';
+        });
+
+        document.getElementById('duration-slider').addEventListener('input', (e) => {
+            document.getElementById('duration-value').innerText = e.target.value + ' ms';
+        });
+
+        document.getElementById('depth-slider').addEventListener('input', (e) => {
+            document.getElementById('depth-value').innerText = e.target.value + ' Hz';
+        });
+
+        document.getElementById('rate-slider').addEventListener('input', (e) => {
+            document.getElementById('rate-value').innerText = e.target.value + ' Hz';
+        });
+
+        // ============================================
+        // Preset notes
+        // ============================================
+        function setPreset(note) {
+            const freqs = {
+                'C4': 262,
+                'E4': 330,
+                'G4': 392,
+                'A4': 440,
+                'C5': 523,
+                'A5': 880
+            };
+
+            const freq = freqs[note];
+            if (freq) {
+                document.getElementById('freq-slider').value = freq;
+                document.getElementById('freq-value').innerText = freq + ' Hz';
+                log(`🎵 Preset: ${note} (${freq}Hz)`);
+            }
+        }
+
+        // ============================================
+        // Play a single note
+        // ============================================
+        async function playNote() {
+            try {
+                await initAudio();
+
+                const freq = parseFloat(document.getElementById('freq-slider').value);
+                const durationMs = parseFloat(document.getElementById('duration-slider').value);
+                const depth = parseFloat(document.getElementById('depth-slider').value);
+                const rate = parseFloat(document.getElementById('rate-slider').value);
+                const enableWarble = document.getElementById('warble-toggle').checked;
+
+                const duration = durationMs / 1000;
+
+                // Flash LED
+                const led = document.getElementById('play-led');
+                led.classList.add('playing');
+                setTimeout(() => led.classList.remove('playing'), 100);
+
+                // Create oscillator
+                const oscillator = audioCtx.createOscillator();
+                const gainNode = audioCtx.createGain();
+
+                oscillator.type = 'sine';
+                oscillator.frequency.value = freq;
+
+                // Add warble if enabled
+                if (enableWarble && depth > 0) {
+                    const modOsc = audioCtx.createOscillator();
+                    modOsc.frequency.value = rate;
+
+                    const modGain = audioCtx.createGain();
+                    modGain.gain.value = depth;
+                    modOsc.connect(modGain).connect(oscillator.frequency);
+
+                    modOsc.start();
+                    modOsc.stop(audioCtx.currentTime + duration);
+                }
+
+                // Smooth envelope
+                gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+                gainNode.gain.linearRampToValueAtTime(0.3, audioCtx.currentTime + 0.01);
+                gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime + duration - 0.01);
+                gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + duration);
+
+                oscillator.connect(gainNode).connect(audioCtx.destination);
+
+                oscillator.start();
+                oscillator.stop(audioCtx.currentTime + duration);
+
+                const warbleStatus = enableWarble ? `depth ${depth}Hz, rate ${rate}Hz` : 'no warble';
+                log(`🎵 Played: ${freq}Hz for ${durationMs}ms (${warbleStatus})`);
+
+                document.getElementById('last-played').innerText = `${freq}Hz at ${new Date().toLocaleTimeString()}`;
+
+            } catch (e) {
+                log(`❌ Playback failed: ${e.message}`);
+            }
+        }
+
+        // ============================================
+        // Play repeating notes
+        // ============================================
+        function playRepeating() {
+            if (repeatTimeout) {
+                clearTimeout(repeatTimeout);
+                repeatTimeout = null;
+            }
+
+            let count = 0;
+            const maxCount = 5;
+
+            function playNext() {
+                if (count < maxCount) {
+                    playNote();
+                    count++;
+                    repeatTimeout = setTimeout(playNext, 800); // 800ms between notes
+                } else {
+                    repeatTimeout = null;
+                    log("✅ Repeating sequence complete");
+                }
+            }
+
+            log(`🔄 Playing ${maxCount} notes...`);
+            playNext();
+        }
+
+        // ============================================
+        // Stop all playback
+        // ============================================
+        function stopAll() {
+            if (repeatTimeout) {
+                clearTimeout(repeatTimeout);
+                repeatTimeout = null;
+            }
+
+            // Note: Can't easily stop already-playing oscillators
+            // but we can prevent new ones
+
+            log("⏹️ Stopped");
+        }
+
+        // ============================================
+        // Logging
+        // ============================================
+        function log(message) {
+            const logDiv = document.getElementById('log');
+            const timestamp = new Date().toLocaleTimeString();
+            logDiv.innerHTML = `<div class="log-entry">[${timestamp}] ${message}</div>` + logDiv.innerHTML;
+            if (logDiv.children.length > 20) logDiv.removeChild(logDiv.lastChild);
+            console.log(message);
+        }
+
+        // ============================================
+        // Auto-init on first button click
+        // ============================================
+        document.querySelectorAll('button').forEach(btn => {
+            btn.addEventListener('click', () => {
+                if (!audioCtx) initAudio();
+            });
+        });
+
+        // Initial log
+        log("System ready - click buttons to play");
+    </script>
+</body>
+</html>

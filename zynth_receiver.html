@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zynth Receiver - Warble Detector</title>
+    <style>
+        body {
+            background: #1a1a1a;
+            color: #eee;
+            font-family: 'Segoe UI', sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            background: #252525;
+            border: 1px solid #333;
+            border-radius: 20px;
+            padding: 30px;
+            max-width: 500px;
+            width: 100%;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+        h1 {
+            color: #00ffcc;
+            margin-top: 0;
+            text-align: center;
+            font-size: 2rem;
+        }
+        .subtitle {
+            text-align: center;
+            color: #888;
+            margin-bottom: 30px;
+        }
+        .status-card {
+            background: #1a1a1a;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        .mic-status {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: #000;
+            padding: 15px;
+            border-radius: 30px;
+            margin: 20px 0;
+        }
+        .mic-led {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #444;
+            transition: all 0.3s;
+        }
+        .mic-led.active {
+            background: #00ffcc;
+            box-shadow: 0 0 20px #00ffcc;
+        }
+        .mic-led.listening {
+            background: #ffcc00;
+            animation: pulse 1s infinite;
+        }
+        @keyframes pulse {
+            0% { opacity: 0.5; }
+            50% { opacity: 1; }
+            100% { opacity: 0.5; }
+        }
+        .detection-indicator {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 30px 0;
+        }
+        .warble-led {
+            width: 100px;
+            height: 100px;
+            border-radius: 50%;
+            background: #222;
+            transition: all 0.1s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2rem;
+            margin-bottom: 20px;
+        }
+        .warble-led.detected {
+            background: #00ffcc;
+            box-shadow: 0 0 60px #00ffcc;
+            animation: flash 0.3s;
+        }
+        @keyframes flash {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.2); }
+            100% { transform: scale(1); }
+        }
+        .frequency-display {
+            font-size: 2rem;
+            font-weight: bold;
+            color: #00ffcc;
+            font-family: monospace;
+        }
+        .detection-count {
+            font-size: 1.2rem;
+            color: #888;
+            margin-top: 10px;
+        }
+        button {
+            background: #333;
+            color: #fff;
+            border: 1px solid #555;
+            padding: 15px 30px;
+            border-radius: 30px;
+            font-size: 1.1rem;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s;
+            width: 100%;
+            margin: 10px 0;
+        }
+        button.primary {
+            background: #00ffcc;
+            color: #000;
+            border: none;
+        }
+        button.primary:hover {
+            background: #00cca3;
+        }
+        button.warning {
+            background: #442288;
+            color: #fff;
+        }
+        button:disabled {
+            background: #333;
+            color: #666;
+            cursor: not-allowed;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+            margin: 20px 0;
+        }
+        .stat-box {
+            background: #000;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .stat-label {
+            color: #888;
+            font-size: 0.8rem;
+            margin-bottom: 5px;
+        }
+        .stat-value {
+            color: #00ffcc;
+            font-size: 1.2rem;
+            font-weight: bold;
+        }
+        .fft-viz {
+            width: 100%;
+            height: 100px;
+            background: #000;
+            border-radius: 8px;
+            margin: 20px 0;
+            border: 1px solid #333;
+        }
+        .log {
+            background: #000;
+            border-radius: 8px;
+            padding: 10px;
+            height: 150px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 11px;
+            color: #888;
+            border: 1px solid #333;
+            margin-top: 20px;
+        }
+        .log-entry {
+            margin-bottom: 4px;
+            border-bottom: 1px dotted #222;
+        }
+        .control-row {
+            display: flex;
+            gap: 10px;
+            margin: 15px 0;
+        }
+        .freq-input {
+            flex: 1;
+            background: #000;
+            border: 1px solid #333;
+            color: #00ffcc;
+            padding: 10px;
+            border-radius: 20px;
+            font-family: monospace;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>👂 Zynth Receiver</h1>
+        <div class="subtitle">Warble detector - listens for frequency modulation</div>
+
+        <div class="status-card">
+            <div class="mic-status">
+                <span>Microphone</span>
+                <div class="mic-led" id="mic-led"></div>
+            </div>
+            <button id="mic-btn" class="primary">🎤 Enable Microphone</button>
+            <button id="stop-mic-btn" class="warning" disabled>⏹️ Stop Listening</button>
+        </div>
+
+        <div class="control-row">
+            <input type="text" id="target-freq" class="freq-input" placeholder="Target frequency (Hz)" value="440">
+            <button id="set-freq-btn">Set</button>
+        </div>
+
+        <div class="detection-indicator">
+            <div class="warble-led" id="warble-led">👂</div>
+            <div class="frequency-display" id="detected-freq">--- Hz</div>
+            <div class="detection-count" id="detection-count">Detections: 0</div>
+        </div>
+
+        <canvas id="fft-viz" class="fft-viz"></canvas>
+
+        <div class="stats-grid">
+            <div class="stat-box">
+                <div class="stat-label">Peak frequency</div>
+                <div class="stat-value" id="peak-freq">---</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-label">Confidence</div>
+                <div class="stat-value" id="confidence">---</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-label">Modulation</div>
+                <div class="stat-value" id="modulation">---</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-label">Noise floor</div>
+                <div class="stat-value" id="noise-floor">---</div>
+            </div>
+        </div>
+
+        <div class="log" id="log">
+            <div class="log-entry">[System] Zynth Receiver ready</div>
+        </div>
+    </div>
+
+    <script>
+        // ============================================
+        // Global state
+        // ============================================
+        let audioCtx = null;
+        let analyser = null;
+        let mediaStream = null;
+        let isListening = false;
+        let animationFrame = null;
+        let detectionCount = 0;
+        let targetFrequency = 440;
+        let warbleBuffer = [];
+
+        // FFT parameters
+        const FFT_SIZE = 4096;
+        const WARBLE_LOOKBACK_FRAMES = 10;
+        const WARBLE_FREQ_BINS = 3;
+        const WARBLE_ENERGY_THRESHOLD = 0.0008;
+        const WARBLE_MIN_CONFIDENCE = 0.6;
+
+        // ============================================
+        // DOM elements
+        // ============================================
+        const micBtn = document.getElementById('mic-btn');
+        const stopMicBtn = document.getElementById('stop-mic-btn');
+        const micLed = document.getElementById('mic-led');
+        const warbleLed = document.getElementById('warble-led');
+        const detectedFreqSpan = document.getElementById('detected-freq');
+        const detectionCountSpan = document.getElementById('detection-count');
+        const peakFreqSpan = document.getElementById('peak-freq');
+        const confidenceSpan = document.getElementById('confidence');
+        const modulationSpan = document.getElementById('modulation');
+        const noiseFloorSpan = document.getElementById('noise-floor');
+        const targetFreqInput = document.getElementById('target-freq');
+        const setFreqBtn = document.getElementById('set-freq-btn');
+        const canvas = document.getElementById('fft-viz');
+        const canvasCtx = canvas.getContext('2d');
+
+        // ============================================
+        // Set target frequency
+        // ============================================
+        setFreqBtn.addEventListener('click', () => {
+            const val = parseFloat(targetFreqInput.value);
+            if (!isNaN(val) && val > 20 && val < 20000) {
+                targetFrequency = val;
+                log(`🎯 Target frequency set to ${targetFrequency} Hz`);
+                targetFreqInput.value = targetFrequency;
+            } else {
+                targetFreqInput.value = targetFrequency;
+            }
+        });
+
+        // ============================================
+        // Enable microphone
+        // ============================================
+        micBtn.addEventListener('click', async () => {
+            try {
+                if (!audioCtx) {
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+
+                log("🎤 Requesting microphone access...");
+
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        echoCancellation: false,
+                        noiseSuppression: false,
+                        autoGainControl: false,
+                        sampleRate: 44100
+                    }
+                });
+
+                mediaStream = stream;
+
+                const source = audioCtx.createMediaStreamSource(stream);
+                analyser = audioCtx.createAnalyser();
+                analyser.fftSize = FFT_SIZE;
+                analyser.smoothingTimeConstant = 0.2;
+
+                source.connect(analyser);
+
+                if (audioCtx.state === 'suspended') {
+                    await audioCtx.resume();
+                }
+
+                isListening = true;
+                micLed.className = 'mic-led listening';
+                micBtn.disabled = true;
+                stopMicBtn.disabled = false;
+
+                log("✅ Microphone active - listening for warbles");
+
+                // Start visualization and detection
+                drawFFT();
+                detectWarble();
+
+            } catch (e) {
+                log(`❌ Mic error: ${e.message}`);
+                micLed.className = 'mic-led';
+            }
+        });
+
+        // ============================================
+        // Stop listening
+        // ============================================
+        stopMicBtn.addEventListener('click', () => {
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(track => track.stop());
+                mediaStream = null;
+            }
+
+            isListening = false;
+            analyser = null;
+            micLed.className = 'mic-led';
+            micBtn.disabled = false;
+            stopMicBtn.disabled = true;
+
+            if (animationFrame) {
+                cancelAnimationFrame(animationFrame);
+                animationFrame = null;
+            }
+
+            // Clear canvas
+            canvasCtx.fillStyle = '#000';
+            canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
+
+            log("⏹️ Stopped listening");
+        });
+
+        // ============================================
+        // Draw FFT visualization
+        // ============================================
+        function drawFFT() {
+            if (!isListening || !analyser) return;
+
+            const bufferLength = analyser.frequencyBinCount;
+            const dataArray = new Uint8Array(bufferLength);
+            analyser.getByteFrequencyData(dataArray);
+
+            canvasCtx.fillStyle = '#000';
+            canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
+
+            const barWidth = (canvas.width / bufferLength) * 2;
+            let barHeight;
+            let x = 0;
+
+            // Draw up to 2000 Hz
+            const maxBin = Math.min(bufferLength, Math.floor(2000 / (audioCtx.sampleRate / FFT_SIZE)));
+
+            for (let i = 0; i < maxBin; i++) {
+                barHeight = dataArray[i] / 2;
+
+                canvasCtx.fillStyle = `rgb(${dataArray[i]}, ${100 + dataArray[i]}, 100)`;
+                canvasCtx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
+
+                x += barWidth + 1;
+            }
+
+            // Draw target frequency line
+            const targetBin = Math.floor(targetFrequency / (audioCtx.sampleRate / FFT_SIZE));
+            if (targetBin < maxBin) {
+                const targetX = targetBin * (barWidth + 1) * 0.5;
+                canvasCtx.strokeStyle = '#00ffcc';
+                canvasCtx.lineWidth = 2;
+                canvasCtx.beginPath();
+                canvasCtx.moveTo(targetX, 0);
+                canvasCtx.lineTo(targetX, canvas.height);
+                canvasCtx.stroke();
+            }
+
+            animationFrame = requestAnimationFrame(drawFFT);
+        }
+
+        // ============================================
+        // Warble detection
+        // ============================================
+        function detectWarble() {
+            if (!isListening || !analyser || !audioCtx) {
+                requestAnimationFrame(detectWarble);
+                return;
+            }
+
+            const bufferLength = analyser.frequencyBinCount;
+            const dataArray = new Uint8Array(bufferLength);
+            analyser.getByteFrequencyData(dataArray);
+
+            // Convert to float for analysis
+            const floatData = new Float32Array(bufferLength);
+            for (let i = 0; i < bufferLength; i++) {
+                floatData[i] = dataArray[i] / 255; // Normalize to 0-1
+            }
+
+            // Store in buffer for temporal analysis
+            warbleBuffer.push({
+                time: Date.now(),
+                data: floatData.slice()
+            });
+
+            if (warbleBuffer.length > WARBLE_LOOKBACK_FRAMES * 2) {
+                warbleBuffer.shift();
+            }
+
+            if (warbleBuffer.length < WARBLE_LOOKBACK_FRAMES) {
+                requestAnimationFrame(detectWarble);
+                return;
+            }
+
+            // Get recent frames
+            const recentFrames = warbleBuffer.slice(-WARBLE_LOOKBACK_FRAMES);
+
+            // Calculate bin for target frequency
+            const nyquist = audioCtx.sampleRate / 2;
+            const targetBin = Math.floor(targetFrequency / nyquist * analyser.frequencyBinCount);
+
+            if (targetBin < 0 || targetBin >= bufferLength) {
+                requestAnimationFrame(detectWarble);
+                return;
+            }
+
+            // Get energy in surrounding bins
+            let energy = 0;
+            let binCount = 0;
+            for (let i = -WARBLE_FREQ_BINS; i <= WARBLE_FREQ_BINS; i++) {
+                const idx = targetBin + i;
+                if (idx >= 0 && idx < bufferLength) {
+                    energy += floatData[idx];
+                    binCount++;
+                }
+            }
+            energy = energy / binCount;
+
+            // Update noise floor (average of all bins)
+            let totalEnergy = 0;
+            for (let i = 0; i < bufferLength; i++) {
+                totalEnergy += floatData[i];
+            }
+            const noiseFloor = totalEnergy / bufferLength;
+            noiseFloorSpan.innerText = noiseFloor.toFixed(4);
+
+            // Find peak frequency
+            let maxEnergy = 0;
+            let maxIdx = 0;
+            for (let i = 0; i < bufferLength; i++) {
+                if (floatData[i] > maxEnergy) {
+                    maxEnergy = floatData[i];
+                    maxIdx = i;
+                }
+            }
+            const peakFreq = (maxIdx / bufferLength) * nyquist;
+            peakFreqSpan.innerText = Math.round(peakFreq) + ' Hz';
+
+            // Look for energy above threshold
+            if (energy > WARBLE_ENERGY_THRESHOLD) {
+                // Analyze modulation
+                let modulationScore = 0;
+
+                // Extract frequency peaks over time
+                const peakFreqs = [];
+                for (let i = 0; i < recentFrames.length; i++) {
+                    const frame = recentFrames[i];
+                    let maxEnergy = 0;
+                    let maxIdx = targetBin;
+
+                    for (let j = -5; j <= 5; j++) {
+                        const idx = targetBin + j;
+                        if (idx >= 0 && idx < frame.data.length && frame.data[idx] > maxEnergy) {
+                            maxEnergy = frame.data[idx];
+                            maxIdx = idx;
+                        }
+                    }
+
+                    const freq = (maxIdx / analyser.frequencyBinCount) * nyquist;
+                    peakFreqs.push(freq);
+                }
+
+                // Calculate frequency variation
+                if (peakFreqs.length > 3) {
+                    const freqChanges = [];
+                    for (let i = 1; i < peakFreqs.length; i++) {
+                        freqChanges.push(peakFreqs[i] - peakFreqs[i-1]);
+                    }
+
+                    // Look for alternating sign changes (characteristic of warble)
+                    let signChanges = 0;
+                    for (let i = 1; i < freqChanges.length; i++) {
+                        if (Math.sign(freqChanges[i]) !== Math.sign(freqChanges[i-1]) &&
+                            Math.abs(freqChanges[i]) > 2) {
+                            signChanges++;
+                        }
+                    }
+
+                    const freqRange = Math.max(...peakFreqs) - Math.min(...peakFreqs);
+
+                    modulationSpan.innerText = `${freqRange.toFixed(1)}Hz, ${signChanges} changes`;
+
+                    if (freqRange > 15 && freqRange < 80 && signChanges >= 2) {
+                        modulationScore += 0.7;
+                    }
+
+                    if (energy > WARBLE_ENERGY_THRESHOLD * 1.5) {
+                        modulationScore += 0.3;
+                    }
+                }
+
+                confidenceSpan.innerText = modulationScore.toFixed(2);
+
+                if (modulationScore >= WARBLE_MIN_CONFIDENCE) {
+                    // Warble detected!
+                    detectionCount++;
+                    detectionCountSpan.innerText = `Detections: ${detectionCount}`;
+                    detectedFreqSpan.innerText = Math.round(peakFreq) + ' Hz';
+
+                    warbleLed.className = 'warble-led detected';
+                    setTimeout(() => {
+                        warbleLed.className = 'warble-led';
+                    }, 200);
+
+                    log(`🎯 Warble detected! Freq: ${Math.round(peakFreq)}Hz, Score: ${modulationScore.toFixed(2)}`);
+                }
+            }
+
+            requestAnimationFrame(detectWarble);
+        }
+
+        // ============================================
+        // Logging
+        // ============================================
+        function log(message) {
+            const logDiv = document.getElementById('log');
+            const timestamp = new Date().toLocaleTimeString();
+            logDiv.innerHTML = `<div class="log-entry">[${timestamp}] ${message}</div>` + logDiv.innerHTML;
+            if (logDiv.children.length > 20) logDiv.removeChild(logDiv.lastChild);
+            console.log(message);
+        }
+
+        // ============================================
+        // Cleanup
+        // ============================================
+        window.addEventListener('beforeunload', () => {
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(track => track.stop());
+            }
+            if (animationFrame) {
+                cancelAnimationFrame(animationFrame);
+            }
+            if (audioCtx) {
+                audioCtx.close();
+            }
+        });
+
+        // Initial log
+        log("System ready - click 'Enable Microphone' to start listening");
+    </script>
+</body>
+</html>
