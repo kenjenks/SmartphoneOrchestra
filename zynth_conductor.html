@@ -1,0 +1,357 @@
+<!--
+zynth_conductor.html
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Synth Conductor - 30 Second Test</title>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
+    <style>
+        body {
+            background: #1a1a1a;
+            color: #eee;
+            font-family: 'Segoe UI', sans-serif;
+            padding: 20px;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        h1 {
+            color: #00ffcc;
+            border-bottom: 1px solid #333;
+            padding-bottom: 10px;
+        }
+        .panel {
+            background: #252525;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        button {
+            background: #00ffcc;
+            color: #000;
+            border: none;
+            padding: 15px 30px;
+            font-size: 1.2rem;
+            font-weight: bold;
+            border-radius: 50px;
+            cursor: pointer;
+            margin: 10px;
+            transition: transform 0.2s;
+        }
+        button:hover {
+            transform: scale(1.05);
+        }
+        button.danger {
+            background: #600;
+            color: #fff;
+        }
+        .status {
+            font-family: monospace;
+            background: #000;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+            color: #0f0;
+        }
+        .log {
+            font-family: monospace;
+            font-size: 11px;
+            background: #000;
+            padding: 10px;
+            border-radius: 4px;
+            height: 200px;
+            overflow-y: auto;
+            color: #888;
+        }
+        .config-item {
+            display: flex;
+            justify-content: space-between;
+            margin: 10px 0;
+            padding: 5px;
+            background: #1a1a1a;
+            border-radius: 4px;
+        }
+        .label {
+            color: #888;
+        }
+        .value {
+            color: #00ffcc;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <h1>🎵 Synth Conductor - 30 Second Test</h1>
+
+    <div class="panel">
+        <h2>Configuration</h2>
+        <div class="config-item">
+            <span class="label">Key:</span>
+            <span class="value">C Major</span>
+        </div>
+        <div class="config-item">
+            <span class="label">Tempo:</span>
+            <span class="value">30 BPM (2 seconds per note)</span>
+        </div>
+        <div class="config-item">
+            <span class="label">Duration:</span>
+            <span class="value">30 seconds (15 notes)</span>
+        </div>
+        <div class="config-item">
+            <span class="label">Note length:</span>
+            <span class="value">500ms</span>
+        </div>
+        <div class="config-item">
+            <span class="label">Silence between notes:</span>
+            <span class="value">1500ms</span>
+        </div>
+        <div class="config-item">
+            <span class="label">Warble:</span>
+            <span class="value">30Hz depth, 2.5Hz rate, 120ms</span>
+        </div>
+    </div>
+
+    <div class="panel">
+        <h2>Control</h2>
+        <button id="startBtn">▶️ START 30-SECOND TEST</button>
+        <button id="stopBtn" class="danger">⏹️ STOP</button>
+
+        <div class="status" id="connectionStatus">🔴 Firebase Disconnected</div>
+        <div class="status" id="testStatus">⏸️ Ready</div>
+    </div>
+
+    <div class="panel">
+        <h2>Device Order (Spiral)</h2>
+        <div id="deviceList" class="status">
+            A1, B2, (PILLAR_FL, PILLAR_FR, PILLAR_BL, PILLAR_BR)
+        </div>
+    </div>
+
+    <div class="panel">
+        <h2>Note Schedule</h2>
+        <div id="schedule" class="log">
+            Waiting to generate schedule...
+        </div>
+    </div>
+
+    <div class="panel">
+        <h2>Event Log</h2>
+        <div id="log" class="log">
+            Ready...
+        </div>
+    </div>
+
+    <script>
+        // Firebase Configuration
+        const firebaseConfig = {
+            apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
+            authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
+            databaseURL: "https://smartphoneorchestra-dwt-default-rtdb.firebaseio.com/",
+            projectId: "smartphoneorchestra-dwt"
+        };
+
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
+        // ============================================
+        // HARDCODED SYNTH CONFIGURATION
+        // ============================================
+        const SYNTH_CONFIG = {
+            // Musical parameters
+            key: "C",
+            scale: "major",
+            tempo_bpm: 30,  // 2 seconds per note (60/30 = 2s)
+            note_duration_ms: 500,
+            gap_ms: 1500,    // Silence between notes
+            total_duration_ms: 30000, // 30 seconds
+
+            // The arpeggio pattern (C major)
+            flute_pattern: [
+                { pitch: "C4", duration_ms: 500 },  // root
+                { pitch: "E4", duration_ms: 500 },  // third
+                { pitch: "G4", duration_ms: 500 },  // fifth
+                { pitch: "C5", duration_ms: 500 },  // octave
+                { pitch: "G4", duration_ms: 500 },  // fifth down
+                { pitch: "E4", duration_ms: 500 },  // third down
+                { pitch: "C4", duration_ms: 500 }   // root down
+            ],
+
+            // Pillar patterns (continuous, repeating every 2 seconds)
+            pillar_patterns: {
+                PILLAR_FL: ["C3", "rest", "rest", "rest"],  // root every 2 seconds
+                PILLAR_FR: ["rest", "E3", "rest", "rest"],  // third every 2 seconds
+                PILLAR_BL: ["rest", "rest", "G3", "rest"],  // fifth every 2 seconds
+                PILLAR_BR: ["rest", "rest", "rest", "C4"]   // octave every 2 seconds
+            },
+
+            // Warble parameters (for patron devices)
+            warble: {
+                enabled: true,
+                depth_hz: 30,
+                rate_hz: 2.5,
+                duration_ms: 120,
+                volume_db: -18
+            },
+
+            // Pillar warbles (for mic delay calibration)
+            pillar_warbles: [
+                { pillar: "PILLAR_FL", time_sec: 1.0, harmonic: 2, frequency: 262 }, // C4
+                { pillar: "PILLAR_FR", time_sec: 15.0, harmonic: 2, frequency: 330 }, // E4
+                { pillar: "PILLAR_BL", time_sec: 8.0, harmonic: 3, frequency: 392 }, // G4 (3×C3)
+                { pillar: "PILLAR_BR", time_sec: 22.0, harmonic: 3, frequency: 523 }  // C5 (3×C4)
+            ],
+
+            // Device order for spiral distribution
+            device_order: ["A1", "B2", "C3", "D4", "E5", "F6", "G7", "H8", "I9", "J10"],
+
+            // Seat coordinates (hardcoded for test positions)
+            seats: [
+                { id: "A1", x: 2.75, y: 3.0 },
+                { id: "B2", x: 3.75, y: 4.0 },
+                { id: "C3", x: 4.75, y: 5.0 },
+                { id: "D4", x: 5.75, y: 6.0 },
+                { id: "E5", x: 6.75, y: 7.0 },
+                { id: "F6", x: 7.75, y: 8.0 },
+                { id: "G7", x: 8.75, y: 9.0 },
+                { id: "H8", x: 9.75, y: 10.0 },
+                { id: "I9", x: 10.75, y: 11.0 },
+                { id: "J10", x: 11.75, y: 12.0 },
+                // Pillars
+                { id: "PILLAR_FL", x: 0.0, y: 0.0 },
+                { id: "PILLAR_FR", x: 15.5, y: 0.0 },
+                { id: "PILLAR_BL", x: 0.0, y: 25.0 },
+                { id: "PILLAR_BR", x: 15.5, y: 25.0 }
+            ]
+        };
+
+        // ============================================
+        // Generate the note schedule
+        // ============================================
+        function generateNoteSchedule() {
+            const schedule = [];
+            const pattern = SYNTH_CONFIG.flute_pattern;
+            const deviceCount = SYNTH_CONFIG.device_order.length;
+            const startTime = Date.now() + 3000; // 3 second countdown
+
+            let currentTime = 0; // seconds from start
+
+            for (let noteIndex = 0; noteIndex < 15; noteIndex++) { // 15 notes in 30 seconds
+                const patternIndex = noteIndex % pattern.length;
+                const note = pattern[patternIndex];
+                const deviceIndex = noteIndex % deviceCount;
+                const deviceId = SYNTH_CONFIG.device_order[deviceIndex];
+
+                schedule.push({
+                    note_index: noteIndex,
+                    time_sec: currentTime,
+                    pitch: note.pitch,
+                    duration_ms: note.duration_ms,
+                    device_id: deviceId,
+                    absolute_time_ms: startTime + (currentTime * 1000)
+                });
+
+                currentTime += 2.0; // 2 seconds per note (500ms note + 1500ms gap)
+            }
+
+            return schedule;
+        }
+
+        // ============================================
+        // UI Updates
+        // ============================================
+        function log(message) {
+            const logDiv = document.getElementById('log');
+            const timestamp = new Date().toLocaleTimeString();
+            logDiv.innerHTML = `<div>[${timestamp}] ${message}</div>` + logDiv.innerHTML;
+            if (logDiv.children.length > 20) logDiv.removeChild(logDiv.lastChild);
+        }
+
+        function updateScheduleDisplay(schedule) {
+            const scheduleDiv = document.getElementById('schedule');
+            let html = '';
+            schedule.forEach(item => {
+                html += `<div>${item.time_sec.toFixed(1)}s: ${item.pitch} → ${item.device_id} (${item.absolute_time_ms})</div>`;
+            });
+            scheduleDiv.innerHTML = html;
+        }
+
+        // ============================================
+        // Firebase Control
+        // ============================================
+        async function startTest() {
+            log("🎵 Generating 30-second test schedule...");
+
+            const schedule = generateNoteSchedule();
+            updateScheduleDisplay(schedule);
+
+            const startTime = Date.now() + 3000; // 3 second countdown
+
+            // Clear any existing test data
+            await db.ref('synth/current').remove();
+
+            // Write the new test configuration
+            await db.ref('synth/current').set({
+                status: 'ACTIVE',
+                config: SYNTH_CONFIG,
+                schedule: schedule,
+                startTime: startTime,
+                device_order: SYNTH_CONFIG.device_order,
+                seats: SYNTH_CONFIG.seats,
+                pillar_warbles: SYNTH_CONFIG.pillar_warbles,
+                generated_at: Date.now(),
+                expires_at: startTime + SYNTH_CONFIG.total_duration_ms + 5000
+            });
+
+            document.getElementById('testStatus').innerHTML = '▶️ Test running (30 seconds)';
+            log(`🚀 Test started! GO at ${new Date(startTime).toLocaleTimeString()}`);
+            log(`📋 ${schedule.length} notes scheduled over 30 seconds`);
+
+            // Set timeout to clear status
+            setTimeout(() => {
+                document.getElementById('testStatus').innerHTML = '⏸️ Test complete';
+                log("✅ 30-second test finished");
+            }, SYNTH_CONFIG.total_duration_ms + 5000);
+        }
+
+        async function stopTest() {
+            await db.ref('synth/current').remove();
+            document.getElementById('testStatus').innerHTML = '⏸️ Stopped';
+            log("⏹️ Test stopped manually");
+        }
+
+        // ============================================
+        // Initialize
+        // ============================================
+        window.onload = () => {
+            // Connection status
+            db.ref('.info/connected').on('value', snap => {
+                const el = document.getElementById('connectionStatus');
+                if (snap.val()) {
+                    el.innerHTML = '🟢 Firebase Connected';
+                    el.style.color = '#0f0';
+                } else {
+                    el.innerHTML = '🔴 Firebase Disconnected';
+                    el.style.color = '#f00';
+                }
+            });
+
+            // Button handlers
+            document.getElementById('startBtn').onclick = startTest;
+            document.getElementById('stopBtn').onclick = stopTest;
+
+            // Show device list
+            const deviceList = document.getElementById('deviceList');
+            deviceList.innerHTML = SYNTH_CONFIG.device_order.join(', ') + ' + 4 pillars';
+
+            log("🎵 Synth Conductor ready");
+            log("ℹ️ 30-second test will play 15 notes, 2 seconds apart");
+            log("ℹ️ Pillars play continuous arpeggio underneath");
+            log("ℹ️ Pillar warbles at 1s, 8s, 15s, 22s for mic calibration");
+        };
+    </script>
+</body>
+</html>

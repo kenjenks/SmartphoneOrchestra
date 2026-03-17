@@ -1,0 +1,621 @@
+<!--
+zynth_device.html
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Synth Device - 30 Second Test</title>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
+    <style>
+        body {
+            margin: 0;
+            background: #000;
+            color: #fff;
+            font-family: 'Segoe UI', sans-serif;
+            overflow: hidden;
+        }
+        #container {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        #header {
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        #seat-label {
+            color: #00ffcc;
+            font-size: 1.5rem;
+            font-weight: bold;
+            margin: 0;
+        }
+        #device-type {
+            color: #888;
+            font-size: 0.9rem;
+            margin-top: 5px;
+        }
+        #status-panel {
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 12px;
+            padding: 20px;
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+        }
+        .status-row {
+            display: flex;
+            justify-content: space-between;
+            margin: 10px 0;
+            padding: 10px;
+            background: #000;
+            border-radius: 8px;
+            font-family: monospace;
+        }
+        .label {
+            color: #888;
+        }
+        .value {
+            color: #00ffcc;
+            font-weight: bold;
+        }
+        .note-indicator {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 20px 0;
+        }
+        .note-light {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            background: #222;
+            transition: all 0.1s ease;
+            box-shadow: 0 0 20px rgba(0,255,204,0);
+        }
+        .note-light.playing {
+            background: #00ffcc;
+            box-shadow: 0 0 40px #00ffcc;
+        }
+        .pillar-light {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            background: #442288;
+            transition: all 0.1s ease;
+            box-shadow: 0 0 20px rgba(136,68,204,0);
+        }
+        .pillar-light.playing {
+            background: #8844cc;
+            box-shadow: 0 0 40px #8844cc;
+        }
+        #log {
+            font-family: monospace;
+            font-size: 11px;
+            background: #000;
+            padding: 10px;
+            border-radius: 4px;
+            height: 150px;
+            overflow-y: auto;
+            color: #888;
+            margin-top: 20px;
+        }
+        #timer {
+            font-size: 2rem;
+            font-weight: bold;
+            color: #00ffcc;
+            text-align: center;
+            margin: 10px 0;
+        }
+        .config-item {
+            display: flex;
+            justify-content: space-between;
+            margin: 5px 0;
+            font-size: 0.8rem;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div id="header">
+            <div id="seat-label">Loading...</div>
+            <div id="device-type">Initializing...</div>
+        </div>
+
+        <div id="status-panel">
+            <div class="status-row">
+                <span class="label">Status:</span>
+                <span class="value" id="status-value">Waiting for conductor</span>
+            </div>
+            <div class="status-row">
+                <span class="label">Time until next note:</span>
+                <span class="value" id="countdown">--s</span>
+            </div>
+            <div class="status-row">
+                <span class="label">Next note:</span>
+                <span class="value" id="next-note">--</span>
+            </div>
+            <div class="status-row">
+                <span class="label">Neighbors within 2m:</span>
+                <span class="value" id="neighbor-count">calculating...</span>
+            </div>
+            <div class="status-row">
+                <span class="label">Mic permission:</span>
+                <span class="value" id="mic-status">checking...</span>
+            </div>
+
+            <div class="note-indicator" id="indicator-container">
+                <div id="playing-indicator" class="note-light"></div>
+            </div>
+
+            <div id="timer">--:--</div>
+
+            <div style="margin-top: auto;">
+                <div class="config-item">
+                    <span class="label">Test duration:</span>
+                    <span class="value" id="test-duration">30s</span>
+                </div>
+                <div class="config-item">
+                    <span class="label">Notes in test:</span>
+                    <span class="value" id="total-notes">--</span>
+                </div>
+                <div class="config-item">
+                    <span class="label">My assigned notes:</span>
+                    <span class="value" id="my-notes">--</span>
+                </div>
+            </div>
+
+            <div id="log"></div>
+        </div>
+    </div>
+
+    <script>
+        // ============================================
+        // Firebase Configuration
+        // ============================================
+        const firebaseConfig = {
+            apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
+            authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
+            databaseURL: "https://smartphoneorchestra-dwt-default-rtdb.firebaseio.com/",
+            projectId: "smartphoneorchestra-dwt"
+        };
+
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
+        // ============================================
+        // Global State
+        // ============================================
+        let audioCtx = null;
+        let mySeat = null;
+        let isPillar = false;
+        let config = null;
+        let schedule = [];
+        let myNotes = [];
+        let nextNoteIndex = 0;
+        let countdownInterval = null;
+        let pillarInterval = null;
+        let serverOffset = 0;
+
+        // Calibration state
+        let micDelaySamples = [];
+        let speakerDelaySamples = [];
+        let lastPingSent = 0;
+        let calibratedMicDelay = null;
+        let calibratedSpeakerDelay = null;
+
+        // Neighbor state
+        let neighbors = [];
+        let micPermission = false;
+        let listeningActive = false;
+
+        // ============================================
+        // Get seat from URL
+        // ============================================
+        const urlParams = new URLSearchParams(window.location.search);
+        const seatId = urlParams.get('seat');
+        isPillar = seatId?.startsWith('PILLAR_') || false;
+
+        document.getElementById('seat-label').innerText = seatId || 'No Seat ID';
+        document.getElementById('device-type').innerText = isPillar ? '🏛️ Pillar Device' : '📱 Patron Device';
+        log(`🎵 Device initialized: ${seatId} (${isPillar ? 'pillar' : 'patron'})`);
+
+        // ============================================
+        // Clock sync
+        // ============================================
+        db.ref(".info/serverTimeOffset").on("value", snap => {
+            serverOffset = snap.val() || 0;
+        });
+
+        // ============================================
+        // Listen for test start
+        // ============================================
+        db.ref('synth/current').on('value', async (snap) => {
+            const test = snap.val();
+            if (!test || test.status !== 'ACTIVE') {
+                document.getElementById('status-value').innerText = 'Waiting for conductor';
+                stopAllPlayback();
+                return;
+            }
+
+            log(`🎵 Test found! Starting at ${new Date(test.startTime).toLocaleTimeString()}`);
+            document.getElementById('status-value').innerText = 'Test loaded';
+
+            config = test.config;
+            schedule = test.schedule || [];
+            const pillarWarbles = test.pillar_warbles || [];
+
+            document.getElementById('total-notes').innerText = schedule.length;
+
+            // Find my seat coordinates
+            if (!isPillar) {
+                mySeat = test.seats.find(s => s.id === seatId);
+                if (!mySeat) {
+                    log(`❌ Seat ${seatId} not found in configuration`);
+                    document.getElementById('status-value').innerText = 'Seat not found';
+                    return;
+                }
+                log(`📍 Seat ${seatId} at (${mySeat.x}, ${mySeat.y})`);
+
+                // Calculate neighbors (within 2m)
+                calculateNeighbors(test.seats);
+            } else {
+                // Pillars use their fixed positions
+                mySeat = test.seats.find(s => s.id === seatId);
+                log(`🏛️ Pillar ${seatId} at (${mySeat.x}, ${mySeat.y})`);
+            }
+
+            // Initialize audio context
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                if (audioCtx.state === 'suspended') {
+                    await audioCtx.resume();
+                }
+                log(`🔊 Audio context initialized (${audioCtx.sampleRate}Hz)`);
+            }
+
+            // Request mic permission if not a pillar
+            if (!isPillar) {
+                requestMicPermission();
+            }
+
+            // Schedule playback
+            const now = Date.now() + serverOffset;
+            const secondsUntilStart = Math.max(0, (test.startTime - now) / 1000);
+
+            log(`⏱️ Starting in ${secondsUntilStart.toFixed(1)} seconds`);
+
+            setTimeout(() => {
+                if (isPillar) {
+                    startPillarPlayback(config, pillarWarbles, test.startTime);
+                } else {
+                    startPatronPlayback(config, schedule, test.startTime);
+                    startNeighborListening(test);
+                }
+                startCountdown();
+            }, secondsUntilStart * 1000);
+        });
+
+        // ============================================
+        // Neighbor calculation
+        // ============================================
+        function calculateNeighbors(allSeats) {
+            neighbors = allSeats.filter(seat =>
+                seat.id !== seatId &&
+                !seat.id.startsWith('PILLAR_') && // Don't count pillars as neighbors for now
+                distance(mySeat, seat) <= 2.0
+            );
+
+            document.getElementById('neighbor-count').innerText = neighbors.length;
+            log(`📍 Found ${neighbors.length} neighbors within 2m`);
+
+            if (neighbors.length > 0) {
+                neighbors.forEach(n => {
+                    const d = distance(mySeat, n).toFixed(2);
+                    log(`   • ${n.id} at ${d}m`);
+                });
+            }
+        }
+
+        function distance(a, b) {
+            return Math.sqrt(Math.pow(a.x - b.x, 2) + Math.pow(a.y - b.y, 2));
+        }
+
+        // ============================================
+        // Microphone permission
+        // ============================================
+        async function requestMicPermission() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                micPermission = true;
+                document.getElementById('mic-status').innerText = '✅ Granted';
+                log('🎤 Microphone permission granted - can hear neighbors');
+
+                // Set up audio analysis for neighbor listening
+                setupAudioAnalysis(stream);
+
+                // Release stream for now (we'll reactivate during listening windows)
+                stream.getTracks().forEach(track => track.stop());
+            } catch (err) {
+                micPermission = false;
+                document.getElementById('mic-status').innerText = '❌ Denied';
+                log('🎤 Microphone permission denied - will rely on conductor only');
+            }
+        }
+
+        function setupAudioAnalysis(stream) {
+            // This would set up analyser node for FFT analysis
+            // Simplified for now - will be expanded in next iteration
+        }
+
+        // ============================================
+        // Pillar playback
+        // ============================================
+        function startPillarPlayback(config, pillarWarbles, startTime) {
+            log('🏛️ Starting pillar pattern');
+            document.getElementById('status-value').innerText = 'Playing pillar pattern';
+
+            const pillarPattern = config.pillar_patterns[seatId];
+            if (!pillarPattern) {
+                log(`❌ No pattern for pillar ${seatId}`);
+                return;
+            }
+
+            const now = Date.now() + serverOffset;
+            const audioStartTime = audioCtx.currentTime + Math.max(0, (startTime - now) / 1000);
+
+            // Schedule continuous pillar pattern
+            schedulePillarLoop(pillarPattern, audioStartTime, 2.0); // 2 seconds per beat
+
+            // Schedule pillar warbles
+            pillarWarbles.forEach(warble => {
+                if (warble.pillar === seatId) {
+                    const warbleTime = audioStartTime + warble.time_sec;
+                    schedulePillarWarble(warble.frequency, warbleTime, config.warble);
+                    log(`📢 Pillar warble at ${warble.time_sec}s (${warble.frequency}Hz)`);
+                }
+            });
+        }
+
+        function schedulePillarLoop(pattern, startTime, beatDuration) {
+            let nextTime = startTime;
+            let beatIndex = 0;
+
+            function scheduleNext() {
+                const note = pattern[beatIndex % pattern.length];
+                if (note !== 'rest') {
+                    playTone(note, nextTime, 450, false, true); // 450ms note
+                }
+
+                nextTime += beatDuration;
+                beatIndex++;
+
+                // Schedule next beat slightly before current ends
+                const timeToNext = (nextTime - audioCtx.currentTime) * 1000;
+                if (timeToNext > 0) {
+                    setTimeout(scheduleNext, Math.min(timeToNext, 100));
+                }
+            }
+
+            setTimeout(scheduleNext, 10);
+        }
+
+        function schedulePillarWarble(freq, time, warbleConfig) {
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+
+            osc.type = 'sine';
+            osc.frequency.value = freq;
+
+            // Simple warble (FM synthesis)
+            const modOsc = audioCtx.createOscillator();
+            modOsc.frequency.value = warbleConfig.rate_hz;
+            modOsc.connect(osc.frequency);
+
+            // Envelope
+            gain.gain.setValueAtTime(0, time);
+            gain.gain.linearRampToValueAtTime(0.5, time + 0.01);
+            gain.gain.setValueAtTime(0.5, time + 0.45);
+            gain.gain.linearRampToValueAtTime(0, time + 0.5);
+
+            osc.connect(gain).connect(audioCtx.destination);
+
+            modOsc.start(time);
+            osc.start(time);
+
+            modOsc.stop(time + 0.5);
+            osc.stop(time + 0.5);
+        }
+
+        // ============================================
+        // Patron playback
+        // ============================================
+        function startPatronPlayback(config, schedule, startTime) {
+            log('🎵 Starting patron pattern');
+
+            // Find my notes
+            myNotes = schedule.filter(item => item.device_id === seatId);
+            document.getElementById('my-notes').innerText = myNotes.length;
+
+            if (myNotes.length === 0) {
+                log(`❌ No notes assigned to ${seatId}`);
+                document.getElementById('status-value').innerText = 'No notes assigned';
+                return;
+            }
+
+            log(`📋 I have ${myNotes.length} notes to play`);
+
+            const now = Date.now() + serverOffset;
+
+            myNotes.forEach(note => {
+                const noteTime = audioCtx.currentTime + ((note.absolute_time_ms - now) / 1000);
+                if (noteTime > audioCtx.currentTime) {
+                    scheduleNote(note, noteTime, config);
+                }
+            });
+
+            document.getElementById('status-value').innerText = `Playing ${myNotes.length} notes`;
+        }
+
+        function scheduleNote(note, time, config) {
+            const duration = note.duration_ms / 1000;
+            const warbleConfig = config.warble;
+
+            // Flash indicator
+            setTimeout(() => {
+                const indicator = document.getElementById('playing-indicator');
+                indicator.classList.add('playing');
+                setTimeout(() => indicator.classList.remove('playing'), 100);
+            }, (time - audioCtx.currentTime) * 1000);
+
+            // Record that we're about to play (for calibration)
+            lastPingSent = note.absolute_time_ms;
+
+            // Play the note with warble
+            playTone(note.pitch, time, duration, warbleConfig.enabled, false);
+
+            // Update next note display
+            updateNextNote();
+        }
+
+        function playTone(pitch, startTime, duration, addWarble, isPillar = false) {
+            const freq = pitchToFreq(pitch);
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+
+            osc.type = 'sine';
+            osc.frequency.value = freq;
+
+            if (addWarble && !isPillar) {
+                // Simple FM synthesis for warble
+                const modOsc = audioCtx.createOscillator();
+                modOsc.frequency.value = 2.5; // 2.5Hz modulation
+
+                // Connect modulation to frequency
+                const modGain = audioCtx.createGain();
+                modGain.gain.value = 30; // 30Hz depth
+                modOsc.connect(modGain).connect(osc.frequency);
+
+                modOsc.start(startTime);
+                modOsc.stop(startTime + duration);
+            }
+
+            // Smooth envelope
+            gain.gain.setValueAtTime(0, startTime);
+            gain.gain.linearRampToValueAtTime(0.3, startTime + 0.01);
+            gain.gain.setValueAtTime(0.3, startTime + duration - 0.01);
+            gain.gain.linearRampToValueAtTime(0, startTime + duration);
+
+            osc.connect(gain).connect(audioCtx.destination);
+            osc.start(startTime);
+            osc.stop(startTime + duration);
+        }
+
+        // ============================================
+        // Neighbor listening (stub for now)
+        // ============================================
+        function startNeighborListening(test) {
+            if (!micPermission || neighbors.length === 0) return;
+
+            listeningActive = true;
+            log('🎧 Neighbor listening active');
+
+            // This will be expanded in next iteration
+            // For now, just log that we would be listening
+            setInterval(() => {
+                if (listeningActive) {
+                    // Would check for neighbor notes here
+                }
+            }, 100);
+        }
+
+        // ============================================
+        // Utility functions
+        // ============================================
+        function pitchToFreq(pitch) {
+            const notes = {'C':0, 'C#':1, 'D':2, 'D#':3, 'E':4, 'F':5, 'F#':6, 'G':7, 'G#':8, 'A':9, 'A#':10, 'B':11};
+
+            // Handle flats by converting to sharps
+            const flatToSharp = {'Db':'C#', 'Eb':'D#', 'Gb':'F#', 'Ab':'G#', 'Bb':'A#'};
+
+            const match = pitch.match(/([A-G][b#]?)(\d+)/);
+            if (!match) return 440;
+
+            let note = match[1];
+            const octave = parseInt(match[2]);
+
+            // Convert flat to sharp if needed
+            if (flatToSharp[note]) note = flatToSharp[note];
+
+            const semitone = notes[note] + (octave - 4) * 12;
+            // A4 is 440Hz, A4 index is 9 (A in octave 4)
+            return 440 * Math.pow(2, (semitone - 9) / 12);
+        }
+
+        function updateNextNote() {
+            const now = Date.now() + serverOffset;
+            const nextNote = myNotes.find(n => n.absolute_time_ms > now);
+
+            if (nextNote) {
+                const secondsUntil = ((nextNote.absolute_time_ms - now) / 1000).toFixed(1);
+                document.getElementById('next-note').innerText = `${nextNote.pitch} in ${secondsUntil}s`;
+            } else {
+                document.getElementById('next-note').innerText = '--';
+            }
+        }
+
+        function startCountdown() {
+            if (countdownInterval) clearInterval(countdownInterval);
+
+            const endTime = (schedule[schedule.length - 1]?.absolute_time_ms || 0) + 2000;
+
+            countdownInterval = setInterval(() => {
+                const now = Date.now() + serverOffset;
+                const remaining = Math.max(0, endTime - now) / 1000;
+
+                const minutes = Math.floor(remaining / 60);
+                const seconds = Math.floor(remaining % 60);
+                document.getElementById('timer').innerText =
+                    `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+
+                updateNextNote();
+            }, 100);
+        }
+
+        function stopAllPlayback() {
+            if (countdownInterval) {
+                clearInterval(countdownInterval);
+                countdownInterval = null;
+            }
+            listeningActive = false;
+            document.getElementById('status-value').innerText = 'Waiting for conductor';
+            document.getElementById('timer').innerText = '--:--';
+        }
+
+        function log(message) {
+            const logDiv = document.getElementById('log');
+            const timestamp = new Date().toLocaleTimeString();
+            logDiv.innerHTML = `<div>[${timestamp}] ${message}</div>` + logDiv.innerHTML;
+            if (logDiv.children.length > 20) logDiv.removeChild(logDiv.lastChild);
+        }
+
+        // ============================================
+        // Cleanup
+        // ============================================
+        window.addEventListener('beforeunload', () => {
+            if (countdownInterval) clearInterval(countdownInterval);
+            if (pillarInterval) clearInterval(pillarInterval);
+            if (audioCtx) audioCtx.close();
+        });
+
+    </script>
+</body>
+</html>
