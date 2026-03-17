@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zynth Receiver - Single Frequency Detector</title>
+    <title>Zynth Receiver - Tri-Tone Pattern Detector</title>
     <style>
         body {
             background: #1a1a1a;
@@ -36,17 +36,16 @@
             color: #888;
             margin-bottom: 30px;
         }
-        .frequency-badge {
+        .pattern-badge {
             background: #ff3366;
             color: white;
-            font-size: 2rem;
+            font-size: 1.5rem;
             font-weight: bold;
             text-align: center;
             padding: 20px;
             border-radius: 60px;
             margin: 20px 0;
             font-family: monospace;
-            letter-spacing: 4px;
         }
         .status-card {
             background: #1a1a1a;
@@ -114,11 +113,12 @@
             50% { opacity: 1; transform: scale(1.1); }
             100% { opacity: 0.8; transform: scale(1); }
         }
-        .signal-strength {
-            font-size: 2rem;
+        .pattern-display {
+            font-size: 1.2rem;
             font-weight: bold;
             color: #ff3366;
             font-family: monospace;
+            margin-bottom: 10px;
         }
         .detection-count {
             font-size: 1.2rem;
@@ -151,10 +151,6 @@
             color: #666;
             cursor: not-allowed;
         }
-        .threshold-slider {
-            width: 100%;
-            margin: 20px 0;
-        }
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(2, 1fr);
@@ -177,14 +173,26 @@
             font-size: 1.2rem;
             font-weight: bold;
         }
-        .fft-viz {
+        .pattern-viz {
             width: 100%;
-            height: 100px;
+            height: 60px;
             background: #000;
             border-radius: 8px;
             margin: 20px 0;
             border: 1px solid #333;
+            position: relative;
         }
+        .pattern-bar {
+            position: absolute;
+            bottom: 0;
+            width: 30%;
+            height: 0px;
+            background: #ff3366;
+            transition: height 0.1s;
+        }
+        .pattern-bar:nth-child(1) { left: 5%; }
+        .pattern-bar:nth-child(2) { left: 35%; }
+        .pattern-bar:nth-child(3) { left: 65%; }
         .log {
             background: #000;
             border-radius: 8px;
@@ -205,14 +213,31 @@
             color: #ff3366;
             font-weight: bold;
         }
+        .pattern-guide {
+            display: flex;
+            justify-content: space-around;
+            margin: 10px 0;
+            color: #888;
+            font-size: 0.9rem;
+        }
+        .pattern-guide span {
+            color: #ff3366;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>👂 Zynth Receiver</h1>
-        <div class="subtitle">Single frequency detector - 1234 Hz only</div>
+        <div class="subtitle">Tri-Tone Pattern Detector</div>
 
-        <div class="frequency-badge">1234 Hz</div>
+        <div class="pattern-badge">1234 Hz → 900 Hz → 1234 Hz</div>
+
+        <div class="pattern-guide">
+            <span>⬆️ High</span>
+            <span>⬇️ Low</span>
+            <span>⬆️ High</span>
+        </div>
 
         <div class="status-card">
             <div class="mic-status">
@@ -223,45 +248,39 @@
             <button id="stop-mic-btn" disabled>⏹️ Stop Listening</button>
         </div>
 
-        <div>
-            <label style="color: #888; display: block; margin-bottom: 5px;">Detection Threshold</label>
-            <input type="range" id="threshold-slider" class="threshold-slider" min="0.01" max="0.3" step="0.01" value="0.08">
-            <div style="display: flex; justify-content: space-between; color: #888; font-size: 0.8rem;">
-                <span>Lower (sensitive)</span>
-                <span id="threshold-value">0.08</span>
-                <span>Higher (specific)</span>
-            </div>
-        </div>
-
         <div class="detection-indicator">
             <div class="signal-led" id="signal-led">📡</div>
-            <div class="signal-strength" id="signal-strength">0.00</div>
+            <div class="pattern-display" id="pattern-status">Waiting for pattern...</div>
             <div class="detection-count" id="detection-count">Detections: 0</div>
         </div>
 
-        <canvas id="fft-viz" class="fft-viz"></canvas>
+        <div class="pattern-viz" id="pattern-viz">
+            <div class="pattern-bar" id="bar1"></div>
+            <div class="pattern-bar" id="bar2"></div>
+            <div class="pattern-bar" id="bar3"></div>
+        </div>
 
         <div class="stats-grid">
             <div class="stat-box">
-                <div class="stat-label">Energy at 1234Hz</div>
-                <div class="stat-value" id="target-energy">0.000</div>
+                <div class="stat-label">Pattern Match</div>
+                <div class="stat-value" id="pattern-match">0%</div>
             </div>
             <div class="stat-box">
-                <div class="stat-label">Noise floor</div>
-                <div class="stat-value" id="noise-floor">0.000</div>
+                <div class="stat-label">Sequence Progress</div>
+                <div class="stat-value" id="sequence-progress">0/3</div>
             </div>
             <div class="stat-box">
-                <div class="stat-label">Signal/Noise</div>
-                <div class="stat-value" id="snr">0.0 dB</div>
+                <div class="stat-label">Current Freq</div>
+                <div class="stat-value" id="current-freq">---</div>
             </div>
             <div class="stat-box">
-                <div class="stat-label">Peak freq</div>
-                <div class="stat-value" id="peak-freq">---</div>
+                <div class="stat-label">Confidence</div>
+                <div class="stat-value" id="confidence">0.0</div>
             </div>
         </div>
 
         <div class="log" id="log">
-            <div class="log-entry">[System] Zynth Receiver ready - listening for 1234 Hz</div>
+            <div class="log-entry">[System] Zynth Receiver ready - listening for tri-tone pattern</div>
         </div>
     </div>
 
@@ -275,14 +294,33 @@
         let isListening = false;
         let animationFrame = null;
         let detectionCount = 0;
-        let lastDetectionTime = 0;
-        let detectionThreshold = 0.08;
 
-        // Fixed target frequency - 1234 Hz (unlikely to occur naturally)
-        const TARGET_FREQUENCY = 1234;
-        const FFT_SIZE = 8192; // Larger FFT for better frequency resolution
-        const DETECTION_COOLDOWN = 500; // ms between detections
-        const TOLERANCE_HZ = 15; // Accept frequencies within ±15 Hz of target
+        // Pattern detection state
+        let sequenceState = {
+            stage: 0, // 0=waiting for first high, 1=waiting for low, 2=waiting for final high, 3=complete
+            highDetected: false,
+            lowDetected: false,
+            finalHighDetected: false,
+            detectionWindow: null,
+            highFreqs: [],
+            lowFreqs: [],
+            confidence: 0
+        };
+
+        // Pattern definition
+        const PATTERN = {
+            HIGH_FREQ: 1234,
+            LOW_FREQ: 900,
+            TOLERANCE: 20, // Hz
+            STAGE1_DURATION: 300, // ms to detect first high
+            STAGE2_DURATION: 300, // ms to detect low
+            STAGE3_DURATION: 300, // ms to detect final high
+            MAX_PATTERN_DURATION: 1500, // Total max time for pattern
+            MIN_ENERGY: 0.03, // Minimum energy to consider a detection
+            CONFIDENCE_THRESHOLD: 0.7 // Minimum confidence to trigger
+        };
+
+        const FFT_SIZE = 8192;
 
         // ============================================
         // DOM elements
@@ -291,24 +329,15 @@
         const stopMicBtn = document.getElementById('stop-mic-btn');
         const micLed = document.getElementById('mic-led');
         const signalLed = document.getElementById('signal-led');
-        const signalStrengthSpan = document.getElementById('signal-strength');
+        const patternStatus = document.getElementById('pattern-status');
         const detectionCountSpan = document.getElementById('detection-count');
-        const targetEnergySpan = document.getElementById('target-energy');
-        const noiseFloorSpan = document.getElementById('noise-floor');
-        const snrSpan = document.getElementById('snr');
-        const peakFreqSpan = document.getElementById('peak-freq');
-        const thresholdSlider = document.getElementById('threshold-slider');
-        const thresholdValue = document.getElementById('threshold-value');
-        const canvas = document.getElementById('fft-viz');
-        const canvasCtx = canvas.getContext('2d');
-
-        // ============================================
-        // Threshold control
-        // ============================================
-        thresholdSlider.addEventListener('input', (e) => {
-            detectionThreshold = parseFloat(e.target.value);
-            thresholdValue.innerText = detectionThreshold.toFixed(3);
-        });
+        const patternMatchSpan = document.getElementById('pattern-match');
+        const sequenceProgressSpan = document.getElementById('sequence-progress');
+        const currentFreqSpan = document.getElementById('current-freq');
+        const confidenceSpan = document.getElementById('confidence');
+        const bar1 = document.getElementById('bar1');
+        const bar2 = document.getElementById('bar2');
+        const bar3 = document.getElementById('bar3');
 
         // ============================================
         // Enable microphone
@@ -335,7 +364,7 @@
                 const source = audioCtx.createMediaStreamSource(stream);
                 analyser = audioCtx.createAnalyser();
                 analyser.fftSize = FFT_SIZE;
-                analyser.smoothingTimeConstant = 0.2;
+                analyser.smoothingTimeConstant = 0.1;
 
                 source.connect(analyser);
 
@@ -348,11 +377,13 @@
                 micBtn.disabled = true;
                 stopMicBtn.disabled = false;
 
-                log("✅ Microphone active - listening for 1234 Hz signal");
+                log("✅ Microphone active - listening for tri-tone pattern");
 
-                // Start visualization and detection
-                drawFFT();
-                detectSignal();
+                // Reset sequence
+                resetSequence();
+
+                // Start detection
+                detectPattern();
 
             } catch (e) {
                 log(`❌ Mic error: ${e.message}`);
@@ -380,69 +411,85 @@
                 animationFrame = null;
             }
 
-            // Clear canvas
-            canvasCtx.fillStyle = '#000';
-            canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
-
             log("⏹️ Stopped listening");
         });
 
         // ============================================
-        // Draw FFT visualization
+        // Reset pattern sequence
         // ============================================
-        function drawFFT() {
-            if (!isListening || !analyser) return;
-
-            const bufferLength = analyser.frequencyBinCount;
-            const dataArray = new Uint8Array(bufferLength);
-            analyser.getByteFrequencyData(dataArray);
-
-            canvasCtx.fillStyle = '#000';
-            canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
-
-            const barWidth = (canvas.width / bufferLength) * 2;
-            let x = 0;
-
-            // Draw frequency spectrum (focus on 0-2000 Hz)
-            const nyquist = audioCtx.sampleRate / 2;
-            const maxBin = Math.min(bufferLength, Math.floor(2000 / nyquist * bufferLength));
-
-            for (let i = 0; i < maxBin; i++) {
-                const barHeight = dataArray[i] / 2;
-                const freq = (i / bufferLength) * nyquist;
-
-                // Highlight target frequency band
-                if (Math.abs(freq - TARGET_FREQUENCY) < TOLERANCE_HZ) {
-                    canvasCtx.fillStyle = `rgb(255, 51, 102)`;
-                } else {
-                    canvasCtx.fillStyle = `rgb(100, 100, 100)`;
-                }
-
-                canvasCtx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
-                x += barWidth + 1;
-            }
-
-            // Draw target frequency line
-            const targetBin = Math.floor(TARGET_FREQUENCY / nyquist * bufferLength);
-            if (targetBin < maxBin) {
-                const targetX = targetBin * (barWidth + 1);
-                canvasCtx.strokeStyle = '#ff3366';
-                canvasCtx.lineWidth = 3;
-                canvasCtx.beginPath();
-                canvasCtx.moveTo(targetX, 0);
-                canvasCtx.lineTo(targetX, canvas.height);
-                canvasCtx.stroke();
-            }
-
-            animationFrame = requestAnimationFrame(drawFFT);
+        function resetSequence() {
+            sequenceState = {
+                stage: 0,
+                highDetected: false,
+                lowDetected: false,
+                finalHighDetected: false,
+                detectionWindow: Date.now(),
+                highFreqs: [],
+                lowFreqs: [],
+                confidence: 0
+            };
+            updateUI();
         }
 
         // ============================================
-        // Signal detection - simple energy threshold
+        // Update visualization
         // ============================================
-        function detectSignal() {
+        function updateUI() {
+            // Update progress bars
+            bar1.style.height = sequenceState.highDetected ? '40px' : '10px';
+            bar1.style.background = sequenceState.highDetected ? '#ff3366' : '#333';
+
+            bar2.style.height = sequenceState.lowDetected ? '40px' : '10px';
+            bar2.style.background = sequenceState.lowDetected ? '#ff3366' : '#333';
+
+            bar3.style.height = sequenceState.finalHighDetected ? '40px' : '10px';
+            bar3.style.background = sequenceState.finalHighDetected ? '#ff3366' : '#333';
+
+            // Update progress text
+            let progress = 0;
+            if (sequenceState.highDetected) progress = 1;
+            if (sequenceState.lowDetected) progress = 2;
+            if (sequenceState.finalHighDetected) progress = 3;
+            sequenceProgressSpan.innerText = progress + '/3';
+
+            // Update pattern match percentage
+            if (sequenceState.finalHighDetected) {
+                patternMatchSpan.innerText = Math.round(sequenceState.confidence * 100) + '%';
+            } else {
+                patternMatchSpan.innerText = '0%';
+            }
+
+            confidenceSpan.innerText = sequenceState.confidence.toFixed(2);
+
+            // Update status message
+            if (sequenceState.finalHighDetected) {
+                patternStatus.innerText = '🎯 PATTERN DETECTED!';
+                patternStatus.style.color = '#ff3366';
+            } else if (sequenceState.lowDetected) {
+                patternStatus.innerText = '⬇️ Looking for final high tone...';
+                patternStatus.style.color = '#ffcc00';
+            } else if (sequenceState.highDetected) {
+                patternStatus.innerText = '⬇️ Looking for low tone...';
+                patternStatus.style.color = '#ffcc00';
+            } else {
+                patternStatus.innerText = '⬆️ Waiting for first high tone...';
+                patternStatus.style.color = '#888';
+            }
+        }
+
+        // ============================================
+        // Check if frequency matches target
+        // ============================================
+        function frequencyMatches(freq, target) {
+            return Math.abs(freq - target) <= PATTERN.TOLERANCE;
+        }
+
+        // ============================================
+        // Pattern detection
+        // ============================================
+        function detectPattern() {
             if (!isListening || !analyser || !audioCtx) {
-                requestAnimationFrame(detectSignal);
+                requestAnimationFrame(detectPattern);
                 return;
             }
 
@@ -451,78 +498,142 @@
             analyser.getByteFrequencyData(dataArray);
 
             const nyquist = audioCtx.sampleRate / 2;
-            const targetBin = Math.floor(TARGET_FREQUENCY / nyquist * bufferLength);
-            const binTolerance = Math.floor(TOLERANCE_HZ / nyquist * bufferLength);
 
-            // Calculate energy at target frequency (average of surrounding bins)
-            let targetEnergy = 0;
-            let binCount = 0;
+            // Find dominant frequency in our bands of interest
+            const highBin = Math.floor(PATTERN.HIGH_FREQ / nyquist * bufferLength);
+            const lowBin = Math.floor(PATTERN.LOW_FREQ / nyquist * bufferLength);
+            const toleranceBins = Math.floor(PATTERN.TOLERANCE / nyquist * bufferLength);
 
-            for (let i = -binTolerance; i <= binTolerance; i++) {
-                const idx = targetBin + i;
-                if (idx >= 0 && idx < bufferLength) {
-                    targetEnergy += dataArray[idx] / 255;
-                    binCount++;
+            // Check energy at high frequency band
+            let highEnergy = 0;
+            let highBinMax = highBin;
+            let highMaxEnergy = 0;
+
+            for (let i = highBin - toleranceBins; i <= highBin + toleranceBins; i++) {
+                if (i >= 0 && i < bufferLength) {
+                    const energy = dataArray[i] / 255;
+                    highEnergy += energy;
+                    if (energy > highMaxEnergy) {
+                        highMaxEnergy = energy;
+                        highBinMax = i;
+                    }
                 }
             }
-            targetEnergy = targetEnergy / binCount;
+            highEnergy = highEnergy / (toleranceBins * 2 + 1);
 
-            // Calculate noise floor (average of all frequencies except target band)
-            let noiseEnergy = 0;
-            let noiseCount = 0;
+            // Check energy at low frequency band
+            let lowEnergy = 0;
+            let lowBinMax = lowBin;
+            let lowMaxEnergy = 0;
 
-            for (let i = 0; i < bufferLength; i++) {
-                // Skip the target frequency band
-                if (Math.abs(i - targetBin) <= binTolerance + 5) continue;
-
-                noiseEnergy += dataArray[i] / 255;
-                noiseCount++;
-            }
-            noiseEnergy = noiseEnergy / noiseCount;
-
-            // Calculate SNR
-            const snr = 20 * Math.log10((targetEnergy + 0.001) / (noiseEnergy + 0.001));
-
-            // Update displays
-            targetEnergySpan.innerText = targetEnergy.toFixed(3);
-            noiseFloorSpan.innerText = noiseEnergy.toFixed(3);
-            snrSpan.innerText = snr.toFixed(1) + ' dB';
-            signalStrengthSpan.innerText = targetEnergy.toFixed(3);
-
-            // Find peak frequency in the target range
-            let maxEnergy = 0;
-            let maxBin = targetBin;
-
-            for (let i = targetBin - binTolerance; i <= targetBin + binTolerance; i++) {
-                if (i >= 0 && i < bufferLength && dataArray[i] / 255 > maxEnergy) {
-                    maxEnergy = dataArray[i] / 255;
-                    maxBin = i;
+            for (let i = lowBin - toleranceBins; i <= lowBin + toleranceBins; i++) {
+                if (i >= 0 && i < bufferLength) {
+                    const energy = dataArray[i] / 255;
+                    lowEnergy += energy;
+                    if (energy > lowMaxEnergy) {
+                        lowMaxEnergy = energy;
+                        lowBinMax = i;
+                    }
                 }
             }
+            lowEnergy = lowEnergy / (toleranceBins * 2 + 1);
 
-            const peakFreq = (maxBin / bufferLength) * nyquist;
-            peakFreqSpan.innerText = Math.round(peakFreq) + ' Hz';
+            // Get current dominant frequency
+            const highFreq = (highBinMax / bufferLength) * nyquist;
+            const lowFreq = (lowBinMax / bufferLength) * nyquist;
 
-            // Check if signal exceeds threshold
+            // Determine what we're hearing now
+            let currentFreq = 0;
+            let currentEnergy = 0;
+            let currentBand = 'none';
+
+            if (highEnergy > PATTERN.MIN_ENERGY && highEnergy > lowEnergy * 1.5) {
+                currentFreq = highFreq;
+                currentEnergy = highEnergy;
+                currentBand = 'high';
+            } else if (lowEnergy > PATTERN.MIN_ENERGY && lowEnergy > highEnergy * 1.5) {
+                currentFreq = lowFreq;
+                currentEnergy = lowEnergy;
+                currentBand = 'low';
+            }
+
+            currentFreqSpan.innerText = currentFreq > 0 ? Math.round(currentFreq) + ' Hz' : '---';
+
             const now = Date.now();
-            if (targetEnergy > detectionThreshold && targetEnergy > noiseEnergy * 2) {
-                // Signal detected!
-                signalLed.className = 'signal-led detected';
 
-                // Log detection with cooldown to avoid duplicates
-                if (now - lastDetectionTime > DETECTION_COOLDOWN) {
-                    detectionCount++;
-                    detectionCountSpan.innerText = `Detections: ${detectionCount}`;
+            // Pattern matching state machine
+            if (currentBand !== 'none') {
+                switch (sequenceState.stage) {
+                    case 0: // Waiting for first high tone
+                        if (currentBand === 'high' && frequencyMatches(currentFreq, PATTERN.HIGH_FREQ)) {
+                            sequenceState.highDetected = true;
+                            sequenceState.stage = 1;
+                            sequenceState.detectionWindow = now;
+                            sequenceState.highFreqs.push(currentFreq);
+                            log(`⬆️ First high tone detected: ${Math.round(currentFreq)} Hz`, 'detection');
+                        }
+                        break;
 
-                    log(`🔴 SIGNAL DETECTED! Energy: ${targetEnergy.toFixed(3)}, SNR: ${snr.toFixed(1)}dB`, 'detection');
+                    case 1: // Waiting for low tone
+                        if (currentBand === 'low' && frequencyMatches(currentFreq, PATTERN.LOW_FREQ)) {
+                            sequenceState.lowDetected = true;
+                            sequenceState.stage = 2;
+                            sequenceState.detectionWindow = now;
+                            sequenceState.lowFreqs.push(currentFreq);
+                            log(`⬇️ Low tone detected: ${Math.round(currentFreq)} Hz`, 'detection');
+                        } else if (now - sequenceState.detectionWindow > PATTERN.STAGE2_DURATION) {
+                            // Timeout - reset
+                            resetSequence();
+                        }
+                        break;
 
-                    lastDetectionTime = now;
+                    case 2: // Waiting for final high tone
+                        if (currentBand === 'high' && frequencyMatches(currentFreq, PATTERN.HIGH_FREQ)) {
+                            sequenceState.finalHighDetected = true;
+                            sequenceState.stage = 3;
+
+                            // Calculate confidence based on frequency accuracy
+                            const firstHighAvg = sequenceState.highFreqs.reduce((a, b) => a + b, 0) / sequenceState.highFreqs.length;
+                            const lowAvg = sequenceState.lowFreqs.reduce((a, b) => a + b, 0) / sequenceState.lowFreqs.length;
+
+                            const highAccuracy = 1 - Math.min(1, Math.abs(firstHighAvg - PATTERN.HIGH_FREQ) / PATTERN.TOLERANCE);
+                            const lowAccuracy = 1 - Math.min(1, Math.abs(lowAvg - PATTERN.LOW_FREQ) / PATTERN.TOLERANCE);
+                            const finalHighAccuracy = 1 - Math.min(1, Math.abs(currentFreq - PATTERN.HIGH_FREQ) / PATTERN.TOLERANCE);
+
+                            sequenceState.confidence = (highAccuracy + lowAccuracy + finalHighAccuracy) / 3;
+
+                            log(`⬆️ Final high tone detected: ${Math.round(currentFreq)} Hz`, 'detection');
+
+                            // Check if pattern is complete and confidence is high enough
+                            if (sequenceState.confidence >= PATTERN.CONFIDENCE_THRESHOLD) {
+                                detectionCount++;
+                                detectionCountSpan.innerText = `Detections: ${detectionCount}`;
+
+                                signalLed.className = 'signal-led detected';
+                                setTimeout(() => {
+                                    signalLed.className = 'signal-led';
+                                }, 1000);
+
+                                log(`🎯 TRI-TONE PATTERN MATCHED! Confidence: ${Math.round(sequenceState.confidence * 100)}%`, 'detection');
+                            }
+
+                            // Auto-reset after detection
+                            setTimeout(resetSequence, 2000);
+                        } else if (now - sequenceState.detectionWindow > PATTERN.STAGE3_DURATION) {
+                            // Timeout - reset
+                            resetSequence();
+                        }
+                        break;
                 }
-            } else {
-                signalLed.className = 'signal-led';
+            } else if (sequenceState.stage > 0) {
+                // No signal detected but we're in a sequence - check timeout
+                if (now - sequenceState.detectionWindow > PATTERN.MAX_PATTERN_DURATION) {
+                    resetSequence();
+                }
             }
 
-            requestAnimationFrame(detectSignal);
+            updateUI();
+            requestAnimationFrame(detectPattern);
         }
 
         // ============================================
@@ -553,7 +664,7 @@
         });
 
         // Initial log
-        log("System ready - listening for 1234 Hz signal");
+        log("System ready - listening for 1234Hz → 900Hz → 1234Hz pattern");
     </script>
 </body>
 </html>
