@@ -121,6 +121,25 @@ zynth_device.html
             margin: 5px 0;
             font-size: 0.8rem;
         }
+        .permission-button {
+            background: #00ffcc;
+            color: #000;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 25px;
+            font-weight: bold;
+            cursor: pointer;
+            margin-top: 10px;
+            transition: transform 0.2s;
+        }
+        .permission-button:hover {
+            transform: scale(1.05);
+        }
+        .permission-button:disabled {
+            background: #333;
+            color: #666;
+            cursor: not-allowed;
+        }
     </style>
 </head>
 <body>
@@ -133,7 +152,7 @@ zynth_device.html
         <div id="status-panel">
             <div class="status-row">
                 <span class="label">Status:</span>
-                <span class="value" id="status-value">Waiting for conductor</span>
+                <span class="value" id="status-value">Starting up...</span>
             </div>
             <div class="status-row">
                 <span class="label">Time until next note:</span>
@@ -151,6 +170,12 @@ zynth_device.html
                 <span class="label">Mic permission:</span>
                 <span class="value" id="mic-status">checking...</span>
             </div>
+            <div class="status-row">
+                <span class="label">Audio primed:</span>
+                <span class="value" id="audio-status">pending...</span>
+            </div>
+
+            <button id="retry-permission" class="permission-button" style="display: none;">🎤 Request Mic Permission</button>
 
             <div class="note-indicator" id="indicator-container">
                 <div id="playing-indicator" class="note-light"></div>
@@ -216,17 +241,7 @@ zynth_device.html
         let neighbors = [];
         let micPermission = false;
         let listeningActive = false;
-
-        // ============================================
-        // Get seat from URL
-        // ============================================
-        const urlParams = new URLSearchParams(window.location.search);
-        const seatId = urlParams.get('seat');
-        isPillar = seatId?.startsWith('PILLAR_') || false;
-
-        document.getElementById('seat-label').innerText = seatId || 'No Seat ID';
-        document.getElementById('device-type').innerText = isPillar ? '🏛️ Pillar Device' : '📱 Patron Device';
-        log(`🎵 Device initialized: ${seatId} (${isPillar ? 'pillar' : 'patron'})`);
+        let audioPrimed = false;
 
         // ============================================
         // Clock sync
@@ -236,73 +251,187 @@ zynth_device.html
         });
 
         // ============================================
-        // Listen for test start
+        // NEW: Immediate Startup Sequence
         // ============================================
-        db.ref('synth/current').on('value', async (snap) => {
-            const test = snap.val();
-            if (!test || test.status !== 'ACTIVE') {
-                document.getElementById('status-value').innerText = 'Waiting for conductor';
-                stopAllPlayback();
-                return;
-            }
+        window.onload = async () => {
+            log("🚀 Device starting up...");
 
-            log(`🎵 Test found! Starting at ${new Date(test.startTime).toLocaleTimeString()}`);
-            document.getElementById('status-value').innerText = 'Test loaded';
+            // Get seat ID from URL
+            const urlParams = new URLSearchParams(window.location.search);
+            const seatId = urlParams.get('seat');
+            isPillar = seatId?.startsWith('PILLAR_') || false;
 
-            config = test.config;
-            schedule = test.schedule || [];
-            const pillarWarbles = test.pillar_warbles || [];
+            document.getElementById('seat-label').innerText = seatId || 'No Seat ID';
+            document.getElementById('device-type').innerText = isPillar ? '🏛️ Pillar Device' : '📱 Patron Device';
+            log(`🔍 Device: ${seatId} (${isPillar ? 'pillar' : 'patron'})`);
 
-            document.getElementById('total-notes').innerText = schedule.length;
+            // Prime the audio system with a silent tone (for all devices)
+            await primeAudioSystem();
 
-            // Find my seat coordinates
+            // Request microphone permission immediately (only for patrons)
             if (!isPillar) {
-                mySeat = test.seats.find(s => s.id === seatId);
-                if (!mySeat) {
-                    log(`❌ Seat ${seatId} not found in configuration`);
-                    document.getElementById('status-value').innerText = 'Seat not found';
-                    return;
-                }
-                log(`📍 Seat ${seatId} at (${mySeat.x}, ${mySeat.y})`);
-
-                // Calculate neighbors (within 2m)
-                calculateNeighbors(test.seats);
+                await requestMicrophonePermission();
             } else {
-                // Pillars use their fixed positions
-                mySeat = test.seats.find(s => s.id === seatId);
-                log(`🏛️ Pillar ${seatId} at (${mySeat.x}, ${mySeat.y})`);
+                document.getElementById('mic-status').innerText = '🔇 Not needed';
+                document.getElementById('audio-status').innerText = audioPrimed ? '✅ Primed' : '❌ Failed';
             }
 
-            // Initialize audio context
-            if (!audioCtx) {
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            // Now start listening for conductor
+            listenForConductor();
+
+            log("✅ Startup complete. Waiting for conductor...");
+        };
+
+        // ============================================
+        // NEW: Prime Audio System with Silent Tone
+        // ============================================
+        async function primeAudioSystem() {
+            log("🔊 Priming audio system...");
+            document.getElementById('audio-status').innerText = 'priming...';
+
+            try {
+                // Create audio context (starts suspended)
+                if (!audioCtx) {
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+
+                // Create a silent tone (0% volume)
+                const oscillator = audioCtx.createOscillator();
+                const gainNode = audioCtx.createGain();
+
+                oscillator.type = 'sine';
+                oscillator.frequency.value = 440; // A4, but silent
+
+                // Set volume to 0 (completely silent)
+                gainNode.gain.value = 0;
+
+                oscillator.connect(gainNode).connect(audioCtx.destination);
+
+                // Resume the context (this is the key step)
                 if (audioCtx.state === 'suspended') {
                     await audioCtx.resume();
+                    log("🔊 Audio context resumed");
                 }
-                log(`🔊 Audio context initialized (${audioCtx.sampleRate}Hz)`);
+
+                // Play the silent tone for 100ms to wake up audio hardware
+                oscillator.start();
+                oscillator.stop(audioCtx.currentTime + 0.1);
+
+                log("🔊 Audio primed with 100ms silent tone");
+                audioPrimed = true;
+                document.getElementById('audio-status').innerText = '✅ Primed';
+
+                // Suspend the context to save power, but it's now ready
+                await audioCtx.suspend();
+                log("🔊 Audio context suspended (primed and ready)");
+
+            } catch (e) {
+                log(`❌ Audio priming failed: ${e.message}`);
+                document.getElementById('audio-status').innerText = '❌ Failed';
+                audioPrimed = false;
             }
+        }
 
-            // Request mic permission if not a pillar
-            if (!isPillar) {
-                requestMicPermission();
+        // ============================================
+        // NEW: Request Microphone Permission
+        // ============================================
+        async function requestMicrophonePermission() {
+            log("🎤 Requesting microphone permission...");
+            document.getElementById('mic-status').innerText = 'requesting...';
+
+            try {
+                // Request permission without setting up full analysis yet
+                const tempStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                micPermission = true;
+                document.getElementById('mic-status').innerText = '✅ Granted';
+                log('🎤 Microphone permission granted');
+
+                // Hide retry button if visible
+                document.getElementById('retry-permission').style.display = 'none';
+
+                // Immediately stop the stream, we just needed the permission
+                tempStream.getTracks().forEach(track => track.stop());
+
+            } catch (err) {
+                micPermission = false;
+                document.getElementById('mic-status').innerText = '❌ Denied';
+                log('🎤 Microphone permission denied');
+
+                // Show retry button
+                document.getElementById('retry-permission').style.display = 'block';
             }
+        }
 
-            // Schedule playback
-            const now = Date.now() + serverOffset;
-            const secondsUntilStart = Math.max(0, (test.startTime - now) / 1000);
+        // ============================================
+        // Manual retry for mic permission
+        // ============================================
+        document.getElementById('retry-permission').onclick = async () => {
+            await requestMicrophonePermission();
+        };
 
-            log(`⏱️ Starting in ${secondsUntilStart.toFixed(1)} seconds`);
+        // ============================================
+        // NEW: Listen for Conductor
+        // ============================================
+        function listenForConductor() {
+            log("👂 Listening for conductor signals...");
+            document.getElementById('status-value').innerText = 'Waiting for conductor';
 
-            setTimeout(() => {
-                if (isPillar) {
-                    startPillarPlayback(config, pillarWarbles, test.startTime);
+            db.ref('synth/current').on('value', async (snap) => {
+                const test = snap.val();
+                if (!test || test.status !== 'ACTIVE') {
+                    document.getElementById('status-value').innerText = 'Waiting for conductor';
+                    stopAllPlayback();
+                    return;
+                }
+
+                log(`🎵 Test found! Starting at ${new Date(test.startTime).toLocaleTimeString()}`);
+                document.getElementById('status-value').innerText = 'Test loaded';
+
+                config = test.config;
+                schedule = test.schedule || [];
+
+                // Resume the pre-primed audio context
+                if (audioCtx && audioCtx.state === 'suspended') {
+                    await audioCtx.resume();
+                    log("🔊 Audio context resumed for playback");
+                }
+
+                // Find my seat coordinates
+                if (!isPillar) {
+                    mySeat = test.seats.find(s => s.id === seatId);
+                    if (!mySeat) {
+                        log(`❌ Seat ${seatId} not found in configuration`);
+                        document.getElementById('status-value').innerText = 'Seat not found';
+                        return;
+                    }
+                    log(`📍 Seat ${seatId} at (${mySeat.x}, ${mySeat.y})`);
+
+                    // Calculate neighbors
+                    calculateNeighbors(test.seats);
                 } else {
-                    startPatronPlayback(config, schedule, test.startTime);
-                    startNeighborListening(test);
+                    mySeat = test.seats.find(s => s.id === seatId);
+                    log(`🏛️ Pillar ${seatId} at (${mySeat.x}, ${mySeat.y})`);
                 }
-                startCountdown();
-            }, secondsUntilStart * 1000);
-        });
+
+                document.getElementById('total-notes').innerText = schedule.length;
+
+                // Schedule playback
+                const now = Date.now() + serverOffset;
+                const secondsUntilStart = Math.max(0, (test.startTime - now) / 1000);
+
+                log(`⏱️ Test starts in ${secondsUntilStart.toFixed(1)} seconds`);
+
+                setTimeout(() => {
+                    if (isPillar) {
+                        startPillarPlayback(config, test.pillar_warbles || [], test.startTime);
+                    } else {
+                        startPatronPlayback(config, schedule, test.startTime);
+                        // Future: startNeighborListening(test);
+                    }
+                    startCountdown(test.startTime + config.total_duration_ms);
+                }, secondsUntilStart * 1000);
+            });
+        }
 
         // ============================================
         // Neighbor calculation
@@ -330,33 +459,6 @@ zynth_device.html
         }
 
         // ============================================
-        // Microphone permission
-        // ============================================
-        async function requestMicPermission() {
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                micPermission = true;
-                document.getElementById('mic-status').innerText = '✅ Granted';
-                log('🎤 Microphone permission granted - can hear neighbors');
-
-                // Set up audio analysis for neighbor listening
-                setupAudioAnalysis(stream);
-
-                // Release stream for now (we'll reactivate during listening windows)
-                stream.getTracks().forEach(track => track.stop());
-            } catch (err) {
-                micPermission = false;
-                document.getElementById('mic-status').innerText = '❌ Denied';
-                log('🎤 Microphone permission denied - will rely on conductor only');
-            }
-        }
-
-        function setupAudioAnalysis(stream) {
-            // This would set up analyser node for FFT analysis
-            // Simplified for now - will be expanded in next iteration
-        }
-
-        // ============================================
         // Pillar playback
         // ============================================
         function startPillarPlayback(config, pillarWarbles, startTime) {
@@ -376,13 +478,15 @@ zynth_device.html
             schedulePillarLoop(pillarPattern, audioStartTime, 2.0); // 2 seconds per beat
 
             // Schedule pillar warbles
-            pillarWarbles.forEach(warble => {
-                if (warble.pillar === seatId) {
-                    const warbleTime = audioStartTime + warble.time_sec;
-                    schedulePillarWarble(warble.frequency, warbleTime, config.warble);
-                    log(`📢 Pillar warble at ${warble.time_sec}s (${warble.frequency}Hz)`);
-                }
-            });
+            if (pillarWarbles) {
+                pillarWarbles.forEach(warble => {
+                    if (warble.pillar === seatId) {
+                        const warbleTime = audioStartTime + warble.time_sec;
+                        schedulePillarWarble(warble.frequency, warbleTime, config.warble);
+                        log(`📢 Pillar warble at ${warble.time_sec}s (${warble.frequency}Hz)`);
+                    }
+                });
+            }
         }
 
         function schedulePillarLoop(pattern, startTime, beatDuration) {
@@ -520,24 +624,6 @@ zynth_device.html
         }
 
         // ============================================
-        // Neighbor listening (stub for now)
-        // ============================================
-        function startNeighborListening(test) {
-            if (!micPermission || neighbors.length === 0) return;
-
-            listeningActive = true;
-            log('🎧 Neighbor listening active');
-
-            // This will be expanded in next iteration
-            // For now, just log that we would be listening
-            setInterval(() => {
-                if (listeningActive) {
-                    // Would check for neighbor notes here
-                }
-            }, 100);
-        }
-
-        // ============================================
         // Utility functions
         // ============================================
         function pitchToFreq(pitch) {
@@ -572,10 +658,8 @@ zynth_device.html
             }
         }
 
-        function startCountdown() {
+        function startCountdown(endTime) {
             if (countdownInterval) clearInterval(countdownInterval);
-
-            const endTime = (schedule[schedule.length - 1]?.absolute_time_ms || 0) + 2000;
 
             countdownInterval = setInterval(() => {
                 const now = Date.now() + serverOffset;
