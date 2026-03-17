@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zynth Receiver - Digital Decoder</title>
+    <title>Zynth Receiver - FSK with Start/Stop Bits</title>
     <style>
         body {
             background: #1a1a1a;
@@ -49,12 +49,31 @@
             margin: 20px 0;
             min-height: 80px;
         }
+        .frame-diagram {
+            display: flex;
+            justify-content: center;
+            gap: 5px;
+            margin: 20px 0;
+            padding: 15px;
+            background: #000;
+            border-radius: 12px;
+            flex-wrap: wrap;
+        }
+        .frame-part {
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 0.9rem;
+            font-weight: bold;
+        }
+        .wakeup-detected { background: #ff3366; color: white; }
+        .start-detected { background: #ffcc00; color: black; }
+        .data-detected { background: #00ffcc; color: black; }
+        .stop-detected { background: #9933ff; color: white; }
         .status-card {
             background: #1a1a1a;
             border-radius: 12px;
             padding: 20px;
             margin-bottom: 20px;
-            text-align: center;
         }
         .mic-status {
             display: flex;
@@ -81,36 +100,6 @@
             50% { opacity: 1; }
             100% { opacity: 0.5; }
         }
-        .decoding-indicator {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            margin: 30px 0;
-        }
-        .signal-led {
-            width: 150px;
-            height: 150px;
-            border-radius: 50%;
-            background: #222;
-            transition: all 0.1s;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 2rem;
-            margin-bottom: 20px;
-            border: 3px solid #444;
-        }
-        .signal-led.detected {
-            background: #00ffcc;
-            box-shadow: 0 0 80px #00ffcc;
-            animation: pulse-fast 0.2s infinite;
-            border-color: white;
-        }
-        @keyframes pulse-fast {
-            0% { opacity: 0.8; transform: scale(1); }
-            50% { opacity: 1; transform: scale(1.1); }
-            100% { opacity: 0.8; transform: scale(1); }
-        }
         .binary-row {
             display: flex;
             justify-content: center;
@@ -133,14 +122,12 @@
             font-weight: bold;
             font-size: 0.9rem;
             transition: all 0.1s;
+            margin: 2px;
         }
         .bit.received {
             background: #00ffcc;
             color: #000;
-        }
-        .bit.preamble {
-            background: #ffcc00;
-            color: #000;
+            box-shadow: 0 0 10px #00ffcc;
         }
         .stats-grid {
             display: grid;
@@ -164,26 +151,19 @@
             font-size: 1.2rem;
             font-weight: bold;
         }
-        .sync-indicator {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 10px;
-            margin: 20px 0;
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background: #000;
+            border-radius: 10px;
+            margin: 10px 0;
+            overflow: hidden;
         }
-        .sync-led {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            background: #222;
-            transition: all 0.1s;
-        }
-        .sync-led.active {
+        .progress-fill {
+            height: 100%;
             background: #00ffcc;
-            box-shadow: 0 0 20px #00ffcc;
-        }
-        .sync-led.preamble {
-            background: #ffcc00;
+            width: 0%;
+            transition: width 0.1s;
         }
         button {
             background: #333;
@@ -206,11 +186,6 @@
         button.primary:hover {
             background: #00cca3;
         }
-        button:disabled {
-            background: #333;
-            color: #666;
-            cursor: not-allowed;
-        }
         .log {
             background: #000;
             border-radius: 8px;
@@ -223,10 +198,6 @@
             border: 1px solid #333;
             margin-top: 20px;
         }
-        .log-entry {
-            margin-bottom: 4px;
-            border-bottom: 1px dotted #222;
-        }
         .log-entry.detection {
             color: #00ffcc;
             font-weight: bold;
@@ -236,9 +207,16 @@
 <body>
     <div class="container">
         <h1>👂 Zynth Receiver</h1>
-        <div class="subtitle">Digital Decoder - FSK Demodulator</div>
+        <div class="subtitle">FSK with Start/Stop Bit Detection</div>
 
         <div class="code-display" id="received-code">---</div>
+
+        <div class="frame-diagram" id="frame-status">
+            <span class="frame-part" id="status-wake">WAKE</span>
+            <span class="frame-part" id="status-start">START</span>
+            <span class="frame-part" id="status-data">DATA</span>
+            <span class="frame-part" id="status-stop">STOP</span>
+        </div>
 
         <div class="status-card">
             <div class="mic-status">
@@ -249,17 +227,11 @@
             <button id="stop-mic-btn" disabled>⏹️ Stop Listening</button>
         </div>
 
-        <div class="sync-indicator">
-            <div class="sync-led" id="sync-preamble"></div>
-            <div class="sync-led" id="sync-data"></div>
-            <div class="sync-led" id="sync-postamble"></div>
-            <div class="sync-led" id="sync-valid"></div>
+        <div class="progress-bar">
+            <div class="progress-fill" id="wake-progress"></div>
         </div>
 
-        <div class="decoding-indicator">
-            <div class="signal-led" id="signal-led">📡</div>
-            <div class="binary-row" id="binary-row"></div>
-        </div>
+        <div class="binary-row" id="binary-row"></div>
 
         <div class="stats-grid">
             <div class="stat-box">
@@ -267,23 +239,23 @@
                 <div class="stat-value" id="decoder-state">Waiting</div>
             </div>
             <div class="stat-box">
-                <div class="stat-label">Confidence</div>
-                <div class="stat-value" id="confidence">0%</div>
+                <div class="stat-label">Signal Strength</div>
+                <div class="stat-value" id="signal-strength">0.00</div>
             </div>
             <div class="stat-box">
                 <div class="stat-label">Bits Received</div>
                 <div class="stat-value" id="bits-received">0/16</div>
             </div>
             <div class="stat-box">
-                <div class="stat-label">Valid Codes</div>
-                <div class="stat-value" id="valid-codes">0</div>
+                <div class="stat-label">Valid Frames</div>
+                <div class="stat-value" id="valid-frames">0</div>
             </div>
         </div>
 
-        <button id="reset-decoder" onclick="resetDecoder()">🔄 Reset Decoder</button>
+        <button onclick="resetDecoder()">🔄 Reset Decoder</button>
 
         <div class="log" id="log">
-            <div class="log-entry">[System] Digital decoder ready</div>
+            <div class="log-entry">[System] FSK decoder ready</div>
         </div>
     </div>
 
@@ -300,30 +272,30 @@
         // FSK parameters (must match player)
         const FREQ_0 = 900;
         const FREQ_1 = 1234;
-        const FREQ_TOLERANCE = 30; // Hz
-        const BIT_DURATION = 100; // ms
-        const PREAMBLE_DURATION = 200; // ms
-        const POSTAMBLE_DURATION = 200; // ms
+        const FREQ_TOLERANCE = 25; // Hz
+        const WAKE_DURATION = 500;  // ms
+        const START_DURATION = 200; // ms
+        const BIT_DURATION = 150;   // ms
+        const STOP_DURATION = 200;  // ms
 
-        // Decoder state machine
+        // Decoder state
         const STATE_IDLE = 0;
-        const STATE_PREAMBLE = 1;
-        const STATE_DATA = 2;
-        const STATE_POSTAMBLE = 3;
-        const STATE_COMPLETE = 4;
+        const STATE_WAKE = 1;
+        const STATE_START = 2;
+        const STATE_DATA = 3;
+        const STATE_STOP = 4;
+        const STATE_COMPLETE = 5;
 
         let decoderState = STATE_IDLE;
-        let preambleStartTime = 0;
+        let stateStartTime = 0;
         let currentBits = [];
-        let receivedCodes = [];
-        let bitBuffer = [];
-        let lastFrequency = 0;
-        let validCodeCount = 0;
+        let bitSamples = [];
+        let validFrameCount = 0;
+        let wakeConfidence = 0;
 
         const FFT_SIZE = 8192;
         const MIN_ENERGY = 0.02;
-        const REQUIRED_PREAMBLE_MATCHES = 3; // Need 3 consecutive preamble detections
-        let preambleMatchCount = 0;
+        const SAMPLES_PER_BIT = 5; // Take 5 samples per bit for majority voting
 
         // ============================================
         // DOM elements
@@ -331,29 +303,30 @@
         const micBtn = document.getElementById('mic-btn');
         const stopMicBtn = document.getElementById('stop-mic-btn');
         const micLed = document.getElementById('mic-led');
-        const signalLed = document.getElementById('signal-led');
         const receivedCodeSpan = document.getElementById('received-code');
         const decoderStateSpan = document.getElementById('decoder-state');
-        const confidenceSpan = document.getElementById('confidence');
+        const signalStrengthSpan = document.getElementById('signal-strength');
         const bitsReceivedSpan = document.getElementById('bits-received');
-        const validCodesSpan = document.getElementById('valid-codes');
+        const validFramesSpan = document.getElementById('valid-frames');
         const binaryRow = document.getElementById('binary-row');
-        const syncPreamble = document.getElementById('sync-preamble');
-        const syncData = document.getElementById('sync-data');
-        const syncPostamble = document.getElementById('sync-postamble');
-        const syncValid = document.getElementById('sync-valid');
+        const wakeProgress = document.getElementById('wake-progress');
+        const statusWake = document.getElementById('status-wake');
+        const statusStart = document.getElementById('status-start');
+        const statusData = document.getElementById('status-data');
+        const statusStop = document.getElementById('status-stop');
 
         // ============================================
         // Reset decoder
         // ============================================
         function resetDecoder() {
             decoderState = STATE_IDLE;
-            preambleStartTime = 0;
+            stateStartTime = 0;
             currentBits = [];
-            bitBuffer = [];
-            preambleMatchCount = 0;
+            bitSamples = [];
+            wakeConfidence = 0;
             updateBinaryRow([]);
-            updateSyncLEDs();
+            updateFrameStatus();
+            wakeProgress.style.width = '0%';
             decoderStateSpan.innerText = 'Idle';
             log("🔄 Decoder reset");
         }
@@ -366,7 +339,7 @@
             for (let i = 0; i < 16; i++) {
                 const bit = document.createElement('div');
                 bit.className = 'bit';
-                if (i < bits.length) {
+                if (i < bits.length && bits[i] !== undefined) {
                     bit.innerText = bits[i];
                     bit.classList.add('received');
                 } else {
@@ -377,26 +350,33 @@
         }
 
         // ============================================
-        // Update sync LEDs
+        // Update frame status display
         // ============================================
-        function updateSyncLEDs() {
-            syncPreamble.classList.remove('active', 'preamble');
-            syncData.classList.remove('active');
-            syncPostamble.classList.remove('active');
-            syncValid.classList.remove('active');
+        function updateFrameStatus() {
+            statusWake.className = 'frame-part';
+            statusStart.className = 'frame-part';
+            statusData.className = 'frame-part';
+            statusStop.className = 'frame-part';
 
             switch(decoderState) {
-                case STATE_PREAMBLE:
-                    syncPreamble.classList.add('preamble');
+                case STATE_WAKE:
+                    statusWake.className = 'frame-part wakeup-detected';
+                    break;
+                case STATE_START:
+                    statusWake.className = 'frame-part wakeup-detected';
+                    statusStart.className = 'frame-part start-detected';
                     break;
                 case STATE_DATA:
-                    syncData.classList.add('active');
+                    statusWake.className = 'frame-part wakeup-detected';
+                    statusStart.className = 'frame-part start-detected';
+                    statusData.className = 'frame-part data-detected';
                     break;
-                case STATE_POSTAMBLE:
-                    syncPostamble.classList.add('active');
-                    break;
+                case STATE_STOP:
                 case STATE_COMPLETE:
-                    syncValid.classList.add('active');
+                    statusWake.className = 'frame-part wakeup-detected';
+                    statusStart.className = 'frame-part start-detected';
+                    statusData.className = 'frame-part data-detected';
+                    statusStop.className = 'frame-part stop-detected';
                     break;
             }
         }
@@ -410,8 +390,6 @@
                     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
                 }
 
-                log("🎤 Requesting microphone access...");
-
                 const stream = await navigator.mediaDevices.getUserMedia({
                     audio: {
                         echoCancellation: false,
@@ -422,12 +400,10 @@
                 });
 
                 mediaStream = stream;
-
                 const source = audioCtx.createMediaStreamSource(stream);
                 analyser = audioCtx.createAnalyser();
                 analyser.fftSize = FFT_SIZE;
                 analyser.smoothingTimeConstant = 0.1;
-
                 source.connect(analyser);
 
                 if (audioCtx.state === 'suspended') {
@@ -439,14 +415,12 @@
                 micBtn.disabled = true;
                 stopMicBtn.disabled = false;
 
-                log("✅ Microphone active - decoding FSK signal");
-
+                log("✅ Microphone active");
                 resetDecoder();
                 decodeSignal();
 
             } catch (e) {
                 log(`❌ Mic error: ${e.message}`);
-                micLed.className = 'mic-led';
             }
         });
 
@@ -467,14 +441,12 @@
 
             if (animationFrame) {
                 cancelAnimationFrame(animationFrame);
-                animationFrame = null;
             }
-
             log("⏹️ Stopped listening");
         });
 
         // ============================================
-        // Detect current frequency
+        // Detect current frequency and strength
         // ============================================
         function detectFrequency() {
             const bufferLength = analyser.frequencyBinCount;
@@ -483,7 +455,6 @@
 
             const nyquist = audioCtx.sampleRate / 2;
 
-            // Check both frequencies
             const bin0 = Math.floor(FREQ_0 / nyquist * bufferLength);
             const bin1 = Math.floor(FREQ_1 / nyquist * bufferLength);
             const tolerance = Math.floor(FREQ_TOLERANCE / nyquist * bufferLength);
@@ -506,28 +477,20 @@
             }
             energy1 = energy1 / (tolerance * 2 + 1);
 
-            // Determine dominant frequency
-            if (energy0 < MIN_ENERGY && energy1 < MIN_ENERGY) {
-                return { freq: 0, bit: null, confidence: 0 };
+            const maxEnergy = Math.max(energy0, energy1);
+            signalStrengthSpan.innerText = maxEnergy.toFixed(3);
+
+            if (maxEnergy < MIN_ENERGY) {
+                return { bit: null, confidence: 0, energy0, energy1 };
             }
 
-            if (energy1 > energy0 * 1.5) {
-                return {
-                    freq: FREQ_1,
-                    bit: 1,
-                    confidence: Math.min(1, energy1 / (energy0 + 0.01)),
-                    energy: energy1
-                };
-            } else if (energy0 > energy1 * 1.5) {
-                return {
-                    freq: FREQ_0,
-                    bit: 0,
-                    confidence: Math.min(1, energy0 / (energy1 + 0.01)),
-                    energy: energy0
-                };
+            if (energy1 > energy0 * 1.8) {
+                return { bit: 1, confidence: energy1 / (energy0 + 0.01), energy0, energy1 };
+            } else if (energy0 > energy1 * 1.8) {
+                return { bit: 0, confidence: energy0 / (energy1 + 0.01), energy0, energy1 };
             }
 
-            return { freq: 0, bit: null, confidence: 0 };
+            return { bit: null, confidence: 0, energy0, energy1 };
         }
 
         // ============================================
@@ -542,75 +505,85 @@
             const detection = detectFrequency();
             const now = Date.now();
 
-            // Update signal LED based on detection
-            if (detection.bit !== null) {
-                signalLed.className = 'signal-led detected';
-                lastFrequency = detection.freq;
-            } else {
-                signalLed.className = 'signal-led';
-            }
-
             // State machine
             switch(decoderState) {
                 case STATE_IDLE:
                     decoderStateSpan.innerText = 'Idle';
-                    if (detection.bit === 1 && detection.confidence > 0.7) {
-                        // Possible preamble detected
-                        preambleMatchCount++;
-                        if (preambleMatchCount >= REQUIRED_PREAMBLE_MATCHES) {
-                            decoderState = STATE_PREAMBLE;
-                            preambleStartTime = now;
-                            preambleMatchCount = 0;
-                            log("🔴 Preamble detected - starting decode", 'detection');
-                        }
-                    } else {
-                        preambleMatchCount = 0;
+                    // Look for wake-up tone (long 1234 Hz)
+                    if (detection.bit === 1 && detection.confidence > 0.8) {
+                        decoderState = STATE_WAKE;
+                        stateStartTime = now;
+                        wakeConfidence = 0;
+                        log("🔴 Wake-up tone detected", 'detection');
                     }
                     break;
 
-                case STATE_PREAMBLE:
-                    decoderStateSpan.innerText = 'Preamble';
-                    // Look for continuous 1234 Hz for PREAMBLE_DURATION
-                    if (detection.bit === 1 && detection.confidence > 0.6) {
-                        if (now - preambleStartTime >= PREAMBLE_DURATION * 0.8) {
+                case STATE_WAKE:
+                    decoderStateSpan.innerText = 'Wake';
+                    if (detection.bit === 1 && detection.confidence > 0.7) {
+                        // Update progress
+                        const wakeProgressPercent = Math.min(100, ((now - stateStartTime) / WAKE_DURATION) * 100);
+                        wakeProgress.style.width = wakeProgressPercent + '%';
+
+                        // After enough wake time, look for start bit
+                        if (now - stateStartTime >= WAKE_DURATION * 0.8) {
+                            decoderState = STATE_START;
+                            stateStartTime = now;
+                            log("✅ Wake complete, waiting for start bit", 'detection');
+                        }
+                    } else {
+                        // Lost wake signal - reset
+                        resetDecoder();
+                    }
+                    break;
+
+                case STATE_START:
+                    decoderStateSpan.innerText = 'Start';
+                    if (detection.bit === 1 && detection.confidence > 0.7) {
+                        if (now - stateStartTime >= START_DURATION * 0.8) {
                             decoderState = STATE_DATA;
+                            stateStartTime = now;
                             currentBits = [];
-                            bitBuffer = [];
-                            log("📡 Preamble complete - starting data reception", 'detection');
+                            bitSamples = [];
+                            log("✅ Start bit detected, receiving data...", 'detection');
                         }
                     } else if (detection.bit !== null) {
-                        // Reset if we lose the signal
-                        preambleStartTime = now;
+                        // Wrong bit during start - reset
+                        resetDecoder();
                     }
                     break;
 
                 case STATE_DATA:
                     decoderStateSpan.innerText = 'Data';
-                    if (detection.bit !== null && detection.confidence > 0.5) {
-                        // Sample at expected bit rate
-                        const bitIndex = Math.floor((now - preambleStartTime - PREAMBLE_DURATION) / BIT_DURATION);
+                    if (detection.bit !== null && detection.confidence > 0.6) {
+                        // Calculate which bit we're on
+                        const elapsedSinceStart = now - stateStartTime;
+                        const bitIndex = Math.floor(elapsedSinceStart / BIT_DURATION);
 
                         if (bitIndex >= 0 && bitIndex < 16) {
-                            // Store this bit with timestamp
-                            bitBuffer.push({
+                            // Store sample for this bit position
+                            if (!bitSamples[bitIndex]) {
+                                bitSamples[bitIndex] = [];
+                            }
+                            bitSamples[bitIndex].push({
                                 bit: detection.bit,
                                 time: now,
-                                confidence: detection.confidence,
-                                index: bitIndex
+                                confidence: detection.confidence
                             });
 
-                            // Clean up old samples
-                            bitBuffer = bitBuffer.filter(b => b.time > now - BIT_DURATION * 2);
+                            // Keep only recent samples
+                            if (bitSamples[bitIndex].length > SAMPLES_PER_BIT) {
+                                bitSamples[bitIndex].shift();
+                            }
 
-                            // Determine majority bit for this position
-                            const samplesForIndex = bitBuffer.filter(b => b.index === bitIndex);
-                            if (samplesForIndex.length > 3) {
-                                const ones = samplesForIndex.filter(b => b.bit === 1).length;
-                                const zeros = samplesForIndex.filter(b => b.bit === 0).length;
+                            // Determine bit value by majority vote
+                            if (bitSamples[bitIndex].length >= 3) {
+                                const ones = bitSamples[bitIndex].filter(s => s.bit === 1).length;
+                                const zeros = bitSamples[bitIndex].filter(s => s.bit === 0).length;
                                 const majorityBit = ones > zeros ? 1 : 0;
-                                const confidence = Math.max(ones, zeros) / samplesForIndex.length;
+                                const confidence = Math.max(ones, zeros) / bitSamples[bitIndex].length;
 
-                                if (!currentBits[bitIndex] || confidence > 0.8) {
+                                if (currentBits[bitIndex] === undefined || confidence > 0.8) {
                                     currentBits[bitIndex] = majorityBit;
                                     updateBinaryRow(currentBits);
                                     bitsReceivedSpan.innerText = `${currentBits.filter(b => b !== undefined).length}/16`;
@@ -619,65 +592,58 @@
                             }
                         }
 
-                        // Check if we have all bits
+                        // Check if we've received all bits
                         if (currentBits.filter(b => b !== undefined).length === 16) {
-                            decoderState = STATE_POSTAMBLE;
-                            preambleStartTime = now; // Reuse for postamble timing
-                            log("✅ All 16 bits received, waiting for postamble", 'detection');
+                            decoderState = STATE_STOP;
+                            stateStartTime = now;
+                            log("✅ All bits received, waiting for stop bit", 'detection');
                         }
                     }
                     break;
 
-                case STATE_POSTAMBLE:
-                    decoderStateSpan.innerText = 'Postamble';
-                    // Look for postamble (1234 Hz for 200ms)
-                    if (detection.bit === 1 && detection.confidence > 0.6) {
-                        if (now - preambleStartTime >= POSTAMBLE_DURATION * 0.8) {
-                            // Valid code received!
+                case STATE_STOP:
+                    decoderStateSpan.innerText = 'Stop';
+                    if (detection.bit === 1 && detection.confidence > 0.7) {
+                        if (now - stateStartTime >= STOP_DURATION * 0.8) {
+                            // Valid frame received!
                             const codeString = currentBits.join('');
+                            receivedCodeSpan.innerText = codeString;
 
-                            // Verify it's a valid 16-bit code
-                            if (codeString.length === 16 && !codeString.includes(undefined)) {
-                                receivedCodeSpan.innerText = codeString;
+                            validFrameCount++;
+                            validFramesSpan.innerText = validFrameCount;
 
-                                // Calculate confidence
-                                const avgConfidence = currentBits.reduce((sum, bit, i) => {
-                                    const bitSamples = bitBuffer.filter(b => b.index === i);
-                                    if (bitSamples.length > 0) {
-                                        const matchCount = bitSamples.filter(b => b.bit === bit).length;
-                                        return sum + (matchCount / bitSamples.length);
-                                    }
-                                    return sum + 0.5;
-                                }, 0) / 16;
+                            // Calculate overall confidence
+                            const avgConfidence = bitSamples.reduce((sum, samples, i) => {
+                                if (samples && samples.length > 0) {
+                                    const bit = currentBits[i];
+                                    const matches = samples.filter(s => s.bit === bit).length;
+                                    return sum + (matches / samples.length);
+                                }
+                                return sum + 0.5;
+                            }, 0) / 16;
 
-                                confidenceSpan.innerText = Math.round(avgConfidence * 100) + '%';
+                            log(`🎯 VALID FRAME: ${codeString} (${Math.round(avgConfidence*100)}% confidence)`, 'detection');
 
-                                validCodeCount++;
-                                validCodesSpan.innerText = validCodeCount;
-
-                                log(`🎯 VALID CODE RECEIVED: ${codeString} (${Math.round(avgConfidence*100)}% confidence)`, 'detection');
-
-                                decoderState = STATE_COMPLETE;
-                            }
+                            decoderState = STATE_COMPLETE;
                         }
                     } else if (detection.bit !== null) {
-                        // Reset postamble timer if signal lost
-                        preambleStartTime = now;
+                        // Lost stop signal - reset
+                        resetDecoder();
                     }
                     break;
 
                 case STATE_COMPLETE:
                     decoderStateSpan.innerText = 'Complete';
-                    // Auto-reset after 2 seconds
+                    // Auto-reset after 3 seconds
                     setTimeout(() => {
                         if (decoderState === STATE_COMPLETE) {
                             resetDecoder();
                         }
-                    }, 2000);
+                    }, 3000);
                     break;
             }
 
-            updateSyncLEDs();
+            updateFrameStatus();
             requestAnimationFrame(decodeSignal);
         }
 
@@ -708,7 +674,7 @@
             }
         });
 
-        log("System ready - digital FSK decoder");
+        log("System ready - FSK with start/stop bits");
     </script>
 </body>
 </html>

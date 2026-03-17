@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zynth Player - Digital Encoder</title>
+    <title>Zynth Player - FSK with Start/Stop Bits</title>
     <style>
         body {
             background: #1a1a1a;
@@ -48,6 +48,26 @@
             color: #00ffcc;
             margin: 20px 0;
         }
+        .frame-diagram {
+            display: flex;
+            justify-content: center;
+            gap: 5px;
+            margin: 20px 0;
+            padding: 15px;
+            background: #000;
+            border-radius: 12px;
+            flex-wrap: wrap;
+        }
+        .frame-part {
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 0.9rem;
+            font-weight: bold;
+        }
+        .wakeup { background: #ff3366; color: white; }
+        .start { background: #ffcc00; color: black; }
+        .data { background: #00ffcc; color: black; }
+        .stop { background: #9933ff; color: white; }
         .control-group {
             background: #1a1a1a;
             border-radius: 12px;
@@ -99,17 +119,20 @@
             padding: 10px;
             background: #000;
             border-radius: 8px;
+            flex-wrap: wrap;
         }
         .bit {
-            width: 40px;
-            height: 40px;
-            border-radius: 8px;
+            width: 30px;
+            height: 30px;
+            border-radius: 6px;
             background: #333;
             display: flex;
             align-items: center;
             justify-content: center;
             font-weight: bold;
+            font-size: 0.9rem;
             transition: all 0.1s;
+            margin: 2px;
         }
         .bit.active {
             background: #00ffcc;
@@ -124,24 +147,6 @@
             font-family: monospace;
             margin: 20px 0;
             border-left: 4px solid #00ffcc;
-        }
-        .indicator {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin: 30px 0;
-            gap: 10px;
-        }
-        .sync-led {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            background: #222;
-            transition: all 0.1s;
-        }
-        .sync-led.active {
-            background: #00ffcc;
-            box-shadow: 0 0 30px #00ffcc;
         }
         .log {
             background: #000;
@@ -159,49 +164,43 @@
 <body>
     <div class="container">
         <h1>🎵 Zynth Player</h1>
-        <div class="subtitle">Digital Encoder - 16-bit Secure Code</div>
+        <div class="subtitle">FSK with Start/Stop Bits</div>
 
-        <div class="code-display" id="code-display">1011001110001101</div>
+        <div class="code-display" id="code-display">1100101010110011</div>
+
+        <div class="frame-diagram">
+            <span class="frame-part wakeup">WAKEUP (500ms)</span>
+            <span class="frame-part start">START (200ms)</span>
+            <span class="frame-part data">16 DATA BITS</span>
+            <span class="frame-part stop">STOP (200ms)</span>
+        </div>
 
         <div class="control-group">
-            <div class="control-label">Signal Settings</div>
-
-            <div class="binary-row" id="binary-row">
-                <!-- Bits will be generated here by JS -->
-            </div>
-
+            <div class="control-label">Data Bits</div>
+            <div class="binary-row" id="binary-row"></div>
             <div style="margin: 15px 0; color: #888; text-align: center;">
-                <span>0 = 900 Hz</span> | <span>1 = 1234 Hz</span>
+                <span style="color: #ff3366;">⬆️ Wake/Start/Stop = 1234 Hz</span> |
+                <span>0 = 900 Hz</span> |
+                <span>1 = 1234 Hz</span>
             </div>
         </div>
 
         <div class="button-grid">
-            <button class="primary" onclick="transmitCode()">📡 TRANSMIT CODE</button>
+            <button class="primary" onclick="transmitFrame()">📡 TRANSMIT FRAME</button>
             <button onclick="generateNewCode()">🔄 New Random Code</button>
-            <button onclick="transmitRepeating()">🔁 Transmit 5x</button>
+            <button onclick="transmitRepeating()">🔁 Transmit 3x</button>
             <button onclick="stopAll()">⏹️ Stop</button>
         </div>
 
         <div class="status-box">
-            <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
-                <span>Audio context:</span>
-                <span id="audio-state" style="color: #ffcc00;">not initialized</span>
-            </div>
             <div style="display: flex; justify-content: space-between;">
-                <span>Transmitting:</span>
+                <span>Status:</span>
                 <span id="transmit-status" style="color: #00ffcc;">Ready</span>
             </div>
         </div>
 
-        <div class="indicator">
-            <div class="sync-led" id="sync1"></div>
-            <div class="sync-led" id="sync2"></div>
-            <div class="sync-led" id="sync3"></div>
-            <div class="sync-led" id="sync4"></div>
-        </div>
-
         <div class="log" id="log">
-            <div class="log-entry">[System] Digital encoder ready</div>
+            <div class="log-entry">[System] FSK encoder ready</div>
         </div>
     </div>
 
@@ -214,13 +213,14 @@
         let repeatTimeout = null;
 
         // FSK parameters
-        const FREQ_0 = 900;  // 0 bit
-        const FREQ_1 = 1234; // 1 bit
-        const BIT_DURATION = 100; // ms per bit
-        const PREAMBLE_DURATION = 200; // ms of preamble tone
-        const POSTAMBLE_DURATION = 200; // ms of postamble tone
+        const FREQ_0 = 900;     // 0 bit
+        const FREQ_1 = 1234;    // 1 bit (also used for wake/start/stop)
+        const WAKE_DURATION = 500;    // ms - long wake-up tone
+        const START_DURATION = 200;    // ms - start bit
+        const BIT_DURATION = 150;      // ms per data bit (slightly longer for reliability)
+        const STOP_DURATION = 200;     // ms - stop bit
 
-        let currentCode = '1011001110001101'; // 16-bit code
+        let currentCode = '1100101010110011'; // 16-bit code
 
         // ============================================
         // Initialize
@@ -238,7 +238,6 @@
         }
 
         function generateNewCode() {
-            // Generate random 16-bit code
             let code = '';
             for (let i = 0; i < 16; i++) {
                 code += Math.random() > 0.5 ? '1' : '0';
@@ -266,66 +265,54 @@
                     log("✅ AudioContext resumed");
                 }
 
-                document.getElementById('audio-state').innerText = audioCtx.state;
-                document.getElementById('audio-state').style.color = '#00ffcc';
-
             } catch (e) {
                 log(`❌ Audio init failed: ${e.message}`);
             }
         }
 
         // ============================================
-        // Play a single tone
+        // Play a tone with promise
         // ============================================
-        function playTone(frequency, duration, volume = 0.5, callback) {
-            const oscillator = audioCtx.createOscillator();
-            const gainNode = audioCtx.createGain();
+        function playTone(frequency, duration, volume = 0.7) {
+            return new Promise((resolve) => {
+                const oscillator = audioCtx.createOscillator();
+                const gainNode = audioCtx.createGain();
 
-            oscillator.type = 'sine';
-            oscillator.frequency.value = frequency;
+                oscillator.type = 'sine';
+                oscillator.frequency.value = frequency;
 
-            // Smooth envelope
-            gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
-            gainNode.gain.linearRampToValueAtTime(volume, audioCtx.currentTime + 0.01);
-            gainNode.gain.setValueAtTime(volume, audioCtx.currentTime + duration - 0.01);
-            gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + duration);
+                // Smooth envelope
+                gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+                gainNode.gain.linearRampToValueAtTime(volume, audioCtx.currentTime + 0.01);
+                gainNode.gain.setValueAtTime(volume, audioCtx.currentTime + duration - 0.01);
+                gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + duration);
 
-            oscillator.connect(gainNode);
-            gainNode.connect(audioCtx.destination);
+                oscillator.connect(gainNode);
+                gainNode.connect(audioCtx.destination);
 
-            oscillator.start();
-
-            if (callback) {
-                setTimeout(callback, duration * 1000);
-            }
-
-            return oscillator;
+                oscillator.start();
+                setTimeout(resolve, duration * 1000);
+            });
         }
 
         // ============================================
-        // Update sync LEDs
+        // Highlight a bit
         // ============================================
-        function setSyncLED(step) {
-            document.getElementById('sync1').classList.remove('active');
-            document.getElementById('sync2').classList.remove('active');
-            document.getElementById('sync3').classList.remove('active');
-            document.getElementById('sync4').classList.remove('active');
-
-            if (step === 'preamble') {
-                document.getElementById('sync1').classList.add('active');
-            } else if (step === 'data') {
-                document.getElementById('sync2').classList.add('active');
-            } else if (step === 'postamble') {
-                document.getElementById('sync3').classList.add('active');
-            } else if (step === 'complete') {
-                document.getElementById('sync4').classList.add('active');
+        function highlightBit(index, active) {
+            const bit = document.getElementById(`bit-${index}`);
+            if (bit) {
+                if (active) {
+                    bit.classList.add('active');
+                } else {
+                    bit.classList.remove('active');
+                }
             }
         }
 
         // ============================================
-        // Transmit the full code
+        // Transmit complete frame
         // ============================================
-        async function transmitCode() {
+        async function transmitFrame() {
             try {
                 await initAudio();
 
@@ -337,54 +324,47 @@
                 isTransmitting = true;
                 document.getElementById('transmit-status').innerText = 'Transmitting...';
 
-                log(`📡 Transmitting 16-bit code: ${currentCode}`);
+                log(`📡 Transmitting frame with code: ${currentCode}`);
 
-                // Clear bit highlights
-                document.querySelectorAll('.bit').forEach(bit => {
-                    bit.classList.remove('active');
-                });
+                // Clear all highlights
+                for (let i = 0; i < 16; i++) {
+                    highlightBit(i, false);
+                }
 
-                // Step 1: Preamble - 200ms of 1234 Hz (sync tone)
-                setSyncLED('preamble');
-                log("🔊 Preamble tone");
-                await new Promise(resolve => {
-                    playTone(FREQ_1, PREAMBLE_DURATION / 1000, 0.7, resolve);
-                });
+                // 1. WAKE-UP TONE (longer to ensure receiver is ready)
+                log("🔊 WAKE-UP tone (500ms)");
+                await playTone(FREQ_1, WAKE_DURATION / 1000, 0.8);
 
-                // Step 2: Transmit each bit
-                setSyncLED('data');
+                // 2. START BIT
+                log("🔊 START bit (200ms)");
+                await playTone(FREQ_1, START_DURATION / 1000, 0.8);
+
+                // 3. DATA BITS (16 bits)
                 for (let i = 0; i < currentCode.length; i++) {
                     const bit = currentCode[i];
                     const freq = bit === '1' ? FREQ_1 : FREQ_0;
 
-                    // Highlight current bit
-                    document.getElementById(`bit-${i}`).classList.add('active');
+                    highlightBit(i, true);
+                    log(`Bit ${i+1}/16: ${bit} (${freq} Hz)`);
 
-                    log(`Bit ${i+1}/${currentCode.length}: ${bit} (${freq} Hz)`);
+                    await playTone(freq, BIT_DURATION / 1000, 0.6);
 
-                    await new Promise(resolve => {
-                        playTone(freq, BIT_DURATION / 1000, 0.5, resolve);
-                    });
+                    highlightBit(i, false);
 
-                    // Remove highlight after a short delay
-                    setTimeout(() => {
-                        document.getElementById(`bit-${i}`).classList.remove('active');
-                    }, 50);
+                    // Small gap between bits for clarity
+                    if (i < currentCode.length - 1) {
+                        await new Promise(resolve => setTimeout(resolve, 10));
+                    }
                 }
 
-                // Step 3: Postamble - 200ms of 1234 Hz (completion tone)
-                setSyncLED('postamble');
-                log("🔊 Postamble tone");
-                await new Promise(resolve => {
-                    playTone(FREQ_1, POSTAMBLE_DURATION / 1000, 0.7, resolve);
-                });
+                // 4. STOP BIT
+                log("🔊 STOP bit (200ms)");
+                await playTone(FREQ_1, STOP_DURATION / 1000, 0.8);
 
-                setSyncLED('complete');
-                log("✅ Transmission complete");
+                log("✅ Frame transmission complete");
+                document.getElementById('transmit-status').innerText = 'Complete';
 
-                // Reset after delay
                 setTimeout(() => {
-                    setSyncLED('');
                     document.getElementById('transmit-status').innerText = 'Ready';
                     isTransmitting = false;
                 }, 500);
@@ -405,20 +385,21 @@
             }
 
             let count = 0;
-            const maxCount = 5;
+            const maxCount = 3;
 
             const transmitNext = async () => {
                 if (count < maxCount && !isTransmitting) {
-                    await transmitCode();
+                    await transmitFrame();
                     count++;
-                    repeatTimeout = setTimeout(transmitNext, 1000);
+                    // Wait longer between transmissions
+                    repeatTimeout = setTimeout(transmitNext, 2000);
                 } else {
                     repeatTimeout = null;
                     log("✅ Repeating transmissions complete");
                 }
             };
 
-            log(`🔄 Transmitting code ${maxCount} times`);
+            log(`🔄 Transmitting frame ${maxCount} times`);
             transmitNext();
         }
 
@@ -431,11 +412,10 @@
                 repeatTimeout = null;
             }
             isTransmitting = false;
-            setSyncLED('');
             document.getElementById('transmit-status').innerText = 'Stopped';
-            document.querySelectorAll('.bit').forEach(bit => {
-                bit.classList.remove('active');
-            });
+            for (let i = 0; i < 16; i++) {
+                highlightBit(i, false);
+            }
             log("⏹️ Stopped");
         }
 
@@ -450,16 +430,14 @@
             console.log(message);
         }
 
-        // ============================================
         // Auto-init
-        // ============================================
         document.querySelectorAll('button').forEach(btn => {
             btn.addEventListener('click', () => {
                 if (!audioCtx) initAudio();
             });
         });
 
-        log("System ready - 16-bit digital encoder");
+        log("System ready - FSK with start/stop bits");
     </script>
 </body>
 </html>
