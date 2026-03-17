@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zynth Receiver - Tri-Tone Pattern Detector</title>
+    <title>Zynth Receiver - Fixed Pattern Detector</title>
     <style>
         body {
             background: #1a1a1a;
@@ -175,24 +175,40 @@
         }
         .pattern-viz {
             width: 100%;
-            height: 60px;
+            height: 80px;
             background: #000;
             border-radius: 8px;
             margin: 20px 0;
             border: 1px solid #333;
             position: relative;
+            display: flex;
+            align-items: flex-end;
+            justify-content: space-around;
+            padding: 0 10px;
+        }
+        .pattern-bar-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            width: 30%;
         }
         .pattern-bar {
-            position: absolute;
-            bottom: 0;
-            width: 30%;
+            width: 100%;
             height: 0px;
             background: #ff3366;
             transition: height 0.1s;
+            border-radius: 4px 4px 0 0;
         }
-        .pattern-bar:nth-child(1) { left: 5%; }
-        .pattern-bar:nth-child(2) { left: 35%; }
-        .pattern-bar:nth-child(3) { left: 65%; }
+        .pattern-label {
+            color: #888;
+            font-size: 0.8rem;
+            margin-top: 5px;
+        }
+        .pattern-tone {
+            color: #ff3366;
+            font-size: 0.7rem;
+            font-weight: bold;
+        }
         .log {
             background: #000;
             border-radius: 8px;
@@ -224,19 +240,22 @@
             color: #ff3366;
             font-weight: bold;
         }
+        .sensitivity-control {
+            margin: 20px 0;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>👂 Zynth Receiver</h1>
-        <div class="subtitle">Tri-Tone Pattern Detector</div>
+        <div class="subtitle">Fixed Tri-Tone Pattern Detector</div>
 
         <div class="pattern-badge">1234 Hz → 900 Hz → 1234 Hz</div>
 
         <div class="pattern-guide">
-            <span>⬆️ High</span>
+            <span>⬆️ High 1</span>
             <span>⬇️ Low</span>
-            <span>⬆️ High</span>
+            <span>⬆️ High 2</span>
         </div>
 
         <div class="status-card">
@@ -248,6 +267,16 @@
             <button id="stop-mic-btn" disabled>⏹️ Stop Listening</button>
         </div>
 
+        <div class="sensitivity-control">
+            <label style="color: #888; display: block; margin-bottom: 5px;">Pattern Matching Sensitivity</label>
+            <input type="range" id="sensitivity" min="0.5" max="2.0" step="0.1" value="1.0" style="width: 100%;">
+            <div style="display: flex; justify-content: space-between; color: #888; font-size: 0.8rem;">
+                <span>Strict</span>
+                <span id="sensitivity-value">1.0</span>
+                <span>Lenient</span>
+            </div>
+        </div>
+
         <div class="detection-indicator">
             <div class="signal-led" id="signal-led">📡</div>
             <div class="pattern-display" id="pattern-status">Waiting for pattern...</div>
@@ -255,9 +284,21 @@
         </div>
 
         <div class="pattern-viz" id="pattern-viz">
-            <div class="pattern-bar" id="bar1"></div>
-            <div class="pattern-bar" id="bar2"></div>
-            <div class="pattern-bar" id="bar3"></div>
+            <div class="pattern-bar-container">
+                <div class="pattern-bar" id="bar1"></div>
+                <div class="pattern-label">High 1</div>
+                <div class="pattern-tone" id="freq1">---</div>
+            </div>
+            <div class="pattern-bar-container">
+                <div class="pattern-bar" id="bar2"></div>
+                <div class="pattern-label">Low</div>
+                <div class="pattern-tone" id="freq2">---</div>
+            </div>
+            <div class="pattern-bar-container">
+                <div class="pattern-bar" id="bar3"></div>
+                <div class="pattern-label">High 2</div>
+                <div class="pattern-tone" id="freq3">---</div>
+            </div>
         </div>
 
         <div class="stats-grid">
@@ -266,21 +307,21 @@
                 <div class="stat-value" id="pattern-match">0%</div>
             </div>
             <div class="stat-box">
-                <div class="stat-label">Sequence Progress</div>
-                <div class="stat-value" id="sequence-progress">0/3</div>
+                <div class="stat-label">Tones Detected</div>
+                <div class="stat-value" id="tones-detected">0/3</div>
             </div>
             <div class="stat-box">
                 <div class="stat-label">Current Freq</div>
                 <div class="stat-value" id="current-freq">---</div>
             </div>
             <div class="stat-box">
-                <div class="stat-label">Confidence</div>
-                <div class="stat-value" id="confidence">0.0</div>
+                <div class="stat-label">Pattern Window</div>
+                <div class="stat-value" id="pattern-window">0.0s</div>
             </div>
         </div>
 
         <div class="log" id="log">
-            <div class="log-entry">[System] Zynth Receiver ready - listening for tri-tone pattern</div>
+            <div class="log-entry">[System] Zynth Receiver ready - fixed pattern detector</div>
         </div>
     </div>
 
@@ -295,29 +336,20 @@
         let animationFrame = null;
         let detectionCount = 0;
 
-        // Pattern detection state
-        let sequenceState = {
-            stage: 0, // 0=waiting for first high, 1=waiting for low, 2=waiting for final high, 3=complete
-            highDetected: false,
-            lowDetected: false,
-            finalHighDetected: false,
-            detectionWindow: null,
-            highFreqs: [],
-            lowFreqs: [],
-            confidence: 0
-        };
+        // Pattern detection - using a circular buffer to find sequences
+        const MAX_HISTORY = 50; // Keep 50 frames of history (~1 second at 60fps)
+        let detectionHistory = [];
+        let matchedPatterns = [];
+        let sensitivity = 1.0;
 
         // Pattern definition
         const PATTERN = {
             HIGH_FREQ: 1234,
             LOW_FREQ: 900,
-            TOLERANCE: 20, // Hz
-            STAGE1_DURATION: 300, // ms to detect first high
-            STAGE2_DURATION: 300, // ms to detect low
-            STAGE3_DURATION: 300, // ms to detect final high
-            MAX_PATTERN_DURATION: 1500, // Total max time for pattern
-            MIN_ENERGY: 0.03, // Minimum energy to consider a detection
-            CONFIDENCE_THRESHOLD: 0.7 // Minimum confidence to trigger
+            TOLERANCE: 30, // Hz - slightly wider tolerance
+            MIN_ENERGY: 0.02, // Lower threshold for better detection
+            PATTERN_WINDOW_MS: 2000, // Look for pattern within 2 second window
+            REQUIRED_MATCHES: 3 // Require 3 matching sequences to confirm
         };
 
         const FFT_SIZE = 8192;
@@ -332,12 +364,25 @@
         const patternStatus = document.getElementById('pattern-status');
         const detectionCountSpan = document.getElementById('detection-count');
         const patternMatchSpan = document.getElementById('pattern-match');
-        const sequenceProgressSpan = document.getElementById('sequence-progress');
+        const tonesDetectedSpan = document.getElementById('tones-detected');
         const currentFreqSpan = document.getElementById('current-freq');
-        const confidenceSpan = document.getElementById('confidence');
+        const patternWindowSpan = document.getElementById('pattern-window');
         const bar1 = document.getElementById('bar1');
         const bar2 = document.getElementById('bar2');
         const bar3 = document.getElementById('bar3');
+        const freq1 = document.getElementById('freq1');
+        const freq2 = document.getElementById('freq2');
+        const freq3 = document.getElementById('freq3');
+        const sensitivitySlider = document.getElementById('sensitivity');
+        const sensitivityValue = document.getElementById('sensitivity-value');
+
+        // ============================================
+        // Sensitivity control
+        // ============================================
+        sensitivitySlider.addEventListener('input', (e) => {
+            sensitivity = parseFloat(e.target.value);
+            sensitivityValue.innerText = sensitivity.toFixed(1);
+        });
 
         // ============================================
         // Enable microphone
@@ -364,7 +409,7 @@
                 const source = audioCtx.createMediaStreamSource(stream);
                 analyser = audioCtx.createAnalyser();
                 analyser.fftSize = FFT_SIZE;
-                analyser.smoothingTimeConstant = 0.1;
+                analyser.smoothingTimeConstant = 0.2;
 
                 source.connect(analyser);
 
@@ -379,8 +424,9 @@
 
                 log("✅ Microphone active - listening for tri-tone pattern");
 
-                // Reset sequence
-                resetSequence();
+                // Clear history
+                detectionHistory = [];
+                matchedPatterns = [];
 
                 // Start detection
                 detectPattern();
@@ -415,77 +461,95 @@
         });
 
         // ============================================
-        // Reset pattern sequence
+        // Check if frequency matches target
         // ============================================
-        function resetSequence() {
-            sequenceState = {
-                stage: 0,
-                highDetected: false,
-                lowDetected: false,
-                finalHighDetected: false,
-                detectionWindow: Date.now(),
-                highFreqs: [],
-                lowFreqs: [],
-                confidence: 0
-            };
-            updateUI();
+        function frequencyMatches(freq, target) {
+            return Math.abs(freq - target) <= PATTERN.TOLERANCE * sensitivity;
         }
 
         // ============================================
         // Update visualization
         // ============================================
-        function updateUI() {
-            // Update progress bars
-            bar1.style.height = sequenceState.highDetected ? '40px' : '10px';
-            bar1.style.background = sequenceState.highDetected ? '#ff3366' : '#333';
+        function updateUI(detected) {
+            if (!detected) return;
 
-            bar2.style.height = sequenceState.lowDetected ? '40px' : '10px';
-            bar2.style.background = sequenceState.lowDetected ? '#ff3366' : '#333';
-
-            bar3.style.height = sequenceState.finalHighDetected ? '40px' : '10px';
-            bar3.style.background = sequenceState.finalHighDetected ? '#ff3366' : '#333';
-
-            // Update progress text
-            let progress = 0;
-            if (sequenceState.highDetected) progress = 1;
-            if (sequenceState.lowDetected) progress = 2;
-            if (sequenceState.finalHighDetected) progress = 3;
-            sequenceProgressSpan.innerText = progress + '/3';
-
-            // Update pattern match percentage
-            if (sequenceState.finalHighDetected) {
-                patternMatchSpan.innerText = Math.round(sequenceState.confidence * 100) + '%';
-            } else {
-                patternMatchSpan.innerText = '0%';
-            }
-
-            confidenceSpan.innerText = sequenceState.confidence.toFixed(2);
-
-            // Update status message
-            if (sequenceState.finalHighDetected) {
-                patternStatus.innerText = '🎯 PATTERN DETECTED!';
-                patternStatus.style.color = '#ff3366';
-            } else if (sequenceState.lowDetected) {
-                patternStatus.innerText = '⬇️ Looking for final high tone...';
-                patternStatus.style.color = '#ffcc00';
-            } else if (sequenceState.highDetected) {
-                patternStatus.innerText = '⬇️ Looking for low tone...';
-                patternStatus.style.color = '#ffcc00';
-            } else {
-                patternStatus.innerText = '⬆️ Waiting for first high tone...';
-                patternStatus.style.color = '#888';
+            // Update bars based on most recent detection
+            if (detected.type === 'high1') {
+                bar1.style.height = '60px';
+                freq1.innerText = Math.round(detected.freq) + 'Hz';
+            } else if (detected.type === 'low') {
+                bar2.style.height = '60px';
+                freq2.innerText = Math.round(detected.freq) + 'Hz';
+            } else if (detected.type === 'high2') {
+                bar3.style.height = '60px';
+                freq3.innerText = Math.round(detected.freq) + 'Hz';
             }
         }
 
         // ============================================
-        // Check if frequency matches target
+        // Find pattern in history
         // ============================================
-        function frequencyMatches(freq, target) {
-            return Math.abs(freq - target) <= PATTERN.TOLERANCE;
+        function findPatternInHistory() {
+            if (detectionHistory.length < 3) return null;
+
+            const now = Date.now();
+            const windowStart = now - PATTERN.PATTERN_WINDOW_MS;
+
+            // Filter history to within time window
+            const recentHistory = detectionHistory.filter(d => d.time > windowStart);
+
+            if (recentHistory.length < 3) return null;
+
+            // Look for sequences of high1 -> low -> high2
+            let bestPattern = null;
+            let bestScore = 0;
+
+            for (let i = 0; i < recentHistory.length - 2; i++) {
+                for (let j = i + 1; j < recentHistory.length - 1; j++) {
+                    for (let k = j + 1; k < recentHistory.length; k++) {
+                        const d1 = recentHistory[i];
+                        const d2 = recentHistory[j];
+                        const d3 = recentHistory[k];
+
+                        // Check if they form a valid pattern
+                        const isHigh1 = d1.type === 'high1' || (d1.type === 'high' && d1.count === 1);
+                        const isLow = d2.type === 'low';
+                        const isHigh2 = d3.type === 'high2' || (d3.type === 'high' && d3.count === 2);
+
+                        if (isHigh1 && isLow && isHigh2) {
+                            // Calculate pattern score based on frequency accuracy
+                            const score1 = 1 - Math.min(1, Math.abs(d1.freq - PATTERN.HIGH_FREQ) / PATTERN.TOLERANCE);
+                            const score2 = 1 - Math.min(1, Math.abs(d2.freq - PATTERN.LOW_FREQ) / PATTERN.TOLERANCE);
+                            const score3 = 1 - Math.min(1, Math.abs(d3.freq - PATTERN.HIGH_FREQ) / PATTERN.TOLERANCE);
+
+                            const totalScore = (score1 + score2 + score3) / 3;
+
+                            // Check timing (should be roughly sequential with gaps)
+                            const timeGap1 = d2.time - d1.time;
+                            const timeGap2 = d3.time - d2.time;
+
+                            // Reasonable gaps (100ms to 800ms between tones)
+                            if (timeGap1 > 50 && timeGap1 < 1000 &&
+                                timeGap2 > 50 && timeGap2 < 1000 &&
+                                totalScore > bestScore) {
+                                bestScore = totalScore;
+                                bestPattern = {
+                                    d1, d2, d3,
+                                    score: totalScore,
+                                    timeGap1,
+                                    timeGap2
+                                };
+                            }
+                        }
+                    }
+                }
+            }
+
+            return bestPattern;
         }
 
         // ============================================
-        // Pattern detection
+        // Pattern detection - using history matching
         // ============================================
         function detectPattern() {
             if (!isListening || !analyser || !audioCtx) {
@@ -499,140 +563,164 @@
 
             const nyquist = audioCtx.sampleRate / 2;
 
-            // Find dominant frequency in our bands of interest
+            // Check both frequencies
             const highBin = Math.floor(PATTERN.HIGH_FREQ / nyquist * bufferLength);
             const lowBin = Math.floor(PATTERN.LOW_FREQ / nyquist * bufferLength);
-            const toleranceBins = Math.floor(PATTERN.TOLERANCE / nyquist * bufferLength);
+            const toleranceBins = Math.floor((PATTERN.TOLERANCE * sensitivity) / nyquist * bufferLength);
 
-            // Check energy at high frequency band
-            let highEnergy = 0;
-            let highBinMax = highBin;
-            let highMaxEnergy = 0;
+            // Find peak in high band
+            let highPeakFreq = 0;
+            let highPeakEnergy = 0;
+            let highPeakBin = highBin;
 
             for (let i = highBin - toleranceBins; i <= highBin + toleranceBins; i++) {
                 if (i >= 0 && i < bufferLength) {
                     const energy = dataArray[i] / 255;
-                    highEnergy += energy;
-                    if (energy > highMaxEnergy) {
-                        highMaxEnergy = energy;
-                        highBinMax = i;
+                    if (energy > highPeakEnergy) {
+                        highPeakEnergy = energy;
+                        highPeakBin = i;
                     }
                 }
             }
-            highEnergy = highEnergy / (toleranceBins * 2 + 1);
+            highPeakFreq = (highPeakBin / bufferLength) * nyquist;
 
-            // Check energy at low frequency band
-            let lowEnergy = 0;
-            let lowBinMax = lowBin;
-            let lowMaxEnergy = 0;
+            // Find peak in low band
+            let lowPeakFreq = 0;
+            let lowPeakEnergy = 0;
+            let lowPeakBin = lowBin;
 
             for (let i = lowBin - toleranceBins; i <= lowBin + toleranceBins; i++) {
                 if (i >= 0 && i < bufferLength) {
                     const energy = dataArray[i] / 255;
-                    lowEnergy += energy;
-                    if (energy > lowMaxEnergy) {
-                        lowMaxEnergy = energy;
-                        lowBinMax = i;
+                    if (energy > lowPeakEnergy) {
+                        lowPeakEnergy = energy;
+                        lowPeakBin = i;
                     }
                 }
             }
-            lowEnergy = lowEnergy / (toleranceBins * 2 + 1);
-
-            // Get current dominant frequency
-            const highFreq = (highBinMax / bufferLength) * nyquist;
-            const lowFreq = (lowBinMax / bufferLength) * nyquist;
+            lowPeakFreq = (lowPeakBin / bufferLength) * nyquist;
 
             // Determine what we're hearing now
-            let currentFreq = 0;
-            let currentEnergy = 0;
-            let currentBand = 'none';
-
-            if (highEnergy > PATTERN.MIN_ENERGY && highEnergy > lowEnergy * 1.5) {
-                currentFreq = highFreq;
-                currentEnergy = highEnergy;
-                currentBand = 'high';
-            } else if (lowEnergy > PATTERN.MIN_ENERGY && lowEnergy > highEnergy * 1.5) {
-                currentFreq = lowFreq;
-                currentEnergy = lowEnergy;
-                currentBand = 'low';
-            }
-
-            currentFreqSpan.innerText = currentFreq > 0 ? Math.round(currentFreq) + ' Hz' : '---';
-
             const now = Date.now();
+            let detected = null;
 
-            // Pattern matching state machine
-            if (currentBand !== 'none') {
-                switch (sequenceState.stage) {
-                    case 0: // Waiting for first high tone
-                        if (currentBand === 'high' && frequencyMatches(currentFreq, PATTERN.HIGH_FREQ)) {
-                            sequenceState.highDetected = true;
-                            sequenceState.stage = 1;
-                            sequenceState.detectionWindow = now;
-                            sequenceState.highFreqs.push(currentFreq);
-                            log(`⬆️ First high tone detected: ${Math.round(currentFreq)} Hz`, 'detection');
-                        }
-                        break;
+            if (highPeakEnergy > PATTERN.MIN_ENERGY && highPeakEnergy > lowPeakEnergy * 1.2) {
+                // High frequency detected
+                const matchesHigh = frequencyMatches(highPeakFreq, PATTERN.HIGH_FREQ);
+                if (matchesHigh) {
+                    // Count how many high tones we've seen recently
+                    const recentHighs = detectionHistory.filter(d =>
+                        d.time > now - 2000 && (d.type === 'high1' || d.type === 'high2' || d.type === 'high')
+                    ).length;
 
-                    case 1: // Waiting for low tone
-                        if (currentBand === 'low' && frequencyMatches(currentFreq, PATTERN.LOW_FREQ)) {
-                            sequenceState.lowDetected = true;
-                            sequenceState.stage = 2;
-                            sequenceState.detectionWindow = now;
-                            sequenceState.lowFreqs.push(currentFreq);
-                            log(`⬇️ Low tone detected: ${Math.round(currentFreq)} Hz`, 'detection');
-                        } else if (now - sequenceState.detectionWindow > PATTERN.STAGE2_DURATION) {
-                            // Timeout - reset
-                            resetSequence();
-                        }
-                        break;
+                    detected = {
+                        time: now,
+                        freq: highPeakFreq,
+                        energy: highPeakEnergy,
+                        type: recentHighs === 0 ? 'high1' : 'high2',
+                        count: recentHighs + 1
+                    };
 
-                    case 2: // Waiting for final high tone
-                        if (currentBand === 'high' && frequencyMatches(currentFreq, PATTERN.HIGH_FREQ)) {
-                            sequenceState.finalHighDetected = true;
-                            sequenceState.stage = 3;
-
-                            // Calculate confidence based on frequency accuracy
-                            const firstHighAvg = sequenceState.highFreqs.reduce((a, b) => a + b, 0) / sequenceState.highFreqs.length;
-                            const lowAvg = sequenceState.lowFreqs.reduce((a, b) => a + b, 0) / sequenceState.lowFreqs.length;
-
-                            const highAccuracy = 1 - Math.min(1, Math.abs(firstHighAvg - PATTERN.HIGH_FREQ) / PATTERN.TOLERANCE);
-                            const lowAccuracy = 1 - Math.min(1, Math.abs(lowAvg - PATTERN.LOW_FREQ) / PATTERN.TOLERANCE);
-                            const finalHighAccuracy = 1 - Math.min(1, Math.abs(currentFreq - PATTERN.HIGH_FREQ) / PATTERN.TOLERANCE);
-
-                            sequenceState.confidence = (highAccuracy + lowAccuracy + finalHighAccuracy) / 3;
-
-                            log(`⬆️ Final high tone detected: ${Math.round(currentFreq)} Hz`, 'detection');
-
-                            // Check if pattern is complete and confidence is high enough
-                            if (sequenceState.confidence >= PATTERN.CONFIDENCE_THRESHOLD) {
-                                detectionCount++;
-                                detectionCountSpan.innerText = `Detections: ${detectionCount}`;
-
-                                signalLed.className = 'signal-led detected';
-                                setTimeout(() => {
-                                    signalLed.className = 'signal-led';
-                                }, 1000);
-
-                                log(`🎯 TRI-TONE PATTERN MATCHED! Confidence: ${Math.round(sequenceState.confidence * 100)}%`, 'detection');
-                            }
-
-                            // Auto-reset after detection
-                            setTimeout(resetSequence, 2000);
-                        } else if (now - sequenceState.detectionWindow > PATTERN.STAGE3_DURATION) {
-                            // Timeout - reset
-                            resetSequence();
-                        }
-                        break;
+                    if (recentHighs === 0) {
+                        log(`⬆️ First high tone detected: ${Math.round(highPeakFreq)} Hz`, 'detection');
+                    } else {
+                        log(`⬆️ Second high tone detected: ${Math.round(highPeakFreq)} Hz`, 'detection');
+                    }
                 }
-            } else if (sequenceState.stage > 0) {
-                // No signal detected but we're in a sequence - check timeout
-                if (now - sequenceState.detectionWindow > PATTERN.MAX_PATTERN_DURATION) {
-                    resetSequence();
+            } else if (lowPeakEnergy > PATTERN.MIN_ENERGY && lowPeakEnergy > highPeakEnergy * 1.2) {
+                // Low frequency detected
+                const matchesLow = frequencyMatches(lowPeakFreq, PATTERN.LOW_FREQ);
+                if (matchesLow) {
+                    detected = {
+                        time: now,
+                        freq: lowPeakFreq,
+                        energy: lowPeakEnergy,
+                        type: 'low'
+                    };
+                    log(`⬇️ Low tone detected: ${Math.round(lowPeakFreq)} Hz`, 'detection');
                 }
             }
 
-            updateUI();
+            // Update current frequency display
+            if (highPeakEnergy > lowPeakEnergy) {
+                currentFreqSpan.innerText = Math.round(highPeakFreq) + ' Hz';
+            } else if (lowPeakEnergy > PATTERN.MIN_ENERGY) {
+                currentFreqSpan.innerText = Math.round(lowPeakFreq) + ' Hz';
+            } else {
+                currentFreqSpan.innerText = '---';
+            }
+
+            // Add to history if we detected something
+            if (detected) {
+                detectionHistory.push(detected);
+                updateUI(detected);
+
+                // Keep history size manageable
+                if (detectionHistory.length > MAX_HISTORY) {
+                    detectionHistory.shift();
+                }
+
+                // Try to find pattern in history
+                const pattern = findPatternInHistory();
+                if (pattern && pattern.score > 0.6) {
+                    matchedPatterns.push(pattern);
+
+                    // Keep last few patterns
+                    if (matchedPatterns.length > 5) {
+                        matchedPatterns.shift();
+                    }
+
+                    // Update displays
+                    const avgScore = matchedPatterns.reduce((sum, p) => sum + p.score, 0) / matchedPatterns.length;
+                    patternMatchSpan.innerText = Math.round(avgScore * 100) + '%';
+
+                    const timeWindow = (pattern.d3.time - pattern.d1.time) / 1000;
+                    patternWindowSpan.innerText = timeWindow.toFixed(1) + 's';
+
+                    tonesDetectedSpan.innerText = '3/3';
+
+                    // Check if we have enough confidence
+                    if (matchedPatterns.length >= PATTERN.REQUIRED_MATCHES) {
+                        const confidence = avgScore * (matchedPatterns.length / PATTERN.REQUIRED_MATCHES);
+
+                        if (confidence > 0.7) {
+                            // Pattern matched!
+                            detectionCount++;
+                            detectionCountSpan.innerText = `Detections: ${detectionCount}`;
+
+                            signalLed.className = 'signal-led detected';
+                            setTimeout(() => {
+                                signalLed.className = 'signal-led';
+                            }, 1000);
+
+                            patternStatus.innerText = '🎯 PATTERN MATCHED!';
+                            patternStatus.style.color = '#ff3366';
+
+                            log(`🎯 TRI-TONE PATTERN MATCHED! Confidence: ${Math.round(confidence * 100)}%`, 'detection');
+
+                            // Reset after detection
+                            setTimeout(() => {
+                                patternStatus.innerText = 'Waiting for pattern...';
+                                patternStatus.style.color = '#888';
+                                tonesDetectedSpan.innerText = '0/3';
+                            }, 2000);
+
+                            // Clear matched patterns to avoid double counting
+                            matchedPatterns = [];
+                        }
+                    }
+                } else {
+                    // Update tones detected count based on most recent pattern attempt
+                    if (pattern) {
+                        tonesDetectedSpan.innerText = '3/3';
+                    } else {
+                        const recentTypes = detectionHistory.slice(-3).map(d => d.type);
+                        const uniqueTypes = new Set(recentTypes);
+                        tonesDetectedSpan.innerText = uniqueTypes.size + '/3';
+                    }
+                }
+            }
+
             requestAnimationFrame(detectPattern);
         }
 
@@ -664,7 +752,7 @@
         });
 
         // Initial log
-        log("System ready - listening for 1234Hz → 900Hz → 1234Hz pattern");
+        log("System ready - fixed pattern detector");
     </script>
 </body>
 </html>
