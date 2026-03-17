@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zynth Receiver - Warble Detector</title>
+    <title>Zynth Receiver - Single Frequency Detector</title>
     <style>
         body {
             background: #1a1a1a;
@@ -26,7 +26,7 @@
             box-shadow: 0 10px 30px rgba(0,0,0,0.5);
         }
         h1 {
-            color: #00ffcc;
+            color: #ff3366;
             margin-top: 0;
             text-align: center;
             font-size: 2rem;
@@ -35,6 +35,18 @@
             text-align: center;
             color: #888;
             margin-bottom: 30px;
+        }
+        .frequency-badge {
+            background: #ff3366;
+            color: white;
+            font-size: 2rem;
+            font-weight: bold;
+            text-align: center;
+            padding: 20px;
+            border-radius: 60px;
+            margin: 20px 0;
+            font-family: monospace;
+            letter-spacing: 4px;
         }
         .status-card {
             background: #1a1a1a;
@@ -78,9 +90,9 @@
             align-items: center;
             margin: 30px 0;
         }
-        .warble-led {
-            width: 100px;
-            height: 100px;
+        .signal-led {
+            width: 150px;
+            height: 150px;
             border-radius: 50%;
             background: #222;
             transition: all 0.1s;
@@ -89,23 +101,23 @@
             justify-content: center;
             font-size: 2rem;
             margin-bottom: 20px;
-            border: 2px solid #444;
+            border: 3px solid #444;
         }
-        .warble-led.detected {
-            background: #00ffcc;
-            box-shadow: 0 0 60px #00ffcc;
-            animation: flash 0.3s;
-            border-color: #fff;
+        .signal-led.detected {
+            background: #ff3366;
+            box-shadow: 0 0 80px #ff3366;
+            animation: pulse-fast 0.2s infinite;
+            border-color: white;
         }
-        @keyframes flash {
-            0% { transform: scale(1); }
-            50% { transform: scale(1.2); }
-            100% { transform: scale(1); }
+        @keyframes pulse-fast {
+            0% { opacity: 0.8; transform: scale(1); }
+            50% { opacity: 1; transform: scale(1.1); }
+            100% { opacity: 0.8; transform: scale(1); }
         }
-        .frequency-display {
+        .signal-strength {
             font-size: 2rem;
             font-weight: bold;
-            color: #00ffcc;
+            color: #ff3366;
             font-family: monospace;
         }
         .detection-count {
@@ -127,21 +139,21 @@
             margin: 10px 0;
         }
         button.primary {
-            background: #00ffcc;
-            color: #000;
+            background: #ff3366;
+            color: white;
             border: none;
         }
         button.primary:hover {
-            background: #00cca3;
-        }
-        button.warning {
-            background: #442288;
-            color: #fff;
+            background: #cc2952;
         }
         button:disabled {
             background: #333;
             color: #666;
             cursor: not-allowed;
+        }
+        .threshold-slider {
+            width: 100%;
+            margin: 20px 0;
         }
         .stats-grid {
             display: grid;
@@ -161,7 +173,7 @@
             margin-bottom: 5px;
         }
         .stat-value {
-            color: #00ffcc;
+            color: #ff3366;
             font-size: 1.2rem;
             font-weight: bold;
         }
@@ -189,40 +201,18 @@
             margin-bottom: 4px;
             border-bottom: 1px dotted #222;
         }
-        .control-row {
-            display: flex;
-            gap: 10px;
-            margin: 15px 0;
-        }
-        .freq-input {
-            flex: 1;
-            background: #000;
-            border: 1px solid #333;
-            color: #00ffcc;
-            padding: 10px;
-            border-radius: 20px;
-            font-family: monospace;
-            text-align: center;
-        }
-        .threshold-slider {
-            width: 100%;
-            margin: 10px 0;
-        }
-        .sensitivity-badge {
-            background: #333;
-            color: #00ffcc;
-            padding: 5px 10px;
-            border-radius: 20px;
-            font-size: 0.9rem;
-            display: inline-block;
-            margin-top: 10px;
+        .log-entry.detection {
+            color: #ff3366;
+            font-weight: bold;
         }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>👂 Zynth Receiver</h1>
-        <div class="subtitle">Warble detector - optimized for 440Hz with 5Hz warble</div>
+        <div class="subtitle">Single frequency detector - 1234 Hz only</div>
+
+        <div class="frequency-badge">1234 Hz</div>
 
         <div class="status-card">
             <div class="mic-status">
@@ -230,22 +220,22 @@
                 <div class="mic-led" id="mic-led"></div>
             </div>
             <button id="mic-btn" class="primary">🎤 Enable Microphone</button>
-            <button id="stop-mic-btn" class="warning" disabled>⏹️ Stop Listening</button>
+            <button id="stop-mic-btn" disabled>⏹️ Stop Listening</button>
         </div>
 
-        <div class="control-row">
-            <input type="text" id="target-freq" class="freq-input" placeholder="Target frequency (Hz)" value="440">
-            <button id="set-freq-btn">Set</button>
-        </div>
-
-        <div class="control-row">
-            <span class="sensitivity-badge">Sensitivity: <span id="sensitivity-value">0.65</span></span>
-            <input type="range" id="sensitivity-slider" class="threshold-slider" min="0.3" max="0.9" step="0.01" value="0.65">
+        <div>
+            <label style="color: #888; display: block; margin-bottom: 5px;">Detection Threshold</label>
+            <input type="range" id="threshold-slider" class="threshold-slider" min="0.01" max="0.3" step="0.01" value="0.08">
+            <div style="display: flex; justify-content: space-between; color: #888; font-size: 0.8rem;">
+                <span>Lower (sensitive)</span>
+                <span id="threshold-value">0.08</span>
+                <span>Higher (specific)</span>
+            </div>
         </div>
 
         <div class="detection-indicator">
-            <div class="warble-led" id="warble-led">👂</div>
-            <div class="frequency-display" id="detected-freq">--- Hz</div>
+            <div class="signal-led" id="signal-led">📡</div>
+            <div class="signal-strength" id="signal-strength">0.00</div>
             <div class="detection-count" id="detection-count">Detections: 0</div>
         </div>
 
@@ -253,25 +243,25 @@
 
         <div class="stats-grid">
             <div class="stat-box">
-                <div class="stat-label">Peak frequency</div>
+                <div class="stat-label">Energy at 1234Hz</div>
+                <div class="stat-value" id="target-energy">0.000</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-label">Noise floor</div>
+                <div class="stat-value" id="noise-floor">0.000</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-label">Signal/Noise</div>
+                <div class="stat-value" id="snr">0.0 dB</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-label">Peak freq</div>
                 <div class="stat-value" id="peak-freq">---</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-label">Warble score</div>
-                <div class="stat-value" id="warble-score">---</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-label">Modulation</div>
-                <div class="stat-value" id="modulation">---</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-label">Signal strength</div>
-                <div class="stat-value" id="signal-strength">---</div>
             </div>
         </div>
 
         <div class="log" id="log">
-            <div class="log-entry">[System] Zynth Receiver ready</div>
+            <div class="log-entry">[System] Zynth Receiver ready - listening for 1234 Hz</div>
         </div>
     </div>
 
@@ -285,18 +275,14 @@
         let isListening = false;
         let animationFrame = null;
         let detectionCount = 0;
-        let targetFrequency = 440;
-        let warbleHistory = [];
         let lastDetectionTime = 0;
-        let sensitivity = 0.65;
+        let detectionThreshold = 0.08;
 
-        // FFT parameters - optimized for warble detection
-        const FFT_SIZE = 4096;
-        const HISTORY_SIZE = 30; // Keep 30 frames of history
-        const WARBLE_RATE_TARGET = 5; // Looking for 5Hz modulation
-        const MIN_WARBLE_DEPTH = 8; // Minimum frequency variation in Hz
-        const MAX_WARBLE_DEPTH = 50; // Maximum frequency variation in Hz
-        const DETECTION_COOLDOWN = 1000; // ms between detections to avoid duplicates
+        // Fixed target frequency - 1234 Hz (unlikely to occur naturally)
+        const TARGET_FREQUENCY = 1234;
+        const FFT_SIZE = 8192; // Larger FFT for better frequency resolution
+        const DETECTION_COOLDOWN = 500; // ms between detections
+        const TOLERANCE_HZ = 15; // Accept frequencies within ±15 Hz of target
 
         // ============================================
         // DOM elements
@@ -304,42 +290,24 @@
         const micBtn = document.getElementById('mic-btn');
         const stopMicBtn = document.getElementById('stop-mic-btn');
         const micLed = document.getElementById('mic-led');
-        const warbleLed = document.getElementById('warble-led');
-        const detectedFreqSpan = document.getElementById('detected-freq');
-        const detectionCountSpan = document.getElementById('detection-count');
-        const peakFreqSpan = document.getElementById('peak-freq');
-        const warbleScoreSpan = document.getElementById('warble-score');
-        const modulationSpan = document.getElementById('modulation');
+        const signalLed = document.getElementById('signal-led');
         const signalStrengthSpan = document.getElementById('signal-strength');
-        const targetFreqInput = document.getElementById('target-freq');
-        const setFreqBtn = document.getElementById('set-freq-btn');
-        const sensitivitySlider = document.getElementById('sensitivity-slider');
-        const sensitivityValue = document.getElementById('sensitivity-value');
+        const detectionCountSpan = document.getElementById('detection-count');
+        const targetEnergySpan = document.getElementById('target-energy');
+        const noiseFloorSpan = document.getElementById('noise-floor');
+        const snrSpan = document.getElementById('snr');
+        const peakFreqSpan = document.getElementById('peak-freq');
+        const thresholdSlider = document.getElementById('threshold-slider');
+        const thresholdValue = document.getElementById('threshold-value');
         const canvas = document.getElementById('fft-viz');
         const canvasCtx = canvas.getContext('2d');
 
         // ============================================
-        // Sensitivity control
+        // Threshold control
         // ============================================
-        sensitivitySlider.addEventListener('input', (e) => {
-            sensitivity = parseFloat(e.target.value);
-            sensitivityValue.innerText = sensitivity.toFixed(2);
-        });
-
-        // ============================================
-        // Set target frequency
-        // ============================================
-        setFreqBtn.addEventListener('click', () => {
-            const val = parseFloat(targetFreqInput.value);
-            if (!isNaN(val) && val > 20 && val < 20000) {
-                targetFrequency = val;
-                log(`🎯 Target frequency set to ${targetFrequency} Hz`);
-                targetFreqInput.value = targetFrequency;
-                // Clear history when changing frequency
-                warbleHistory = [];
-            } else {
-                targetFreqInput.value = targetFrequency;
-            }
+        thresholdSlider.addEventListener('input', (e) => {
+            detectionThreshold = parseFloat(e.target.value);
+            thresholdValue.innerText = detectionThreshold.toFixed(3);
         });
 
         // ============================================
@@ -367,7 +335,7 @@
                 const source = audioCtx.createMediaStreamSource(stream);
                 analyser = audioCtx.createAnalyser();
                 analyser.fftSize = FFT_SIZE;
-                analyser.smoothingTimeConstant = 0.1; // Less smoothing for faster response
+                analyser.smoothingTimeConstant = 0.2;
 
                 source.connect(analyser);
 
@@ -380,11 +348,11 @@
                 micBtn.disabled = true;
                 stopMicBtn.disabled = false;
 
-                log("✅ Microphone active - listening for warbles");
+                log("✅ Microphone active - listening for 1234 Hz signal");
 
                 // Start visualization and detection
                 drawFFT();
-                detectWarble();
+                detectSignal();
 
             } catch (e) {
                 log(`❌ Mic error: ${e.message}`);
@@ -433,79 +401,48 @@
             canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
 
             const barWidth = (canvas.width / bufferLength) * 2;
-            let barHeight;
             let x = 0;
 
-            // Draw up to 2000 Hz
-            const maxBin = Math.min(bufferLength, Math.floor(2000 / (audioCtx.sampleRate / FFT_SIZE)));
+            // Draw frequency spectrum (focus on 0-2000 Hz)
+            const nyquist = audioCtx.sampleRate / 2;
+            const maxBin = Math.min(bufferLength, Math.floor(2000 / nyquist * bufferLength));
 
             for (let i = 0; i < maxBin; i++) {
-                barHeight = dataArray[i] / 2;
+                const barHeight = dataArray[i] / 2;
+                const freq = (i / bufferLength) * nyquist;
 
-                // Color based on proximity to target frequency
-                const freq = (i / bufferLength) * (audioCtx.sampleRate / 2);
-                const freqDiff = Math.abs(freq - targetFrequency);
-                let color;
-
-                if (freqDiff < 20) {
-                    color = `rgb(0, 255, ${200 + dataArray[i]})`; // Cyan for target
+                // Highlight target frequency band
+                if (Math.abs(freq - TARGET_FREQUENCY) < TOLERANCE_HZ) {
+                    canvasCtx.fillStyle = `rgb(255, 51, 102)`;
                 } else {
-                    color = `rgb(${dataArray[i]}, ${100 + dataArray[i]}, 100)`;
+                    canvasCtx.fillStyle = `rgb(100, 100, 100)`;
                 }
 
-                canvasCtx.fillStyle = color;
                 canvasCtx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
-
                 x += barWidth + 1;
             }
 
             // Draw target frequency line
-            const targetBin = Math.floor(targetFrequency / (audioCtx.sampleRate / 2) * analyser.frequencyBinCount);
+            const targetBin = Math.floor(TARGET_FREQUENCY / nyquist * bufferLength);
             if (targetBin < maxBin) {
                 const targetX = targetBin * (barWidth + 1);
-                canvasCtx.strokeStyle = '#00ffcc';
+                canvasCtx.strokeStyle = '#ff3366';
                 canvasCtx.lineWidth = 3;
                 canvasCtx.beginPath();
                 canvasCtx.moveTo(targetX, 0);
                 canvasCtx.lineTo(targetX, canvas.height);
                 canvasCtx.stroke();
-
-                // Draw warble range lines
-                canvasCtx.strokeStyle = '#00ffcc80';
-                canvasCtx.lineWidth = 1;
-                canvasCtx.setLineDash([5, 5]);
-
-                const lowerBin = Math.floor((targetFrequency - 30) / (audioCtx.sampleRate / 2) * analyser.frequencyBinCount);
-                const upperBin = Math.floor((targetFrequency + 30) / (audioCtx.sampleRate / 2) * analyser.frequencyBinCount);
-
-                if (lowerBin > 0) {
-                    const lowerX = lowerBin * (barWidth + 1);
-                    canvasCtx.beginPath();
-                    canvasCtx.moveTo(lowerX, 0);
-                    canvasCtx.lineTo(lowerX, canvas.height);
-                    canvasCtx.stroke();
-                }
-
-                if (upperBin < maxBin) {
-                    const upperX = upperBin * (barWidth + 1);
-                    canvasCtx.beginPath();
-                    canvasCtx.moveTo(upperX, 0);
-                    canvasCtx.lineTo(upperX, canvas.height);
-                    canvasCtx.stroke();
-                }
-
-                canvasCtx.setLineDash([]);
             }
 
             animationFrame = requestAnimationFrame(drawFFT);
         }
 
         // ============================================
-        // Warble detection - optimized algorithm
+        // Signal detection - simple energy threshold
         // ============================================
-        function detectWarble() {
+        function detectSignal() {
             if (!isListening || !analyser || !audioCtx) {
-                requestAnimationFrame(detectWarble);
+                requestAnimationFrame(detectSignal);
                 return;
             }
 
@@ -514,188 +451,88 @@
             analyser.getByteFrequencyData(dataArray);
 
             const nyquist = audioCtx.sampleRate / 2;
-            const freqPerBin = nyquist / bufferLength;
+            const targetBin = Math.floor(TARGET_FREQUENCY / nyquist * bufferLength);
+            const binTolerance = Math.floor(TOLERANCE_HZ / nyquist * bufferLength);
 
-            // Find peak frequency around target
-            const targetBin = Math.floor(targetFrequency / freqPerBin);
-            const searchRange = 20; // Search ±20 bins around target
-            const startBin = Math.max(0, targetBin - searchRange);
-            const endBin = Math.min(bufferLength - 1, targetBin + searchRange);
+            // Calculate energy at target frequency (average of surrounding bins)
+            let targetEnergy = 0;
+            let binCount = 0;
 
+            for (let i = -binTolerance; i <= binTolerance; i++) {
+                const idx = targetBin + i;
+                if (idx >= 0 && idx < bufferLength) {
+                    targetEnergy += dataArray[idx] / 255;
+                    binCount++;
+                }
+            }
+            targetEnergy = targetEnergy / binCount;
+
+            // Calculate noise floor (average of all frequencies except target band)
+            let noiseEnergy = 0;
+            let noiseCount = 0;
+
+            for (let i = 0; i < bufferLength; i++) {
+                // Skip the target frequency band
+                if (Math.abs(i - targetBin) <= binTolerance + 5) continue;
+
+                noiseEnergy += dataArray[i] / 255;
+                noiseCount++;
+            }
+            noiseEnergy = noiseEnergy / noiseCount;
+
+            // Calculate SNR
+            const snr = 20 * Math.log10((targetEnergy + 0.001) / (noiseEnergy + 0.001));
+
+            // Update displays
+            targetEnergySpan.innerText = targetEnergy.toFixed(3);
+            noiseFloorSpan.innerText = noiseEnergy.toFixed(3);
+            snrSpan.innerText = snr.toFixed(1) + ' dB';
+            signalStrengthSpan.innerText = targetEnergy.toFixed(3);
+
+            // Find peak frequency in the target range
             let maxEnergy = 0;
-            let peakBin = targetBin;
+            let maxBin = targetBin;
 
-            for (let i = startBin; i <= endBin; i++) {
-                if (dataArray[i] > maxEnergy) {
-                    maxEnergy = dataArray[i];
-                    peakBin = i;
+            for (let i = targetBin - binTolerance; i <= targetBin + binTolerance; i++) {
+                if (i >= 0 && i < bufferLength && dataArray[i] / 255 > maxEnergy) {
+                    maxEnergy = dataArray[i] / 255;
+                    maxBin = i;
                 }
             }
 
-            const peakFreq = peakBin * freqPerBin;
+            const peakFreq = (maxBin / bufferLength) * nyquist;
             peakFreqSpan.innerText = Math.round(peakFreq) + ' Hz';
 
-            // Calculate signal strength (normalized 0-1)
-            const signalStrength = maxEnergy / 255;
-            signalStrengthSpan.innerText = signalStrength.toFixed(3);
-
-            // Get detailed frequency data around peak
-            const freqData = [];
-            for (let i = -10; i <= 10; i++) {
-                const idx = peakBin + i;
-                if (idx >= 0 && idx < bufferLength) {
-                    freqData.push({
-                        freq: idx * freqPerBin,
-                        energy: dataArray[idx] / 255
-                    });
-                }
-            }
-
-            // Add to history
+            // Check if signal exceeds threshold
             const now = Date.now();
-            warbleHistory.push({
-                time: now,
-                peakFreq: peakFreq,
-                peakEnergy: maxEnergy / 255,
-                freqData: freqData
-            });
+            if (targetEnergy > detectionThreshold && targetEnergy > noiseEnergy * 2) {
+                // Signal detected!
+                signalLed.className = 'signal-led detected';
 
-            // Keep history size manageable
-            if (warbleHistory.length > HISTORY_SIZE) {
-                warbleHistory.shift();
-            }
-
-            // Need enough history for analysis
-            if (warbleHistory.length < 10) {
-                requestAnimationFrame(detectWarble);
-                return;
-            }
-
-            // Analyze for warble pattern
-            const recentHistory = warbleHistory.slice(-15);
-
-            // Calculate frequency variation over time
-            const freqs = recentHistory.map(h => h.peakFreq);
-            const energies = recentHistory.map(h => h.peakEnergy);
-
-            // Basic statistics
-            const freqMean = freqs.reduce((a, b) => a + b, 0) / freqs.length;
-            const freqMin = Math.min(...freqs);
-            const freqMax = Math.max(...freqs);
-            const freqRange = freqMax - freqMin;
-
-            // Detect oscillations (warble pattern)
-            let zeroCrossings = 0;
-            let lastDiff = 0;
-
-            for (let i = 1; i < freqs.length; i++) {
-                const diff = freqs[i] - freqs[i-1];
-                if (lastDiff !== 0 && Math.sign(diff) !== Math.sign(lastDiff) && Math.abs(diff) > 2) {
-                    zeroCrossings++;
-                }
-                lastDiff = diff;
-            }
-
-            // Calculate warble rate (Hz)
-            const timeSpan = (recentHistory[recentHistory.length-1].time - recentHistory[0].time) / 1000;
-            const warbleRate = timeSpan > 0 ? (zeroCrossings / 2) / timeSpan : 0;
-
-            // Calculate modulation consistency
-            let modConsistency = 0;
-            if (zeroCrossings >= 4) {
-                // Check if zero crossings are roughly evenly spaced
-                const crossingTimes = [];
-                for (let i = 1; i < freqs.length; i++) {
-                    const diff = freqs[i] - freqs[i-1];
-                    if (i > 1 && Math.sign(diff) !== Math.sign(freqs[i-1] - freqs[i-2])) {
-                        crossingTimes.push(i);
-                    }
-                }
-
-                if (crossingTimes.length > 2) {
-                    const intervals = [];
-                    for (let i = 1; i < crossingTimes.length; i++) {
-                        intervals.push(crossingTimes[i] - crossingTimes[i-1]);
-                    }
-                    const intervalMean = intervals.reduce((a, b) => a + b, 0) / intervals.length;
-                    const intervalVariance = intervals.reduce((a, b) => a + Math.pow(b - intervalMean, 2), 0) / intervals.length;
-                    modConsistency = Math.max(0, 1 - (intervalVariance / intervalMean));
-                }
-            }
-
-            // Calculate energy consistency (signal shouldn't drop out)
-            const energyMean = energies.reduce((a, b) => a + b, 0) / energies.length;
-            const energyVariance = energies.reduce((a, b) => a + Math.pow(b - energyMean, 2), 0) / energies.length;
-            const energyConsistency = Math.max(0, 1 - (energyVariance / (energyMean + 0.001)));
-
-            // Calculate warble score (0-1)
-            let warbleScore = 0;
-
-            // Factor 1: Frequency range should be in warble range (8-50Hz)
-            if (freqRange >= MIN_WARBLE_DEPTH && freqRange <= MAX_WARBLE_DEPTH) {
-                warbleScore += 0.3;
-            } else if (freqRange > 0) {
-                warbleScore += 0.1;
-            }
-
-            // Factor 2: Should have multiple zero crossings (oscillation)
-            if (zeroCrossings >= 6) {
-                warbleScore += 0.3;
-            } else if (zeroCrossings >= 4) {
-                warbleScore += 0.2;
-            } else if (zeroCrossings >= 2) {
-                warbleScore += 0.1;
-            }
-
-            // Factor 3: Warble rate should be around 5Hz
-            if (warbleRate > 3 && warbleRate < 8) {
-                warbleScore += 0.2;
-            } else if (warbleRate > 1 && warbleRate < 10) {
-                warbleScore += 0.1;
-            }
-
-            // Factor 4: Modulation consistency
-            warbleScore += modConsistency * 0.2;
-
-            // Factor 5: Energy consistency (signal stability)
-            warbleScore += energyConsistency * 0.1;
-
-            // Ensure score is between 0 and 1
-            warbleScore = Math.min(1, warbleScore);
-
-            warbleScoreSpan.innerText = warbleScore.toFixed(2);
-            modulationSpan.innerText = `${freqRange.toFixed(1)}Hz, ${warbleRate.toFixed(1)}Hz`;
-
-            // Detect warble if score exceeds sensitivity threshold
-            if (warbleScore >= sensitivity && signalStrength > 0.05) {
-                // Check cooldown to avoid multiple detections of same warble
+                // Log detection with cooldown to avoid duplicates
                 if (now - lastDetectionTime > DETECTION_COOLDOWN) {
-                    // Warble detected!
                     detectionCount++;
                     detectionCountSpan.innerText = `Detections: ${detectionCount}`;
-                    detectedFreqSpan.innerText = Math.round(peakFreq) + ' Hz';
 
-                    warbleLed.className = 'warble-led detected';
-                    setTimeout(() => {
-                        warbleLed.className = 'warble-led';
-                    }, 300);
-
-                    log(`🎯 Warble detected! Freq: ${Math.round(peakFreq)}Hz, Score: ${warbleScore.toFixed(2)}, Range: ${freqRange.toFixed(1)}Hz, Rate: ${warbleRate.toFixed(1)}Hz`);
+                    log(`🔴 SIGNAL DETECTED! Energy: ${targetEnergy.toFixed(3)}, SNR: ${snr.toFixed(1)}dB`, 'detection');
 
                     lastDetectionTime = now;
                 }
+            } else {
+                signalLed.className = 'signal-led';
             }
 
-            requestAnimationFrame(detectWarble);
+            requestAnimationFrame(detectSignal);
         }
 
         // ============================================
         // Logging
         // ============================================
-        function log(message) {
+        function log(message, type = 'normal') {
             const logDiv = document.getElementById('log');
             const timestamp = new Date().toLocaleTimeString();
-            logDiv.innerHTML = `<div class="log-entry">[${timestamp}] ${message}</div>` + logDiv.innerHTML;
+            const className = type === 'detection' ? 'log-entry detection' : 'log-entry';
+            logDiv.innerHTML = `<div class="${className}">[${timestamp}] ${message}</div>` + logDiv.innerHTML;
             if (logDiv.children.length > 20) logDiv.removeChild(logDiv.lastChild);
             console.log(message);
         }
@@ -716,7 +553,7 @@
         });
 
         // Initial log
-        log("System ready - optimized for 440Hz with 5Hz warble");
+        log("System ready - listening for 1234 Hz signal");
     </script>
 </body>
 </html>

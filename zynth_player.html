@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zynth Player - Warble Generator</title>
+    <title>Zynth Player - 1234 Hz Tone Generator</title>
     <style>
         body {
             background: #1a1a1a;
@@ -26,7 +26,7 @@
             box-shadow: 0 10px 30px rgba(0,0,0,0.5);
         }
         h1 {
-            color: #00ffcc;
+            color: #ff3366;
             margin-top: 0;
             text-align: center;
             font-size: 2rem;
@@ -36,6 +36,19 @@
             color: #888;
             margin-bottom: 30px;
         }
+        .frequency-badge {
+            background: #ff3366;
+            color: white;
+            font-size: 3rem;
+            font-weight: bold;
+            text-align: center;
+            padding: 30px;
+            border-radius: 60px;
+            margin: 20px 0;
+            font-family: monospace;
+            letter-spacing: 8px;
+            box-shadow: 0 0 30px rgba(255, 51, 102, 0.5);
+        }
         .control-group {
             background: #1a1a1a;
             border-radius: 12px;
@@ -43,10 +56,93 @@
             margin-bottom: 20px;
         }
         .control-label {
-            color: #00ffcc;
+            color: #ff3366;
             font-weight: bold;
             margin-bottom: 10px;
             font-size: 1.1rem;
+        }
+        .button-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+            margin: 20px 0;
+        }
+        button {
+            background: #333;
+            color: #fff;
+            border: 1px solid #555;
+            padding: 20px;
+            border-radius: 30px;
+            font-size: 1.2rem;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        button:hover {
+            background: #444;
+            transform: scale(1.02);
+        }
+        button.primary {
+            background: #ff3366;
+            color: white;
+            border: none;
+            grid-column: span 2;
+            font-size: 1.5rem;
+            padding: 25px;
+        }
+        button.primary:hover {
+            background: #cc2952;
+        }
+        button.warning {
+            background: #442288;
+            color: #fff;
+        }
+        .status-box {
+            background: #000;
+            border-radius: 8px;
+            padding: 15px;
+            font-family: monospace;
+            margin: 20px 0;
+            border-left: 4px solid #ff3366;
+        }
+        .indicator {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 30px 0;
+        }
+        .led {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            background: #222;
+            transition: all 0.1s ease;
+            border: 2px solid #444;
+        }
+        .led.playing {
+            background: #ff3366;
+            box-shadow: 0 0 60px #ff3366;
+            animation: pulse-beat 0.5s infinite;
+        }
+        @keyframes pulse-beat {
+            0% { opacity: 0.7; transform: scale(1); }
+            50% { opacity: 1; transform: scale(1.2); }
+            100% { opacity: 0.7; transform: scale(1); }
+        }
+        .log {
+            background: #000;
+            border-radius: 8px;
+            padding: 10px;
+            height: 150px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 11px;
+            color: #888;
+            border: 1px solid #333;
+        }
+        .log-entry {
+            margin-bottom: 4px;
+            border-bottom: 1px dotted #222;
         }
         .slider-container {
             margin: 15px 0;
@@ -68,207 +164,76 @@
             -webkit-appearance: none;
             width: 20px;
             height: 20px;
-            background: #00ffcc;
+            background: #ff3366;
             border-radius: 50%;
             cursor: pointer;
-            box-shadow: 0 0 10px #00ffcc;
+            box-shadow: 0 0 10px #ff3366;
         }
         .value-display {
-            color: #00ffcc;
+            color: #ff3366;
             font-weight: bold;
-        }
-        .button-grid {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 10px;
-            margin: 20px 0;
-        }
-        button {
-            background: #333;
-            color: #fff;
-            border: 1px solid #555;
-            padding: 15px;
-            border-radius: 30px;
-            font-size: 1.1rem;
-            font-weight: bold;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-        button:hover {
-            background: #444;
-            transform: scale(1.02);
-        }
-        button.primary {
-            background: #00ffcc;
-            color: #000;
-            border: none;
-            grid-column: span 2;
-        }
-        button.primary:hover {
-            background: #00cca3;
-        }
-        button.warning {
-            background: #442288;
-            color: #fff;
-        }
-        .status-box {
-            background: #000;
-            border-radius: 8px;
-            padding: 15px;
-            font-family: monospace;
-            margin: 20px 0;
-            border-left: 4px solid #00ffcc;
-        }
-        .indicator {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin: 20px 0;
-        }
-        .led {
-            width: 60px;
-            height: 60px;
-            border-radius: 50%;
-            background: #222;
-            margin: 0 10px;
-            transition: all 0.1s ease;
-        }
-        .led.playing {
-            background: #00ffcc;
-            box-shadow: 0 0 40px #00ffcc;
-        }
-        .log {
-            background: #000;
-            border-radius: 8px;
-            padding: 10px;
-            height: 150px;
-            overflow-y: auto;
-            font-family: monospace;
-            font-size: 11px;
-            color: #888;
-            border: 1px solid #333;
-        }
-        .log-entry {
-            margin-bottom: 4px;
-            border-bottom: 1px dotted #222;
         }
         .preset-box {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            display: flex;
             gap: 10px;
             margin: 15px 0;
+            flex-wrap: wrap;
+            justify-content: center;
         }
         .preset-btn {
             background: #1a1a1a;
             border: 1px solid #444;
-            padding: 10px;
+            padding: 10px 20px;
             border-radius: 20px;
             font-size: 0.9rem;
             cursor: pointer;
         }
-        .preset-btn:hover {
-            background: #333;
-            border-color: #00ffcc;
-        }
         .preset-btn.active {
-            background: #00ffcc20;
-            border-color: #00ffcc;
-            color: #00ffcc;
-        }
-        .waveform-selector {
-            display: flex;
-            gap: 10px;
-            margin: 15px 0;
-        }
-        .waveform-btn {
-            flex: 1;
-            padding: 8px;
-            background: #000;
-            border: 1px solid #444;
-            border-radius: 20px;
-            cursor: pointer;
-            color: #888;
-        }
-        .waveform-btn.active {
-            background: #00ffcc20;
-            border-color: #00ffcc;
-            color: #00ffcc;
+            background: #ff3366;
+            color: white;
+            border-color: white;
         }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>🎵 Zynth Player</h1>
-        <div class="subtitle">Optimized warble generator for 440Hz</div>
+        <div class="subtitle">Single frequency generator - 1234 Hz only</div>
+
+        <div class="frequency-badge" id="freq-display">1234 Hz</div>
 
         <div class="control-group">
-            <div class="control-label">Note Settings</div>
+            <div class="control-label">Signal Control</div>
 
             <div class="slider-container">
                 <div class="slider-label">
-                    <span>Base Frequency</span>
-                    <span class="value-display" id="freq-value">440 Hz</span>
+                    <span>Volume</span>
+                    <span class="value-display" id="volume-value">50%</span>
                 </div>
-                <input type="range" id="freq-slider" min="220" max="880" value="440" step="1">
+                <input type="range" id="volume-slider" min="0" max="100" value="50" step="1">
             </div>
 
             <div class="slider-container">
                 <div class="slider-label">
-                    <span>Note duration</span>
+                    <span>Duration</span>
                     <span class="value-display" id="duration-value">1000 ms</span>
                 </div>
-                <input type="range" id="duration-slider" min="500" max="3000" value="1000" step="10">
+                <input type="range" id="duration-slider" min="200" max="3000" value="1000" step="10">
             </div>
 
             <div class="preset-box">
-                <button class="preset-btn" onclick="setPreset(262)">C4 (262Hz)</button>
-                <button class="preset-btn" onclick="setPreset(330)">E4 (330Hz)</button>
-                <button class="preset-btn" onclick="setPreset(392)">G4 (392Hz)</button>
-                <button class="preset-btn active" onclick="setPreset(440)">A4 (440Hz)</button>
-                <button class="preset-btn" onclick="setPreset(523)">C5 (523Hz)</button>
-                <button class="preset-btn" onclick="setPreset(659)">E5 (659Hz)</button>
-            </div>
-        </div>
-
-        <div class="control-group">
-            <div class="control-label">Warble Settings (Optimized)</div>
-
-            <div class="slider-container">
-                <div class="slider-label">
-                    <span>Warble depth</span>
-                    <span class="value-display" id="depth-value">30 Hz</span>
-                </div>
-                <input type="range" id="depth-slider" min="5" max="60" value="30" step="1">
-                <div style="color: #888; font-size: 0.8rem; margin-top: 5px;">Recommended: 20-40Hz</div>
-            </div>
-
-            <div class="slider-container">
-                <div class="slider-label">
-                    <span>Warble rate</span>
-                    <span class="value-display" id="rate-value">5.0 Hz</span>
-                </div>
-                <input type="range" id="rate-slider" min="2" max="8" value="5.0" step="0.1">
-                <div style="color: #888; font-size: 0.8rem; margin-top: 5px;">Recommended: 5Hz (optimal detection)</div>
-            </div>
-
-            <div class="waveform-selector">
-                <button class="waveform-btn active" onclick="setWaveform('sine')">Sine</button>
-                <button class="waveform-btn" onclick="setWaveform('triangle')">Triangle</button>
-                <button class="waveform-btn" onclick="setWaveform('sawtooth')">Sawtooth</button>
-                <button class="waveform-btn" onclick="setWaveform('square')">Square</button>
-            </div>
-
-            <div style="display: flex; align-items: center; margin: 15px 0;">
-                <input type="checkbox" id="warble-toggle" checked style="margin-right: 10px; width: 20px; height: 20px; accent-color: #00ffcc;">
-                <label for="warble-toggle">Enable warble modulation</label>
+                <button class="preset-btn active" onclick="setDuration(200)">Short (200ms)</button>
+                <button class="preset-btn" onclick="setDuration(500)">Medium (500ms)</button>
+                <button class="preset-btn" onclick="setDuration(1000)">Long (1s)</button>
+                <button class="preset-btn" onclick="setDuration(2000)">Very Long (2s)</button>
             </div>
         </div>
 
         <div class="button-grid">
-            <button class="primary" onclick="playWarble()">▶️ PLAY WARBLE</button>
-            <button class="warning" onclick="playPattern()">🔄 Play Pattern (5x)</button>
+            <button class="primary" onclick="playTone()">🔴 PLAY 1234 Hz</button>
+            <button onclick="playBurst()">⚡ Burst (3x)</button>
+            <button onclick="playContinuous()">∞ Continuous</button>
             <button onclick="stopAll()">⏹️ Stop</button>
-            <button onclick="initAudio()">🔊 Init Audio</button>
         </div>
 
         <div class="status-box">
@@ -277,12 +242,8 @@
                 <span id="audio-state" style="color: #ffcc00;">not initialized</span>
             </div>
             <div style="display: flex; justify-content: space-between;">
-                <span>Last played:</span>
-                <span id="last-played" style="color: #00ffcc;">-</span>
-            </div>
-            <div style="display: flex; justify-content: space-between; margin-top: 10px;">
-                <span>Warble pattern:</span>
-                <span id="warble-pattern" style="color: #00ffcc;">440Hz ±15Hz @ 5Hz</span>
+                <span>Status:</span>
+                <span id="play-status" style="color: #ff3366;">Ready</span>
             </div>
         </div>
 
@@ -291,7 +252,7 @@
         </div>
 
         <div class="log" id="log">
-            <div class="log-entry">[System] Zynth Player ready - optimized for receiver</div>
+            <div class="log-entry">[System] Zynth Player ready - 1234 Hz tone generator</div>
         </div>
     </div>
 
@@ -300,13 +261,15 @@
         // Global state
         // ============================================
         let audioCtx = null;
+        let currentOscillator = null;
+        let currentGain = null;
         let isPlaying = false;
-        let repeatTimeout = null;
-        let currentOscillators = [];
-        let waveform = 'sine';
+        let continuousTimeout = null;
+
+        const TARGET_FREQUENCY = 1234; // Fixed frequency
 
         // ============================================
-        // Initialize audio on first user interaction
+        // Initialize audio
         // ============================================
         async function initAudio() {
             try {
@@ -323,8 +286,6 @@
                 document.getElementById('audio-state').innerText = audioCtx.state;
                 document.getElementById('audio-state').style.color = '#00ffcc';
 
-                log("🔊 Audio system primed");
-
             } catch (e) {
                 log(`❌ Audio init failed: ${e.message}`);
             }
@@ -333,144 +294,81 @@
         // ============================================
         // UI Controls
         // ============================================
-        document.getElementById('freq-slider').addEventListener('input', (e) => {
-            document.getElementById('freq-value').innerText = e.target.value + ' Hz';
-            updateWarblePattern();
+        document.getElementById('volume-slider').addEventListener('input', (e) => {
+            document.getElementById('volume-value').innerText = e.target.value + '%';
+            if (currentGain) {
+                currentGain.gain.setValueAtTime(e.target.value / 100, audioCtx.currentTime);
+            }
         });
 
         document.getElementById('duration-slider').addEventListener('input', (e) => {
             document.getElementById('duration-value').innerText = e.target.value + ' ms';
         });
 
-        document.getElementById('depth-slider').addEventListener('input', (e) => {
-            document.getElementById('depth-value').innerText = e.target.value + ' Hz';
-            updateWarblePattern();
-        });
+        function setDuration(ms) {
+            document.getElementById('duration-slider').value = ms;
+            document.getElementById('duration-value').innerText = ms + ' ms';
 
-        document.getElementById('rate-slider').addEventListener('input', (e) => {
-            document.getElementById('rate-value').innerText = e.target.value + ' Hz';
-            updateWarblePattern();
-        });
-
-        function updateWarblePattern() {
-            const freq = document.getElementById('freq-slider').value;
-            const depth = document.getElementById('depth-slider').value;
-            const rate = document.getElementById('rate-slider').value;
-            const halfDepth = Math.floor(depth / 2);
-            document.getElementById('warble-pattern').innerText = `${freq}Hz ±${halfDepth}Hz @ ${rate}Hz`;
-        }
-
-        // ============================================
-        // Preset notes
-        // ============================================
-        function setPreset(freq) {
-            document.getElementById('freq-slider').value = freq;
-            document.getElementById('freq-value').innerText = freq + ' Hz';
-
-            // Update active state
             document.querySelectorAll('.preset-btn').forEach(btn => {
                 btn.classList.remove('active');
             });
             event.target.classList.add('active');
-
-            updateWarblePattern();
-            log(`🎵 Preset: ${freq}Hz`);
         }
 
         // ============================================
-        // Waveform selection
+        // Play single tone at 1234 Hz
         // ============================================
-        function setWaveform(type) {
-            waveform = type;
-            document.querySelectorAll('.waveform-btn').forEach(btn => {
-                btn.classList.remove('active');
-            });
-            event.target.classList.add('active');
-            log(`🎵 Waveform: ${type}`);
-        }
-
-        // ============================================
-        // Play warble note
-        // ============================================
-        async function playWarble() {
+        async function playTone() {
             try {
                 await initAudio();
 
-                const freq = parseFloat(document.getElementById('freq-slider').value);
-                const durationMs = parseFloat(document.getElementById('duration-slider').value);
-                const depth = parseFloat(document.getElementById('depth-slider').value);
-                const rate = parseFloat(document.getElementById('rate-slider').value);
-                const enableWarble = document.getElementById('warble-toggle').checked;
+                // Stop any currently playing tone
+                stopCurrentTone();
 
+                const volume = document.getElementById('volume-slider').value / 100;
+                const durationMs = parseInt(document.getElementById('duration-slider').value);
                 const duration = durationMs / 1000;
 
-                // Flash LED
-                const led = document.getElementById('play-led');
-                led.classList.add('playing');
-                setTimeout(() => led.classList.remove('playing'), 100);
-
-                // Create oscillator
+                // Create oscillator and gain node
                 const oscillator = audioCtx.createOscillator();
                 const gainNode = audioCtx.createGain();
-                const filterNode = audioCtx.createBiquadFilter();
 
-                oscillator.type = waveform;
-                oscillator.frequency.value = freq;
+                oscillator.type = 'sine';
+                oscillator.frequency.value = TARGET_FREQUENCY;
 
-                // Add warble if enabled
-                if (enableWarble && depth > 0) {
-                    // Create LFO for frequency modulation
-                    const lfo = audioCtx.createOscillator();
-                    const lfoGain = audioCtx.createGain();
+                gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+                gainNode.gain.linearRampToValueAtTime(volume, audioCtx.currentTime + 0.01);
+                gainNode.gain.setValueAtTime(volume, audioCtx.currentTime + duration - 0.01);
+                gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + duration);
 
-                    lfo.type = 'sine';
-                    lfo.frequency.value = rate;
-
-                    // Mod depth in Hz (converted to modulation depth)
-                    // For a 440Hz tone with ±15Hz modulation, depth should be 15
-                    lfoGain.gain.value = depth / 2; // Peak-to-peak amplitude
-
-                    lfo.connect(lfoGain);
-                    lfoGain.connect(oscillator.frequency);
-
-                    lfo.start();
-                    lfo.stop(audioCtx.currentTime + duration);
-
-                    // Store to stop later
-                    currentOscillators.push(lfo);
-                }
-
-                // Smooth envelope with slight attack/release
-                const now = audioCtx.currentTime;
-                gainNode.gain.setValueAtTime(0, now);
-                gainNode.gain.linearRampToValueAtTime(0.3, now + 0.02); // 20ms attack
-                gainNode.gain.setValueAtTime(0.3, now + duration - 0.05);
-                gainNode.gain.linearRampToValueAtTime(0, now + duration);
-
-                // Add a gentle low-pass filter to smooth the sound
-                filterNode.type = 'lowpass';
-                filterNode.frequency.value = 2000;
-
-                oscillator.connect(filterNode);
-                filterNode.connect(gainNode);
+                oscillator.connect(gainNode);
                 gainNode.connect(audioCtx.destination);
 
-                oscillator.start(now);
-                oscillator.stop(now + duration);
+                // Store references
+                currentOscillator = oscillator;
+                currentGain = gainNode;
 
-                // Store oscillator to stop later if needed
-                currentOscillators.push(oscillator);
+                // Start and stop
+                oscillator.start();
+                oscillator.stop(audioCtx.currentTime + duration);
 
-                const warbleStatus = enableWarble ? `depth ${depth/2}Hz, rate ${rate}Hz` : 'no warble';
-                log(`🎵 Played: ${freq}Hz for ${durationMs}ms (${warbleStatus})`);
+                // Update UI
+                isPlaying = true;
+                document.getElementById('play-status').innerText = 'Playing 1234 Hz';
+                const led = document.getElementById('play-led');
+                led.classList.add('playing');
 
-                document.getElementById('last-played').innerText = `${freq}Hz at ${new Date().toLocaleTimeString()}`;
+                log(`🔴 Playing 1234 Hz tone for ${durationMs}ms at ${Math.round(volume * 100)}% volume`);
 
-                // Clean up after note ends
+                // Clean up after tone ends
                 setTimeout(() => {
-                    currentOscillators = currentOscillators.filter(osc =>
-                        osc.frequency && osc.frequency.value !== oscillator.frequency.value
-                    );
+                    if (currentOscillator === oscillator) {
+                        led.classList.remove('playing');
+                        document.getElementById('play-status').innerText = 'Ready';
+                        isPlaying = false;
+                        currentOscillator = null;
+                        currentGain = null;
+                    }
                 }, duration * 1000 + 100);
 
             } catch (e) {
@@ -479,51 +377,96 @@
         }
 
         // ============================================
-        // Play repeating pattern
+        // Play burst of 3 tones
         // ============================================
-        function playPattern() {
-            if (repeatTimeout) {
-                clearTimeout(repeatTimeout);
-                repeatTimeout = null;
+        async function playBurst() {
+            stopAll();
+            await initAudio();
+
+            log("⚡ Playing 3-tone burst at 1234 Hz");
+
+            for (let i = 0; i < 3; i++) {
+                setTimeout(() => {
+                    playTone();
+                }, i * 800); // 800ms between tones
             }
+        }
 
-            let count = 0;
-            const maxCount = 5;
+        // ============================================
+        // Play continuous tone
+        // ============================================
+        async function playContinuous() {
+            try {
+                await initAudio();
 
-            function playNext() {
-                if (count < maxCount) {
-                    playWarble();
-                    count++;
-                    // Space notes out with 500ms gap
-                    repeatTimeout = setTimeout(playNext, 1500);
-                } else {
-                    repeatTimeout = null;
-                    log("✅ Pattern complete");
-                }
+                // Stop any currently playing tone
+                stopCurrentTone();
+
+                const volume = document.getElementById('volume-slider').value / 100;
+
+                // Create oscillator and gain node
+                const oscillator = audioCtx.createOscillator();
+                const gainNode = audioCtx.createGain();
+
+                oscillator.type = 'sine';
+                oscillator.frequency.value = TARGET_FREQUENCY;
+
+                gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+                gainNode.gain.linearRampToValueAtTime(volume, audioCtx.currentTime + 0.1);
+
+                oscillator.connect(gainNode);
+                gainNode.connect(audioCtx.destination);
+
+                // Store references
+                currentOscillator = oscillator;
+                currentGain = gainNode;
+
+                // Start (continuous - no stop)
+                oscillator.start();
+
+                // Update UI
+                isPlaying = true;
+                document.getElementById('play-status').innerText = 'Continuous 1234 Hz';
+                const led = document.getElementById('play-led');
+                led.classList.add('playing');
+
+                log(`∞ Continuous 1234 Hz tone at ${Math.round(volume * 100)}% volume`);
+
+            } catch (e) {
+                log(`❌ Playback failed: ${e.message}`);
             }
+        }
 
-            log(`🔄 Playing ${maxCount} warbles...`);
-            playNext();
+        // ============================================
+        // Stop current tone
+        // ============================================
+        function stopCurrentTone() {
+            if (currentOscillator) {
+                try {
+                    // Fade out
+                    if (currentGain) {
+                        currentGain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.05);
+                    }
+                    setTimeout(() => {
+                        try {
+                            currentOscillator.stop();
+                        } catch (e) {}
+                    }, 50);
+                } catch (e) {}
+                currentOscillator = null;
+                currentGain = null;
+            }
         }
 
         // ============================================
         // Stop all playback
         // ============================================
         function stopAll() {
-            if (repeatTimeout) {
-                clearTimeout(repeatTimeout);
-                repeatTimeout = null;
-            }
+            stopCurrentTone();
 
-            // Stop all active oscillators
-            currentOscillators.forEach(osc => {
-                try {
-                    osc.stop();
-                } catch (e) {
-                    // Ignore errors from already stopped oscillators
-                }
-            });
-            currentOscillators = [];
+            document.getElementById('play-led').classList.remove('playing');
+            document.getElementById('play-status').innerText = 'Stopped';
+            isPlaying = false;
 
             log("⏹️ Stopped all playback");
         }
@@ -547,10 +490,3 @@
                 if (!audioCtx) initAudio();
             });
         });
-
-        // Initial update
-        updateWarblePattern();
-        log("System ready - optimized for 440Hz with 5Hz warble");
-    </script>
-</body>
-</html>
