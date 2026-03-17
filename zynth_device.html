@@ -1,6 +1,3 @@
-<!--
-zynth_device.html - Like devicedist.html but with a synth
--->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -50,6 +47,7 @@ zynth_device.html - Like devicedist.html but with a synth
             flex-grow: 1;
             display: flex;
             flex-direction: column;
+            overflow-y: auto;
         }
         .status-row {
             display: flex;
@@ -103,10 +101,11 @@ zynth_device.html - Like devicedist.html but with a synth
             background: #000;
             padding: 10px;
             border-radius: 4px;
-            height: 150px;
+            height: 200px;
             overflow-y: auto;
             color: #888;
             margin-top: 20px;
+            border: 1px solid #333;
         }
         #timer {
             font-size: 2rem;
@@ -125,6 +124,7 @@ zynth_device.html - Like devicedist.html but with a synth
             display: flex;
             gap: 10px;
             margin: 15px 0;
+            flex-wrap: wrap;
         }
         .action-button {
             background: #00ffcc;
@@ -137,12 +137,17 @@ zynth_device.html - Like devicedist.html but with a synth
             transition: transform 0.2s;
             flex: 1;
             font-size: 1rem;
+            min-width: 120px;
         }
         .action-button:hover {
             transform: scale(1.05);
         }
         .action-button.secondary {
             background: #442288;
+            color: #fff;
+        }
+        .action-button.danger {
+            background: #600;
             color: #fff;
         }
         .action-button:disabled {
@@ -153,10 +158,11 @@ zynth_device.html - Like devicedist.html but with a synth
         }
         .permission-status {
             font-size: 0.9rem;
-            padding: 5px 10px;
+            padding: 8px 12px;
             border-radius: 15px;
             text-align: center;
-            margin-top: 5px;
+            margin-top: 10px;
+            font-weight: bold;
         }
         .granted {
             background: #1e4d1e;
@@ -169,6 +175,24 @@ zynth_device.html - Like devicedist.html but with a synth
         .pending {
             background: #4d4d1e;
             color: #ffcc00;
+        }
+        .audio-status {
+            font-family: monospace;
+            font-size: 0.9rem;
+            padding: 5px;
+            background: #000;
+            border-radius: 4px;
+            margin: 5px 0;
+        }
+        .debug-box {
+            background: #0a0a0a;
+            border: 1px solid #333;
+            border-radius: 4px;
+            padding: 10px;
+            margin: 10px 0;
+            font-family: monospace;
+            font-size: 10px;
+            color: #00ff00;
         }
     </style>
 </head>
@@ -197,36 +221,61 @@ zynth_device.html - Like devicedist.html but with a synth
                 <span class="value" id="neighbor-count">calculating...</span>
             </div>
 
-            <!-- Manual Mic Permission Button and Status -->
-            <div class="status-row" style="flex-direction: column; align-items: stretch;">
-                <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
-                    <span class="label">Mic permission:</span>
-                    <span class="value" id="mic-status">checking...</span>
+            <!-- Patron Mic Section (shown for non-pillars) -->
+            <div id="mic-section" style="display: none;">
+                <div class="status-row" style="flex-direction: column; align-items: stretch;">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
+                        <span class="label">Mic permission:</span>
+                        <span class="value" id="mic-status">checking...</span>
+                    </div>
+                    <div class="button-container">
+                        <button id="request-mic-btn" class="action-button">🎤 Request Mic</button>
+                        <button id="test-mic-btn" class="action-button secondary">🔊 Test Mic</button>
+                    </div>
+                    <div id="mic-permission-message" class="permission-status pending">Click 'Request Mic' to enable neighbor listening</div>
                 </div>
-                <div class="button-container">
-                    <button id="request-mic-btn" class="action-button">🎤 Request Mic</button>
-                    <button id="test-mic-btn" class="action-button secondary">🔊 Test Mic</button>
-                </div>
-                <div id="mic-permission-message" class="permission-status pending">Click 'Request Mic' to enable neighbor listening</div>
             </div>
 
+            <!-- Pillar Mic Section (shown for pillars) -->
+            <div id="pillar-mic-section" style="display: none;">
+                <div class="status-row" style="flex-direction: column; align-items: stretch;">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
+                        <span class="label">Mic permission:</span>
+                        <span class="value" id="pillar-mic-status">🔇 Not needed</span>
+                    </div>
+                    <div class="permission-status granted" style="text-align: center;">
+                        🏛️ Pillars are sound sources only - they don't need microphones
+                    </div>
+                </div>
+            </div>
+
+            <!-- Audio Status -->
+            <div class="status-row">
+                <span class="label">Audio context state:</span>
+                <span class="value" id="audio-state">uninitialized</span>
+            </div>
             <div class="status-row">
                 <span class="label">Audio primed:</span>
                 <span class="value" id="audio-status">pending...</span>
             </div>
 
+            <!-- Control Buttons -->
             <div class="button-container">
                 <button id="prime-audio-btn" class="action-button">🔊 Prime Audio</button>
-                <button id="reset-btn" class="action-button secondary">🔄 Reset</button>
+                <button id="check-audio-btn" class="action-button secondary">🔍 Check Audio</button>
+                <button id="reset-btn" class="action-button danger">🔄 Reset</button>
             </div>
 
+            <!-- Visual Indicator -->
             <div class="note-indicator" id="indicator-container">
                 <div id="playing-indicator" class="note-light"></div>
             </div>
 
+            <!-- Timer -->
             <div id="timer">--:--</div>
 
-            <div style="margin-top: auto;">
+            <!-- Test Info -->
+            <div style="margin-top: 10px;">
                 <div class="config-item">
                     <span class="label">Test duration:</span>
                     <span class="value" id="test-duration">30s</span>
@@ -241,6 +290,12 @@ zynth_device.html - Like devicedist.html but with a synth
                 </div>
             </div>
 
+            <!-- Debug Info -->
+            <div class="debug-box" id="debug-info">
+                <div>🔊 Click buttons above to initialize audio</div>
+            </div>
+
+            <!-- Event Log -->
             <div id="log"></div>
         </div>
     </div>
@@ -286,51 +341,96 @@ zynth_device.html - Like devicedist.html but with a synth
         let listeningActive = false;
         let audioPrimed = false;
         let mediaStream = null;
+        let seatId = null;
 
         // ============================================
         // Clock sync
         // ============================================
         db.ref(".info/serverTimeOffset").on("value", snap => {
             serverOffset = snap.val() || 0;
+            updateDebugInfo(`Server offset: ${serverOffset}ms`);
         });
 
         // ============================================
-        // Simple Startup - Just get seat ID and listen
+        // Update debug info
+        // ============================================
+        function updateDebugInfo(message) {
+            const debugDiv = document.getElementById('debug-info');
+            if (message) {
+                debugDiv.innerHTML = `🔊 ${message}<br>` + debugDiv.innerHTML;
+            } else {
+                debugDiv.innerHTML = `
+                    <div>Audio Context: ${audioCtx?.state || 'null'}</div>
+                    <div>Audio Primed: ${audioPrimed}</div>
+                    <div>Mic Permission: ${micPermission}</div>
+                    <div>Is Pillar: ${isPillar}</div>
+                    <div>My Notes: ${myNotes.length}</div>
+                `;
+            }
+        }
+
+        // ============================================
+        // Simple Startup
         // ============================================
         window.onload = () => {
             log("🚀 Device starting up...");
 
             // Get seat ID from URL
             const urlParams = new URLSearchParams(window.location.search);
-            const seatId = urlParams.get('seat');
+            seatId = urlParams.get('seat');
             isPillar = seatId?.startsWith('PILLAR_') || false;
 
             document.getElementById('seat-label').innerText = seatId || 'No Seat ID';
             document.getElementById('device-type').innerText = isPillar ? '🏛️ Pillar Device' : '📱 Patron Device';
             log(`🔍 Device: ${seatId} (${isPillar ? 'pillar' : 'patron'})`);
 
+            // Show/hide appropriate mic section
+            if (isPillar) {
+                document.getElementById('pillar-mic-section').style.display = 'block';
+                document.getElementById('mic-section').style.display = 'none';
+                document.getElementById('pillar-mic-status').innerText = '🔇 Not needed';
+            } else {
+                document.getElementById('mic-section').style.display = 'block';
+                document.getElementById('pillar-mic-section').style.display = 'none';
+            }
+
             // Start listening for conductor immediately
             listenForConductor();
 
-            // Try to prime audio automatically (but don't wait for it)
-            attemptAutoPrime();
-
-            log("✅ Startup complete. Waiting for conductor...");
+            log("✅ Startup complete. Use buttons above to initialize audio.");
+            updateAudioStateDisplay();
         };
 
         // ============================================
-        // Attempt to auto-prime audio (best effort)
+        // Update audio state display
         // ============================================
-        async function attemptAutoPrime() {
-            try {
-                await primeAudioSystem();
-            } catch (e) {
-                log(`⚠️ Auto-prime failed: ${e.message}`);
+        function updateAudioStateDisplay() {
+            const stateEl = document.getElementById('audio-state');
+            if (audioCtx) {
+                stateEl.innerText = audioCtx.state;
+                stateEl.style.color = audioCtx.state === 'running' ? '#00ffcc' : '#ffcc00';
+            } else {
+                stateEl.innerText = 'not created';
+                stateEl.style.color = '#888';
             }
         }
 
         // ============================================
-        // Manual Prime Audio Button
+        // Check Audio Button
+        // ============================================
+        document.getElementById('check-audio-btn').onclick = () => {
+            log(`🔍 Audio check: context=${audioCtx?.state}, primed=${audioPrimed}`);
+            updateDebugInfo();
+            updateAudioStateDisplay();
+
+            if (audioCtx) {
+                log(`   Sample rate: ${audioCtx.sampleRate}Hz`);
+                log(`   Base latency: ${audioCtx.baseLatency || 0}s`);
+            }
+        };
+
+        // ============================================
+        // Prime Audio Button
         // ============================================
         document.getElementById('prime-audio-btn').onclick = async () => {
             log("👆 Manual prime requested");
@@ -338,7 +438,7 @@ zynth_device.html - Like devicedist.html but with a synth
         };
 
         // ============================================
-        // Manual Reset Button
+        // Reset Button
         // ============================================
         document.getElementById('reset-btn').onclick = () => {
             log("🔄 Manual reset");
@@ -347,12 +447,14 @@ zynth_device.html - Like devicedist.html but with a synth
                 audioCtx = null;
             }
             audioPrimed = false;
+            audioCtx = null;
             document.getElementById('audio-status').innerText = 'pending...';
-            attemptAutoPrime();
+            updateAudioStateDisplay();
+            log("✅ Reset complete. Click 'Prime Audio' to reinitialize.");
         };
 
         // ============================================
-        // Manual Mic Request Button - ask user for permission
+        // Manual Mic Request Button
         // ============================================
         document.getElementById('request-mic-btn').onclick = async () => {
             log("👆 Manual mic request");
@@ -360,7 +462,7 @@ zynth_device.html - Like devicedist.html but with a synth
         };
 
         // ============================================
-        // Test Mic Button (plays a short tone through mic)
+        // Test Mic Button
         // ============================================
         document.getElementById('test-mic-btn').onclick = async () => {
             log("🔊 Testing microphone...");
@@ -371,23 +473,20 @@ zynth_device.html - Like devicedist.html but with a synth
             }
 
             try {
-                // Get a fresh stream
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-
-                // Create a simple oscillator to play through speakers
+                // Ensure audio context is running
                 if (!audioCtx) {
                     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
                 }
-
-                if (audioCtx.state === 'suspended') {
+                if (audioCtx.state !== 'running') {
                     await audioCtx.resume();
                 }
 
+                // Create a test tone
                 const oscillator = audioCtx.createOscillator();
                 const gainNode = audioCtx.createGain();
 
                 oscillator.type = 'sine';
-                oscillator.frequency.value = 880; // A5 - higher pitch so it's clearly a test
+                oscillator.frequency.value = 880; // A5
 
                 gainNode.gain.setValueAtTime(0.2, audioCtx.currentTime);
                 gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.5);
@@ -396,13 +495,10 @@ zynth_device.html - Like devicedist.html but with a synth
                 oscillator.start();
                 oscillator.stop(audioCtx.currentTime + 0.5);
 
-                log("✅ Test tone played - you should hear a brief beep");
-
-                // Release stream
-                stream.getTracks().forEach(track => track.stop());
+                log("✅ Test tone played");
 
             } catch (e) {
-                log(`❌ Mic test failed: ${e.message}`);
+                log(`❌ Test failed: ${e.message}`);
             }
         };
 
@@ -414,12 +510,22 @@ zynth_device.html - Like devicedist.html but with a synth
             document.getElementById('audio-status').innerText = 'priming...';
 
             try {
-                // Create audio context (starts suspended)
+                // Create audio context if needed
                 if (!audioCtx) {
+                    log("   Creating new AudioContext");
                     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
                 }
 
-                // Create a silent tone (0% volume)
+                log(`   Initial state: ${audioCtx.state}`);
+
+                // Resume if suspended
+                if (audioCtx.state === 'suspended') {
+                    log("   Resuming audio context...");
+                    await audioCtx.resume();
+                    log(`   New state: ${audioCtx.state}`);
+                }
+
+                // Create a silent tone to wake up hardware
                 const oscillator = audioCtx.createOscillator();
                 const gainNode = audioCtx.createGain();
 
@@ -431,23 +537,19 @@ zynth_device.html - Like devicedist.html but with a synth
 
                 oscillator.connect(gainNode).connect(audioCtx.destination);
 
-                // Resume the context
-                if (audioCtx.state === 'suspended') {
-                    await audioCtx.resume();
-                    log("🔊 Audio context resumed");
-                }
-
                 // Play the silent tone for 100ms
                 oscillator.start();
                 oscillator.stop(audioCtx.currentTime + 0.1);
 
-                log("🔊 Audio primed with 100ms silent tone");
+                log("🔊 Silent tone played");
                 audioPrimed = true;
                 document.getElementById('audio-status').innerText = '✅ Primed';
+                updateAudioStateDisplay();
 
-                // Suspend to save power
+                // Suspend to save power (but keep primed)
                 await audioCtx.suspend();
                 log("🔊 Audio context suspended (ready)");
+                updateAudioStateDisplay();
 
             } catch (e) {
                 log(`❌ Audio priming failed: ${e.message}`);
@@ -465,7 +567,6 @@ zynth_device.html - Like devicedist.html but with a synth
             updateMicMessage('pending', 'Requesting...');
 
             try {
-                // Request permission
                 const tempStream = await navigator.mediaDevices.getUserMedia({
                     audio: {
                         echoCancellation: false,
@@ -479,7 +580,6 @@ zynth_device.html - Like devicedist.html but with a synth
                 updateMicMessage('granted', 'Microphone ready - neighbors can hear you');
                 log('🎤 Microphone permission granted');
 
-                // Store stream for potential future use
                 if (mediaStream) {
                     mediaStream.getTracks().forEach(track => track.stop());
                 }
@@ -489,7 +589,7 @@ zynth_device.html - Like devicedist.html but with a synth
                 micPermission = false;
                 document.getElementById('mic-status').innerText = '❌ Denied';
                 updateMicMessage('denied', 'Permission denied - click to try again');
-                log(`🎤 Microphone permission denied: ${err.message}`);
+                log(`🎤 Permission denied: ${err.message}`);
             }
         }
 
@@ -498,8 +598,10 @@ zynth_device.html - Like devicedist.html but with a synth
         // ============================================
         function updateMicMessage(status, message) {
             const msgDiv = document.getElementById('mic-permission-message');
-            msgDiv.innerText = message;
-            msgDiv.className = `permission-status ${status}`;
+            if (msgDiv) {
+                msgDiv.innerText = message;
+                msgDiv.className = `permission-status ${status}`;
+            }
         }
 
         // ============================================
@@ -518,15 +620,27 @@ zynth_device.html - Like devicedist.html but with a synth
                 }
 
                 log(`🎵 Test found! Starting at ${new Date(test.startTime).toLocaleTimeString()}`);
+                log(`🔊 Audio context state before playback: ${audioCtx?.state || 'null'}`);
+
                 document.getElementById('status-value').innerText = 'Test loaded';
 
                 config = test.config;
                 schedule = test.schedule || [];
 
-                // Resume the audio context if needed
-                if (audioCtx && audioCtx.state === 'suspended') {
-                    await audioCtx.resume();
-                    log("🔊 Audio context resumed for playback");
+                // CRITICAL: Ensure audio context is running
+                if (!audioCtx) {
+                    log("⚠️ No audio context - creating one now");
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+
+                if (audioCtx.state !== 'running') {
+                    log(`⚠️ Audio context ${audioCtx.state} - attempting to resume...`);
+                    try {
+                        await audioCtx.resume();
+                        log(`✅ Audio context now ${audioCtx.state}`);
+                    } catch (e) {
+                        log(`❌ Failed to resume: ${e.message}`);
+                    }
                 }
 
                 // Find my seat coordinates
@@ -555,6 +669,7 @@ zynth_device.html - Like devicedist.html but with a synth
                 log(`⏱️ Test starts in ${secondsUntilStart.toFixed(1)} seconds`);
 
                 setTimeout(() => {
+                    log(`🎯 Starting playback now at ${audioCtx.currentTime}`);
                     if (isPillar) {
                         startPillarPlayback(config, test.pillar_warbles || [], test.startTime);
                     } else {
@@ -597,6 +712,8 @@ zynth_device.html - Like devicedist.html but with a synth
         // ============================================
         function startPillarPlayback(config, pillarWarbles, startTime) {
             log('🏛️ Starting pillar pattern');
+            log(`🔊 Audio context at start: ${audioCtx.state}`);
+
             document.getElementById('status-value').innerText = 'Playing pillar pattern';
 
             const pillarPattern = config.pillar_patterns[seatId];
@@ -607,6 +724,8 @@ zynth_device.html - Like devicedist.html but with a synth
 
             const now = Date.now() + serverOffset;
             const audioStartTime = audioCtx.currentTime + Math.max(0, (startTime - now) / 1000);
+
+            log(`📅 First note at audio time: ${audioStartTime.toFixed(3)}s`);
 
             schedulePillarLoop(pillarPattern, audioStartTime, 2.0);
 
@@ -626,6 +745,12 @@ zynth_device.html - Like devicedist.html but with a synth
             let beatIndex = 0;
 
             function scheduleNext() {
+                // Check if audio context is still running
+                if (audioCtx.state !== 'running') {
+                    log(`⚠️ Audio context ${audioCtx.state} - stopping pillar loop`);
+                    return;
+                }
+
                 const note = pattern[beatIndex % pattern.length];
                 if (note !== 'rest') {
                     playTone(note, nextTime, 450, false, true);
@@ -635,42 +760,50 @@ zynth_device.html - Like devicedist.html but with a synth
                 beatIndex++;
 
                 const timeToNext = (nextTime - audioCtx.currentTime) * 1000;
-                if (timeToNext > 0) {
+                if (timeToNext > 0 && timeToNext < 5000) {
                     setTimeout(scheduleNext, Math.min(timeToNext, 100));
                 }
             }
 
-            setTimeout(scheduleNext, 10);
+            // Start first note
+            setTimeout(scheduleNext, Math.max(0, (startTime - audioCtx.currentTime) * 1000));
         }
 
         function schedulePillarWarble(freq, time, warbleConfig) {
             if (!warbleConfig) return;
 
-            const osc = audioCtx.createOscillator();
-            const gain = audioCtx.createGain();
+            const delayMs = Math.max(0, (time - audioCtx.currentTime) * 1000);
+            setTimeout(() => {
+                if (audioCtx.state !== 'running') return;
 
-            osc.type = 'sine';
-            osc.frequency.value = freq;
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
 
-            const modOsc = audioCtx.createOscillator();
-            modOsc.frequency.value = warbleConfig.rate_hz || 2.5;
+                osc.type = 'sine';
+                osc.frequency.value = freq;
 
-            const modGain = audioCtx.createGain();
-            modGain.gain.value = warbleConfig.depth_hz || 30;
-            modOsc.connect(modGain).connect(osc.frequency);
+                const modOsc = audioCtx.createOscillator();
+                modOsc.frequency.value = warbleConfig.rate_hz || 2.5;
 
-            gain.gain.setValueAtTime(0, time);
-            gain.gain.linearRampToValueAtTime(0.5, time + 0.01);
-            gain.gain.setValueAtTime(0.5, time + 0.45);
-            gain.gain.linearRampToValueAtTime(0, time + 0.5);
+                const modGain = audioCtx.createGain();
+                modGain.gain.value = warbleConfig.depth_hz || 30;
+                modOsc.connect(modGain).connect(osc.frequency);
 
-            osc.connect(gain).connect(audioCtx.destination);
+                gain.gain.setValueAtTime(0, audioCtx.currentTime);
+                gain.gain.linearRampToValueAtTime(0.5, audioCtx.currentTime + 0.01);
+                gain.gain.setValueAtTime(0.5, audioCtx.currentTime + 0.45);
+                gain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.5);
 
-            modOsc.start(time);
-            osc.start(time);
+                osc.connect(gain).connect(audioCtx.destination);
 
-            modOsc.stop(time + 0.5);
-            osc.stop(time + 0.5);
+                modOsc.start();
+                osc.start();
+
+                modOsc.stop(audioCtx.currentTime + 0.5);
+                osc.stop(audioCtx.currentTime + 0.5);
+
+                log(`📢 Warble played at ${freq}Hz`);
+            }, delayMs);
         }
 
         // ============================================
@@ -678,6 +811,7 @@ zynth_device.html - Like devicedist.html but with a synth
         // ============================================
         function startPatronPlayback(config, schedule, startTime) {
             log('🎵 Starting patron pattern');
+            log(`🔊 Audio context at start: ${audioCtx.state}`);
 
             myNotes = schedule.filter(item => item.device_id === seatId);
             document.getElementById('my-notes').innerText = myNotes.length;
@@ -706,20 +840,33 @@ zynth_device.html - Like devicedist.html but with a synth
             const duration = note.duration_ms / 1000;
             const warbleConfig = config.warble;
 
+            const delayMs = Math.max(0, (time - audioCtx.currentTime) * 1000);
+
             setTimeout(() => {
+                // Flash indicator
                 const indicator = document.getElementById('playing-indicator');
                 indicator.classList.add('playing');
                 setTimeout(() => indicator.classList.remove('playing'), 100);
-            }, (time - audioCtx.currentTime) * 1000);
 
-            lastPingSent = note.absolute_time_ms;
+                // Record that we're about to play
+                lastPingSent = note.absolute_time_ms;
 
-            playTone(note.pitch, time, duration, warbleConfig?.enabled || false, false);
+                // Play the note
+                playTone(note.pitch, audioCtx.currentTime, duration, warbleConfig?.enabled || false, false);
+
+                log(`🎵 Played ${note.pitch} at ${new Date().toLocaleTimeString()}`);
+
+            }, delayMs);
 
             updateNextNote();
         }
 
         function playTone(pitch, startTime, duration, addWarble, isPillar = false) {
+            if (audioCtx.state !== 'running') {
+                log(`❌ Cannot play - audio context ${audioCtx.state}`);
+                return;
+            }
+
             const freq = pitchToFreq(pitch);
             const osc = audioCtx.createOscillator();
             const gain = audioCtx.createGain();
@@ -739,6 +886,7 @@ zynth_device.html - Like devicedist.html but with a synth
                 modOsc.stop(startTime + duration);
             }
 
+            // Smooth envelope
             gain.gain.setValueAtTime(0, startTime);
             gain.gain.linearRampToValueAtTime(0.3, startTime + 0.01);
             gain.gain.setValueAtTime(0.3, startTime + duration - 0.01);
@@ -810,7 +958,8 @@ zynth_device.html - Like devicedist.html but with a synth
             const logDiv = document.getElementById('log');
             const timestamp = new Date().toLocaleTimeString();
             logDiv.innerHTML = `<div>[${timestamp}] ${message}</div>` + logDiv.innerHTML;
-            if (logDiv.children.length > 20) logDiv.removeChild(logDiv.lastChild);
+            if (logDiv.children.length > 30) logDiv.removeChild(logDiv.lastChild);
+            console.log(message); // Also log to browser console
         }
 
         // ============================================
