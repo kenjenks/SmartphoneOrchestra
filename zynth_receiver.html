@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zynth Receiver - Fixed Pattern Detector</title>
+    <title>Zynth Receiver - Digital Decoder</title>
     <style>
         body {
             background: #1a1a1a;
@@ -26,7 +26,7 @@
             box-shadow: 0 10px 30px rgba(0,0,0,0.5);
         }
         h1 {
-            color: #ff3366;
+            color: #00ffcc;
             margin-top: 0;
             text-align: center;
             font-size: 2rem;
@@ -36,16 +36,18 @@
             color: #888;
             margin-bottom: 30px;
         }
-        .pattern-badge {
-            background: #ff3366;
-            color: white;
-            font-size: 1.5rem;
-            font-weight: bold;
-            text-align: center;
+        .code-display {
+            background: #1a1a1a;
+            border: 2px solid #00ffcc;
+            border-radius: 12px;
             padding: 20px;
-            border-radius: 60px;
-            margin: 20px 0;
             font-family: monospace;
+            font-size: 2rem;
+            text-align: center;
+            letter-spacing: 10px;
+            color: #00ffcc;
+            margin: 20px 0;
+            min-height: 80px;
         }
         .status-card {
             background: #1a1a1a;
@@ -70,10 +72,6 @@
             background: #444;
             transition: all 0.3s;
         }
-        .mic-led.active {
-            background: #00ffcc;
-            box-shadow: 0 0 20px #00ffcc;
-        }
         .mic-led.listening {
             background: #ffcc00;
             animation: pulse 1s infinite;
@@ -83,7 +81,7 @@
             50% { opacity: 1; }
             100% { opacity: 0.5; }
         }
-        .detection-indicator {
+        .decoding-indicator {
             display: flex;
             flex-direction: column;
             align-items: center;
@@ -103,8 +101,8 @@
             border: 3px solid #444;
         }
         .signal-led.detected {
-            background: #ff3366;
-            box-shadow: 0 0 80px #ff3366;
+            background: #00ffcc;
+            box-shadow: 0 0 80px #00ffcc;
             animation: pulse-fast 0.2s infinite;
             border-color: white;
         }
@@ -113,43 +111,36 @@
             50% { opacity: 1; transform: scale(1.1); }
             100% { opacity: 0.8; transform: scale(1); }
         }
-        .pattern-display {
-            font-size: 1.2rem;
-            font-weight: bold;
-            color: #ff3366;
-            font-family: monospace;
-            margin-bottom: 10px;
+        .binary-row {
+            display: flex;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 5px;
+            margin: 20px 0;
+            padding: 15px;
+            background: #000;
+            border-radius: 12px;
+            min-height: 50px;
         }
-        .detection-count {
-            font-size: 1.2rem;
-            color: #888;
-            margin-top: 10px;
-        }
-        button {
+        .bit {
+            width: 30px;
+            height: 30px;
+            border-radius: 6px;
             background: #333;
-            color: #fff;
-            border: 1px solid #555;
-            padding: 15px 30px;
-            border-radius: 30px;
-            font-size: 1.1rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
             font-weight: bold;
-            cursor: pointer;
-            transition: all 0.2s;
-            width: 100%;
-            margin: 10px 0;
+            font-size: 0.9rem;
+            transition: all 0.1s;
         }
-        button.primary {
-            background: #ff3366;
-            color: white;
-            border: none;
+        .bit.received {
+            background: #00ffcc;
+            color: #000;
         }
-        button.primary:hover {
-            background: #cc2952;
-        }
-        button:disabled {
-            background: #333;
-            color: #666;
-            cursor: not-allowed;
+        .bit.preamble {
+            background: #ffcc00;
+            color: #000;
         }
         .stats-grid {
             display: grid;
@@ -169,45 +160,56 @@
             margin-bottom: 5px;
         }
         .stat-value {
-            color: #ff3366;
+            color: #00ffcc;
             font-size: 1.2rem;
             font-weight: bold;
         }
-        .pattern-viz {
-            width: 100%;
-            height: 80px;
-            background: #000;
-            border-radius: 8px;
-            margin: 20px 0;
-            border: 1px solid #333;
-            position: relative;
+        .sync-indicator {
             display: flex;
-            align-items: flex-end;
-            justify-content: space-around;
-            padding: 0 10px;
-        }
-        .pattern-bar-container {
-            display: flex;
-            flex-direction: column;
             align-items: center;
-            width: 30%;
+            justify-content: center;
+            gap: 10px;
+            margin: 20px 0;
         }
-        .pattern-bar {
-            width: 100%;
-            height: 0px;
-            background: #ff3366;
-            transition: height 0.1s;
-            border-radius: 4px 4px 0 0;
+        .sync-led {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: #222;
+            transition: all 0.1s;
         }
-        .pattern-label {
-            color: #888;
-            font-size: 0.8rem;
-            margin-top: 5px;
+        .sync-led.active {
+            background: #00ffcc;
+            box-shadow: 0 0 20px #00ffcc;
         }
-        .pattern-tone {
-            color: #ff3366;
-            font-size: 0.7rem;
+        .sync-led.preamble {
+            background: #ffcc00;
+        }
+        button {
+            background: #333;
+            color: #fff;
+            border: 1px solid #555;
+            padding: 15px 30px;
+            border-radius: 30px;
+            font-size: 1.1rem;
             font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s;
+            width: 100%;
+            margin: 10px 0;
+        }
+        button.primary {
+            background: #00ffcc;
+            color: #000;
+            border: none;
+        }
+        button.primary:hover {
+            background: #00cca3;
+        }
+        button:disabled {
+            background: #333;
+            color: #666;
+            cursor: not-allowed;
         }
         .log {
             background: #000;
@@ -226,37 +228,17 @@
             border-bottom: 1px dotted #222;
         }
         .log-entry.detection {
-            color: #ff3366;
+            color: #00ffcc;
             font-weight: bold;
-        }
-        .pattern-guide {
-            display: flex;
-            justify-content: space-around;
-            margin: 10px 0;
-            color: #888;
-            font-size: 0.9rem;
-        }
-        .pattern-guide span {
-            color: #ff3366;
-            font-weight: bold;
-        }
-        .sensitivity-control {
-            margin: 20px 0;
         }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>👂 Zynth Receiver</h1>
-        <div class="subtitle">Fixed Tri-Tone Pattern Detector</div>
+        <div class="subtitle">Digital Decoder - FSK Demodulator</div>
 
-        <div class="pattern-badge">1234 Hz → 900 Hz → 1234 Hz</div>
-
-        <div class="pattern-guide">
-            <span>⬆️ High 1</span>
-            <span>⬇️ Low</span>
-            <span>⬆️ High 2</span>
-        </div>
+        <div class="code-display" id="received-code">---</div>
 
         <div class="status-card">
             <div class="mic-status">
@@ -267,61 +249,41 @@
             <button id="stop-mic-btn" disabled>⏹️ Stop Listening</button>
         </div>
 
-        <div class="sensitivity-control">
-            <label style="color: #888; display: block; margin-bottom: 5px;">Pattern Matching Sensitivity</label>
-            <input type="range" id="sensitivity" min="0.5" max="2.0" step="0.1" value="1.0" style="width: 100%;">
-            <div style="display: flex; justify-content: space-between; color: #888; font-size: 0.8rem;">
-                <span>Strict</span>
-                <span id="sensitivity-value">1.0</span>
-                <span>Lenient</span>
-            </div>
+        <div class="sync-indicator">
+            <div class="sync-led" id="sync-preamble"></div>
+            <div class="sync-led" id="sync-data"></div>
+            <div class="sync-led" id="sync-postamble"></div>
+            <div class="sync-led" id="sync-valid"></div>
         </div>
 
-        <div class="detection-indicator">
+        <div class="decoding-indicator">
             <div class="signal-led" id="signal-led">📡</div>
-            <div class="pattern-display" id="pattern-status">Waiting for pattern...</div>
-            <div class="detection-count" id="detection-count">Detections: 0</div>
-        </div>
-
-        <div class="pattern-viz" id="pattern-viz">
-            <div class="pattern-bar-container">
-                <div class="pattern-bar" id="bar1"></div>
-                <div class="pattern-label">High 1</div>
-                <div class="pattern-tone" id="freq1">---</div>
-            </div>
-            <div class="pattern-bar-container">
-                <div class="pattern-bar" id="bar2"></div>
-                <div class="pattern-label">Low</div>
-                <div class="pattern-tone" id="freq2">---</div>
-            </div>
-            <div class="pattern-bar-container">
-                <div class="pattern-bar" id="bar3"></div>
-                <div class="pattern-label">High 2</div>
-                <div class="pattern-tone" id="freq3">---</div>
-            </div>
+            <div class="binary-row" id="binary-row"></div>
         </div>
 
         <div class="stats-grid">
             <div class="stat-box">
-                <div class="stat-label">Pattern Match</div>
-                <div class="stat-value" id="pattern-match">0%</div>
+                <div class="stat-label">State</div>
+                <div class="stat-value" id="decoder-state">Waiting</div>
             </div>
             <div class="stat-box">
-                <div class="stat-label">Tones Detected</div>
-                <div class="stat-value" id="tones-detected">0/3</div>
+                <div class="stat-label">Confidence</div>
+                <div class="stat-value" id="confidence">0%</div>
             </div>
             <div class="stat-box">
-                <div class="stat-label">Current Freq</div>
-                <div class="stat-value" id="current-freq">---</div>
+                <div class="stat-label">Bits Received</div>
+                <div class="stat-value" id="bits-received">0/16</div>
             </div>
             <div class="stat-box">
-                <div class="stat-label">Pattern Window</div>
-                <div class="stat-value" id="pattern-window">0.0s</div>
+                <div class="stat-label">Valid Codes</div>
+                <div class="stat-value" id="valid-codes">0</div>
             </div>
         </div>
 
+        <button id="reset-decoder" onclick="resetDecoder()">🔄 Reset Decoder</button>
+
         <div class="log" id="log">
-            <div class="log-entry">[System] Zynth Receiver ready - fixed pattern detector</div>
+            <div class="log-entry">[System] Digital decoder ready</div>
         </div>
     </div>
 
@@ -334,25 +296,34 @@
         let mediaStream = null;
         let isListening = false;
         let animationFrame = null;
-        let detectionCount = 0;
 
-        // Pattern detection - using a circular buffer to find sequences
-        const MAX_HISTORY = 50; // Keep 50 frames of history (~1 second at 60fps)
-        let detectionHistory = [];
-        let matchedPatterns = [];
-        let sensitivity = 1.0;
+        // FSK parameters (must match player)
+        const FREQ_0 = 900;
+        const FREQ_1 = 1234;
+        const FREQ_TOLERANCE = 30; // Hz
+        const BIT_DURATION = 100; // ms
+        const PREAMBLE_DURATION = 200; // ms
+        const POSTAMBLE_DURATION = 200; // ms
 
-        // Pattern definition
-        const PATTERN = {
-            HIGH_FREQ: 1234,
-            LOW_FREQ: 900,
-            TOLERANCE: 30, // Hz - slightly wider tolerance
-            MIN_ENERGY: 0.02, // Lower threshold for better detection
-            PATTERN_WINDOW_MS: 2000, // Look for pattern within 2 second window
-            REQUIRED_MATCHES: 3 // Require 3 matching sequences to confirm
-        };
+        // Decoder state machine
+        const STATE_IDLE = 0;
+        const STATE_PREAMBLE = 1;
+        const STATE_DATA = 2;
+        const STATE_POSTAMBLE = 3;
+        const STATE_COMPLETE = 4;
+
+        let decoderState = STATE_IDLE;
+        let preambleStartTime = 0;
+        let currentBits = [];
+        let receivedCodes = [];
+        let bitBuffer = [];
+        let lastFrequency = 0;
+        let validCodeCount = 0;
 
         const FFT_SIZE = 8192;
+        const MIN_ENERGY = 0.02;
+        const REQUIRED_PREAMBLE_MATCHES = 3; // Need 3 consecutive preamble detections
+        let preambleMatchCount = 0;
 
         // ============================================
         // DOM elements
@@ -361,28 +332,74 @@
         const stopMicBtn = document.getElementById('stop-mic-btn');
         const micLed = document.getElementById('mic-led');
         const signalLed = document.getElementById('signal-led');
-        const patternStatus = document.getElementById('pattern-status');
-        const detectionCountSpan = document.getElementById('detection-count');
-        const patternMatchSpan = document.getElementById('pattern-match');
-        const tonesDetectedSpan = document.getElementById('tones-detected');
-        const currentFreqSpan = document.getElementById('current-freq');
-        const patternWindowSpan = document.getElementById('pattern-window');
-        const bar1 = document.getElementById('bar1');
-        const bar2 = document.getElementById('bar2');
-        const bar3 = document.getElementById('bar3');
-        const freq1 = document.getElementById('freq1');
-        const freq2 = document.getElementById('freq2');
-        const freq3 = document.getElementById('freq3');
-        const sensitivitySlider = document.getElementById('sensitivity');
-        const sensitivityValue = document.getElementById('sensitivity-value');
+        const receivedCodeSpan = document.getElementById('received-code');
+        const decoderStateSpan = document.getElementById('decoder-state');
+        const confidenceSpan = document.getElementById('confidence');
+        const bitsReceivedSpan = document.getElementById('bits-received');
+        const validCodesSpan = document.getElementById('valid-codes');
+        const binaryRow = document.getElementById('binary-row');
+        const syncPreamble = document.getElementById('sync-preamble');
+        const syncData = document.getElementById('sync-data');
+        const syncPostamble = document.getElementById('sync-postamble');
+        const syncValid = document.getElementById('sync-valid');
 
         // ============================================
-        // Sensitivity control
+        // Reset decoder
         // ============================================
-        sensitivitySlider.addEventListener('input', (e) => {
-            sensitivity = parseFloat(e.target.value);
-            sensitivityValue.innerText = sensitivity.toFixed(1);
-        });
+        function resetDecoder() {
+            decoderState = STATE_IDLE;
+            preambleStartTime = 0;
+            currentBits = [];
+            bitBuffer = [];
+            preambleMatchCount = 0;
+            updateBinaryRow([]);
+            updateSyncLEDs();
+            decoderStateSpan.innerText = 'Idle';
+            log("🔄 Decoder reset");
+        }
+
+        // ============================================
+        // Update binary row display
+        // ============================================
+        function updateBinaryRow(bits) {
+            binaryRow.innerHTML = '';
+            for (let i = 0; i < 16; i++) {
+                const bit = document.createElement('div');
+                bit.className = 'bit';
+                if (i < bits.length) {
+                    bit.innerText = bits[i];
+                    bit.classList.add('received');
+                } else {
+                    bit.innerText = '?';
+                }
+                binaryRow.appendChild(bit);
+            }
+        }
+
+        // ============================================
+        // Update sync LEDs
+        // ============================================
+        function updateSyncLEDs() {
+            syncPreamble.classList.remove('active', 'preamble');
+            syncData.classList.remove('active');
+            syncPostamble.classList.remove('active');
+            syncValid.classList.remove('active');
+
+            switch(decoderState) {
+                case STATE_PREAMBLE:
+                    syncPreamble.classList.add('preamble');
+                    break;
+                case STATE_DATA:
+                    syncData.classList.add('active');
+                    break;
+                case STATE_POSTAMBLE:
+                    syncPostamble.classList.add('active');
+                    break;
+                case STATE_COMPLETE:
+                    syncValid.classList.add('active');
+                    break;
+            }
+        }
 
         // ============================================
         // Enable microphone
@@ -409,7 +426,7 @@
                 const source = audioCtx.createMediaStreamSource(stream);
                 analyser = audioCtx.createAnalyser();
                 analyser.fftSize = FFT_SIZE;
-                analyser.smoothingTimeConstant = 0.2;
+                analyser.smoothingTimeConstant = 0.1;
 
                 source.connect(analyser);
 
@@ -422,14 +439,10 @@
                 micBtn.disabled = true;
                 stopMicBtn.disabled = false;
 
-                log("✅ Microphone active - listening for tri-tone pattern");
+                log("✅ Microphone active - decoding FSK signal");
 
-                // Clear history
-                detectionHistory = [];
-                matchedPatterns = [];
-
-                // Start detection
-                detectPattern();
+                resetDecoder();
+                decodeSignal();
 
             } catch (e) {
                 log(`❌ Mic error: ${e.message}`);
@@ -461,102 +474,9 @@
         });
 
         // ============================================
-        // Check if frequency matches target
+        // Detect current frequency
         // ============================================
-        function frequencyMatches(freq, target) {
-            return Math.abs(freq - target) <= PATTERN.TOLERANCE * sensitivity;
-        }
-
-        // ============================================
-        // Update visualization
-        // ============================================
-        function updateUI(detected) {
-            if (!detected) return;
-
-            // Update bars based on most recent detection
-            if (detected.type === 'high1') {
-                bar1.style.height = '60px';
-                freq1.innerText = Math.round(detected.freq) + 'Hz';
-            } else if (detected.type === 'low') {
-                bar2.style.height = '60px';
-                freq2.innerText = Math.round(detected.freq) + 'Hz';
-            } else if (detected.type === 'high2') {
-                bar3.style.height = '60px';
-                freq3.innerText = Math.round(detected.freq) + 'Hz';
-            }
-        }
-
-        // ============================================
-        // Find pattern in history
-        // ============================================
-        function findPatternInHistory() {
-            if (detectionHistory.length < 3) return null;
-
-            const now = Date.now();
-            const windowStart = now - PATTERN.PATTERN_WINDOW_MS;
-
-            // Filter history to within time window
-            const recentHistory = detectionHistory.filter(d => d.time > windowStart);
-
-            if (recentHistory.length < 3) return null;
-
-            // Look for sequences of high1 -> low -> high2
-            let bestPattern = null;
-            let bestScore = 0;
-
-            for (let i = 0; i < recentHistory.length - 2; i++) {
-                for (let j = i + 1; j < recentHistory.length - 1; j++) {
-                    for (let k = j + 1; k < recentHistory.length; k++) {
-                        const d1 = recentHistory[i];
-                        const d2 = recentHistory[j];
-                        const d3 = recentHistory[k];
-
-                        // Check if they form a valid pattern
-                        const isHigh1 = d1.type === 'high1' || (d1.type === 'high' && d1.count === 1);
-                        const isLow = d2.type === 'low';
-                        const isHigh2 = d3.type === 'high2' || (d3.type === 'high' && d3.count === 2);
-
-                        if (isHigh1 && isLow && isHigh2) {
-                            // Calculate pattern score based on frequency accuracy
-                            const score1 = 1 - Math.min(1, Math.abs(d1.freq - PATTERN.HIGH_FREQ) / PATTERN.TOLERANCE);
-                            const score2 = 1 - Math.min(1, Math.abs(d2.freq - PATTERN.LOW_FREQ) / PATTERN.TOLERANCE);
-                            const score3 = 1 - Math.min(1, Math.abs(d3.freq - PATTERN.HIGH_FREQ) / PATTERN.TOLERANCE);
-
-                            const totalScore = (score1 + score2 + score3) / 3;
-
-                            // Check timing (should be roughly sequential with gaps)
-                            const timeGap1 = d2.time - d1.time;
-                            const timeGap2 = d3.time - d2.time;
-
-                            // Reasonable gaps (100ms to 800ms between tones)
-                            if (timeGap1 > 50 && timeGap1 < 1000 &&
-                                timeGap2 > 50 && timeGap2 < 1000 &&
-                                totalScore > bestScore) {
-                                bestScore = totalScore;
-                                bestPattern = {
-                                    d1, d2, d3,
-                                    score: totalScore,
-                                    timeGap1,
-                                    timeGap2
-                                };
-                            }
-                        }
-                    }
-                }
-            }
-
-            return bestPattern;
-        }
-
-        // ============================================
-        // Pattern detection - using history matching
-        // ============================================
-        function detectPattern() {
-            if (!isListening || !analyser || !audioCtx) {
-                requestAnimationFrame(detectPattern);
-                return;
-            }
-
+        function detectFrequency() {
             const bufferLength = analyser.frequencyBinCount;
             const dataArray = new Uint8Array(bufferLength);
             analyser.getByteFrequencyData(dataArray);
@@ -564,164 +484,201 @@
             const nyquist = audioCtx.sampleRate / 2;
 
             // Check both frequencies
-            const highBin = Math.floor(PATTERN.HIGH_FREQ / nyquist * bufferLength);
-            const lowBin = Math.floor(PATTERN.LOW_FREQ / nyquist * bufferLength);
-            const toleranceBins = Math.floor((PATTERN.TOLERANCE * sensitivity) / nyquist * bufferLength);
+            const bin0 = Math.floor(FREQ_0 / nyquist * bufferLength);
+            const bin1 = Math.floor(FREQ_1 / nyquist * bufferLength);
+            const tolerance = Math.floor(FREQ_TOLERANCE / nyquist * bufferLength);
 
-            // Find peak in high band
-            let highPeakFreq = 0;
-            let highPeakEnergy = 0;
-            let highPeakBin = highBin;
-
-            for (let i = highBin - toleranceBins; i <= highBin + toleranceBins; i++) {
+            // Energy at 900 Hz
+            let energy0 = 0;
+            for (let i = bin0 - tolerance; i <= bin0 + tolerance; i++) {
                 if (i >= 0 && i < bufferLength) {
-                    const energy = dataArray[i] / 255;
-                    if (energy > highPeakEnergy) {
-                        highPeakEnergy = energy;
-                        highPeakBin = i;
-                    }
+                    energy0 += dataArray[i] / 255;
                 }
             }
-            highPeakFreq = (highPeakBin / bufferLength) * nyquist;
+            energy0 = energy0 / (tolerance * 2 + 1);
 
-            // Find peak in low band
-            let lowPeakFreq = 0;
-            let lowPeakEnergy = 0;
-            let lowPeakBin = lowBin;
-
-            for (let i = lowBin - toleranceBins; i <= lowBin + toleranceBins; i++) {
+            // Energy at 1234 Hz
+            let energy1 = 0;
+            for (let i = bin1 - tolerance; i <= bin1 + tolerance; i++) {
                 if (i >= 0 && i < bufferLength) {
-                    const energy = dataArray[i] / 255;
-                    if (energy > lowPeakEnergy) {
-                        lowPeakEnergy = energy;
-                        lowPeakBin = i;
-                    }
+                    energy1 += dataArray[i] / 255;
                 }
             }
-            lowPeakFreq = (lowPeakBin / bufferLength) * nyquist;
+            energy1 = energy1 / (tolerance * 2 + 1);
 
-            // Determine what we're hearing now
+            // Determine dominant frequency
+            if (energy0 < MIN_ENERGY && energy1 < MIN_ENERGY) {
+                return { freq: 0, bit: null, confidence: 0 };
+            }
+
+            if (energy1 > energy0 * 1.5) {
+                return {
+                    freq: FREQ_1,
+                    bit: 1,
+                    confidence: Math.min(1, energy1 / (energy0 + 0.01)),
+                    energy: energy1
+                };
+            } else if (energy0 > energy1 * 1.5) {
+                return {
+                    freq: FREQ_0,
+                    bit: 0,
+                    confidence: Math.min(1, energy0 / (energy1 + 0.01)),
+                    energy: energy0
+                };
+            }
+
+            return { freq: 0, bit: null, confidence: 0 };
+        }
+
+        // ============================================
+        // Main decoding loop
+        // ============================================
+        function decodeSignal() {
+            if (!isListening || !analyser || !audioCtx) {
+                requestAnimationFrame(decodeSignal);
+                return;
+            }
+
+            const detection = detectFrequency();
             const now = Date.now();
-            let detected = null;
 
-            if (highPeakEnergy > PATTERN.MIN_ENERGY && highPeakEnergy > lowPeakEnergy * 1.2) {
-                // High frequency detected
-                const matchesHigh = frequencyMatches(highPeakFreq, PATTERN.HIGH_FREQ);
-                if (matchesHigh) {
-                    // Count how many high tones we've seen recently
-                    const recentHighs = detectionHistory.filter(d =>
-                        d.time > now - 2000 && (d.type === 'high1' || d.type === 'high2' || d.type === 'high')
-                    ).length;
-
-                    detected = {
-                        time: now,
-                        freq: highPeakFreq,
-                        energy: highPeakEnergy,
-                        type: recentHighs === 0 ? 'high1' : 'high2',
-                        count: recentHighs + 1
-                    };
-
-                    if (recentHighs === 0) {
-                        log(`⬆️ First high tone detected: ${Math.round(highPeakFreq)} Hz`, 'detection');
-                    } else {
-                        log(`⬆️ Second high tone detected: ${Math.round(highPeakFreq)} Hz`, 'detection');
-                    }
-                }
-            } else if (lowPeakEnergy > PATTERN.MIN_ENERGY && lowPeakEnergy > highPeakEnergy * 1.2) {
-                // Low frequency detected
-                const matchesLow = frequencyMatches(lowPeakFreq, PATTERN.LOW_FREQ);
-                if (matchesLow) {
-                    detected = {
-                        time: now,
-                        freq: lowPeakFreq,
-                        energy: lowPeakEnergy,
-                        type: 'low'
-                    };
-                    log(`⬇️ Low tone detected: ${Math.round(lowPeakFreq)} Hz`, 'detection');
-                }
-            }
-
-            // Update current frequency display
-            if (highPeakEnergy > lowPeakEnergy) {
-                currentFreqSpan.innerText = Math.round(highPeakFreq) + ' Hz';
-            } else if (lowPeakEnergy > PATTERN.MIN_ENERGY) {
-                currentFreqSpan.innerText = Math.round(lowPeakFreq) + ' Hz';
+            // Update signal LED based on detection
+            if (detection.bit !== null) {
+                signalLed.className = 'signal-led detected';
+                lastFrequency = detection.freq;
             } else {
-                currentFreqSpan.innerText = '---';
+                signalLed.className = 'signal-led';
             }
 
-            // Add to history if we detected something
-            if (detected) {
-                detectionHistory.push(detected);
-                updateUI(detected);
-
-                // Keep history size manageable
-                if (detectionHistory.length > MAX_HISTORY) {
-                    detectionHistory.shift();
-                }
-
-                // Try to find pattern in history
-                const pattern = findPatternInHistory();
-                if (pattern && pattern.score > 0.6) {
-                    matchedPatterns.push(pattern);
-
-                    // Keep last few patterns
-                    if (matchedPatterns.length > 5) {
-                        matchedPatterns.shift();
+            // State machine
+            switch(decoderState) {
+                case STATE_IDLE:
+                    decoderStateSpan.innerText = 'Idle';
+                    if (detection.bit === 1 && detection.confidence > 0.7) {
+                        // Possible preamble detected
+                        preambleMatchCount++;
+                        if (preambleMatchCount >= REQUIRED_PREAMBLE_MATCHES) {
+                            decoderState = STATE_PREAMBLE;
+                            preambleStartTime = now;
+                            preambleMatchCount = 0;
+                            log("🔴 Preamble detected - starting decode", 'detection');
+                        }
+                    } else {
+                        preambleMatchCount = 0;
                     }
+                    break;
 
-                    // Update displays
-                    const avgScore = matchedPatterns.reduce((sum, p) => sum + p.score, 0) / matchedPatterns.length;
-                    patternMatchSpan.innerText = Math.round(avgScore * 100) + '%';
+                case STATE_PREAMBLE:
+                    decoderStateSpan.innerText = 'Preamble';
+                    // Look for continuous 1234 Hz for PREAMBLE_DURATION
+                    if (detection.bit === 1 && detection.confidence > 0.6) {
+                        if (now - preambleStartTime >= PREAMBLE_DURATION * 0.8) {
+                            decoderState = STATE_DATA;
+                            currentBits = [];
+                            bitBuffer = [];
+                            log("📡 Preamble complete - starting data reception", 'detection');
+                        }
+                    } else if (detection.bit !== null) {
+                        // Reset if we lose the signal
+                        preambleStartTime = now;
+                    }
+                    break;
 
-                    const timeWindow = (pattern.d3.time - pattern.d1.time) / 1000;
-                    patternWindowSpan.innerText = timeWindow.toFixed(1) + 's';
+                case STATE_DATA:
+                    decoderStateSpan.innerText = 'Data';
+                    if (detection.bit !== null && detection.confidence > 0.5) {
+                        // Sample at expected bit rate
+                        const bitIndex = Math.floor((now - preambleStartTime - PREAMBLE_DURATION) / BIT_DURATION);
 
-                    tonesDetectedSpan.innerText = '3/3';
+                        if (bitIndex >= 0 && bitIndex < 16) {
+                            // Store this bit with timestamp
+                            bitBuffer.push({
+                                bit: detection.bit,
+                                time: now,
+                                confidence: detection.confidence,
+                                index: bitIndex
+                            });
 
-                    // Check if we have enough confidence
-                    if (matchedPatterns.length >= PATTERN.REQUIRED_MATCHES) {
-                        const confidence = avgScore * (matchedPatterns.length / PATTERN.REQUIRED_MATCHES);
+                            // Clean up old samples
+                            bitBuffer = bitBuffer.filter(b => b.time > now - BIT_DURATION * 2);
 
-                        if (confidence > 0.7) {
-                            // Pattern matched!
-                            detectionCount++;
-                            detectionCountSpan.innerText = `Detections: ${detectionCount}`;
+                            // Determine majority bit for this position
+                            const samplesForIndex = bitBuffer.filter(b => b.index === bitIndex);
+                            if (samplesForIndex.length > 3) {
+                                const ones = samplesForIndex.filter(b => b.bit === 1).length;
+                                const zeros = samplesForIndex.filter(b => b.bit === 0).length;
+                                const majorityBit = ones > zeros ? 1 : 0;
+                                const confidence = Math.max(ones, zeros) / samplesForIndex.length;
 
-                            signalLed.className = 'signal-led detected';
-                            setTimeout(() => {
-                                signalLed.className = 'signal-led';
-                            }, 1000);
+                                if (!currentBits[bitIndex] || confidence > 0.8) {
+                                    currentBits[bitIndex] = majorityBit;
+                                    updateBinaryRow(currentBits);
+                                    bitsReceivedSpan.innerText = `${currentBits.filter(b => b !== undefined).length}/16`;
+                                    log(`Bit ${bitIndex + 1}: ${majorityBit} (${Math.round(confidence*100)}%)`);
+                                }
+                            }
+                        }
 
-                            patternStatus.innerText = '🎯 PATTERN MATCHED!';
-                            patternStatus.style.color = '#ff3366';
-
-                            log(`🎯 TRI-TONE PATTERN MATCHED! Confidence: ${Math.round(confidence * 100)}%`, 'detection');
-
-                            // Reset after detection
-                            setTimeout(() => {
-                                patternStatus.innerText = 'Waiting for pattern...';
-                                patternStatus.style.color = '#888';
-                                tonesDetectedSpan.innerText = '0/3';
-                            }, 2000);
-
-                            // Clear matched patterns to avoid double counting
-                            matchedPatterns = [];
+                        // Check if we have all bits
+                        if (currentBits.filter(b => b !== undefined).length === 16) {
+                            decoderState = STATE_POSTAMBLE;
+                            preambleStartTime = now; // Reuse for postamble timing
+                            log("✅ All 16 bits received, waiting for postamble", 'detection');
                         }
                     }
-                } else {
-                    // Update tones detected count based on most recent pattern attempt
-                    if (pattern) {
-                        tonesDetectedSpan.innerText = '3/3';
-                    } else {
-                        const recentTypes = detectionHistory.slice(-3).map(d => d.type);
-                        const uniqueTypes = new Set(recentTypes);
-                        tonesDetectedSpan.innerText = uniqueTypes.size + '/3';
+                    break;
+
+                case STATE_POSTAMBLE:
+                    decoderStateSpan.innerText = 'Postamble';
+                    // Look for postamble (1234 Hz for 200ms)
+                    if (detection.bit === 1 && detection.confidence > 0.6) {
+                        if (now - preambleStartTime >= POSTAMBLE_DURATION * 0.8) {
+                            // Valid code received!
+                            const codeString = currentBits.join('');
+
+                            // Verify it's a valid 16-bit code
+                            if (codeString.length === 16 && !codeString.includes(undefined)) {
+                                receivedCodeSpan.innerText = codeString;
+
+                                // Calculate confidence
+                                const avgConfidence = currentBits.reduce((sum, bit, i) => {
+                                    const bitSamples = bitBuffer.filter(b => b.index === i);
+                                    if (bitSamples.length > 0) {
+                                        const matchCount = bitSamples.filter(b => b.bit === bit).length;
+                                        return sum + (matchCount / bitSamples.length);
+                                    }
+                                    return sum + 0.5;
+                                }, 0) / 16;
+
+                                confidenceSpan.innerText = Math.round(avgConfidence * 100) + '%';
+
+                                validCodeCount++;
+                                validCodesSpan.innerText = validCodeCount;
+
+                                log(`🎯 VALID CODE RECEIVED: ${codeString} (${Math.round(avgConfidence*100)}% confidence)`, 'detection');
+
+                                decoderState = STATE_COMPLETE;
+                            }
+                        }
+                    } else if (detection.bit !== null) {
+                        // Reset postamble timer if signal lost
+                        preambleStartTime = now;
                     }
-                }
+                    break;
+
+                case STATE_COMPLETE:
+                    decoderStateSpan.innerText = 'Complete';
+                    // Auto-reset after 2 seconds
+                    setTimeout(() => {
+                        if (decoderState === STATE_COMPLETE) {
+                            resetDecoder();
+                        }
+                    }, 2000);
+                    break;
             }
 
-            requestAnimationFrame(detectPattern);
+            updateSyncLEDs();
+            requestAnimationFrame(decodeSignal);
         }
 
         // ============================================
@@ -751,8 +708,7 @@
             }
         });
 
-        // Initial log
-        log("System ready - fixed pattern detector");
+        log("System ready - digital FSK decoder");
     </script>
 </body>
 </html>

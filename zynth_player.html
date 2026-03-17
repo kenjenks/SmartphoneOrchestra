@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zynth Player - Tri-Tone Pattern Generator</title>
+    <title>Zynth Player - Digital Encoder</title>
     <style>
         body {
             background: #1a1a1a;
@@ -26,7 +26,7 @@
             box-shadow: 0 10px 30px rgba(0,0,0,0.5);
         }
         h1 {
-            color: #ff3366;
+            color: #00ffcc;
             margin-top: 0;
             text-align: center;
             font-size: 2rem;
@@ -36,17 +36,17 @@
             color: #888;
             margin-bottom: 30px;
         }
-        .pattern-badge {
-            background: #ff3366;
-            color: white;
-            font-size: 1.5rem;
-            font-weight: bold;
-            text-align: center;
+        .code-display {
+            background: #1a1a1a;
+            border: 2px solid #00ffcc;
+            border-radius: 12px;
             padding: 20px;
-            border-radius: 60px;
-            margin: 20px 0;
             font-family: monospace;
-            line-height: 2;
+            font-size: 2rem;
+            text-align: center;
+            letter-spacing: 10px;
+            color: #00ffcc;
+            margin: 20px 0;
         }
         .control-group {
             background: #1a1a1a;
@@ -55,7 +55,7 @@
             margin-bottom: 20px;
         }
         .control-label {
-            color: #ff3366;
+            color: #00ffcc;
             font-weight: bold;
             margin-bottom: 10px;
             font-size: 1.1rem;
@@ -82,15 +82,40 @@
             transform: scale(1.02);
         }
         button.primary {
-            background: #ff3366;
-            color: white;
+            background: #00ffcc;
+            color: #000;
             border: none;
             grid-column: span 2;
             font-size: 1.5rem;
             padding: 20px;
         }
         button.primary:hover {
-            background: #cc2952;
+            background: #00cca3;
+        }
+        .binary-row {
+            display: flex;
+            justify-content: space-between;
+            margin: 10px 0;
+            padding: 10px;
+            background: #000;
+            border-radius: 8px;
+        }
+        .bit {
+            width: 40px;
+            height: 40px;
+            border-radius: 8px;
+            background: #333;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            transition: all 0.1s;
+        }
+        .bit.active {
+            background: #00ffcc;
+            color: #000;
+            transform: scale(1.1);
+            box-shadow: 0 0 20px #00ffcc;
         }
         .status-box {
             background: #000;
@@ -98,7 +123,7 @@
             padding: 15px;
             font-family: monospace;
             margin: 20px 0;
-            border-left: 4px solid #ff3366;
+            border-left: 4px solid #00ffcc;
         }
         .indicator {
             display: flex;
@@ -107,27 +132,16 @@
             margin: 30px 0;
             gap: 10px;
         }
-        .pattern-led {
-            width: 60px;
-            height: 60px;
+        .sync-led {
+            width: 40px;
+            height: 40px;
             border-radius: 50%;
             background: #222;
-            transition: all 0.1s ease;
-            border: 2px solid #444;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            font-weight: bold;
+            transition: all 0.1s;
         }
-        .pattern-led.active {
-            background: #ff3366;
-            box-shadow: 0 0 40px #ff3366;
-            border-color: white;
-        }
-        .pattern-led.completed {
+        .sync-led.active {
             background: #00ffcc;
-            box-shadow: 0 0 40px #00ffcc;
+            box-shadow: 0 0 30px #00ffcc;
         }
         .log {
             background: #000;
@@ -140,102 +154,32 @@
             color: #888;
             border: 1px solid #333;
         }
-        .log-entry {
-            margin-bottom: 4px;
-            border-bottom: 1px dotted #222;
-        }
-        .slider-container {
-            margin: 15px 0;
-        }
-        .slider-label {
-            display: flex;
-            justify-content: space-between;
-            color: #888;
-            margin-bottom: 5px;
-        }
-        input[type=range] {
-            width: 100%;
-            height: 8px;
-            background: #333;
-            border-radius: 4px;
-            -webkit-appearance: none;
-        }
-        input[type=range]::-webkit-slider-thumb {
-            -webkit-appearance: none;
-            width: 20px;
-            height: 20px;
-            background: #ff3366;
-            border-radius: 50%;
-            cursor: pointer;
-            box-shadow: 0 0 10px #ff3366;
-        }
-        .value-display {
-            color: #ff3366;
-            font-weight: bold;
-        }
-        .pattern-guide {
-            display: flex;
-            justify-content: space-around;
-            margin: 20px 0;
-            color: #888;
-            font-size: 1rem;
-        }
-        .pattern-guide span {
-            color: #ff3366;
-            font-weight: bold;
-        }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>🎵 Zynth Player</h1>
-        <div class="subtitle">Tri-Tone Pattern Generator</div>
+        <div class="subtitle">Digital Encoder - 16-bit Secure Code</div>
 
-        <div class="pattern-badge">
-            1234 Hz<br>⬇️<br>900 Hz<br>⬆️<br>1234 Hz
-        </div>
-
-        <div class="pattern-guide">
-            <span>High</span>
-            <span>→</span>
-            <span>Low</span>
-            <span>→</span>
-            <span>High</span>
-        </div>
+        <div class="code-display" id="code-display">1011001110001101</div>
 
         <div class="control-group">
-            <div class="control-label">Pattern Settings</div>
+            <div class="control-label">Signal Settings</div>
 
-            <div class="slider-container">
-                <div class="slider-label">
-                    <span>Tone Duration</span>
-                    <span class="value-display" id="duration-value">300 ms</span>
-                </div>
-                <input type="range" id="duration-slider" min="100" max="500" value="300" step="10">
+            <div class="binary-row" id="binary-row">
+                <!-- Bits will be generated here by JS -->
             </div>
 
-            <div class="slider-container">
-                <div class="slider-label">
-                    <span>Volume</span>
-                    <span class="value-display" id="volume-value">70%</span>
-                </div>
-                <input type="range" id="volume-slider" min="0" max="100" value="70" step="1">
-            </div>
-
-            <div class="slider-container">
-                <div class="slider-label">
-                    <span>Gap between tones</span>
-                    <span class="value-display" id="gap-value">100 ms</span>
-                </div>
-                <input type="range" id="gap-slider" min="0" max="300" value="100" step="10">
+            <div style="margin: 15px 0; color: #888; text-align: center;">
+                <span>0 = 900 Hz</span> | <span>1 = 1234 Hz</span>
             </div>
         </div>
 
         <div class="button-grid">
-            <button class="primary" onclick="playPattern()">🔴 PLAY TRI-TONE PATTERN</button>
-            <button onclick="playRepeating()">🔄 Repeat (3x)</button>
+            <button class="primary" onclick="transmitCode()">📡 TRANSMIT CODE</button>
+            <button onclick="generateNewCode()">🔄 New Random Code</button>
+            <button onclick="transmitRepeating()">🔁 Transmit 5x</button>
             <button onclick="stopAll()">⏹️ Stop</button>
-            <button onclick="initAudio()">🔊 Init Audio</button>
         </div>
 
         <div class="status-box">
@@ -244,19 +188,20 @@
                 <span id="audio-state" style="color: #ffcc00;">not initialized</span>
             </div>
             <div style="display: flex; justify-content: space-between;">
-                <span>Pattern progress:</span>
-                <span id="pattern-progress" style="color: #ff3366;">Ready</span>
+                <span>Transmitting:</span>
+                <span id="transmit-status" style="color: #00ffcc;">Ready</span>
             </div>
         </div>
 
         <div class="indicator">
-            <div class="pattern-led" id="led1">1</div>
-            <div class="pattern-led" id="led2">2</div>
-            <div class="pattern-led" id="led3">3</div>
+            <div class="sync-led" id="sync1"></div>
+            <div class="sync-led" id="sync2"></div>
+            <div class="sync-led" id="sync3"></div>
+            <div class="sync-led" id="sync4"></div>
         </div>
 
         <div class="log" id="log">
-            <div class="log-entry">[System] Zynth Player ready - tri-tone pattern generator</div>
+            <div class="log-entry">[System] Digital encoder ready</div>
         </div>
     </div>
 
@@ -265,14 +210,49 @@
         // Global state
         // ============================================
         let audioCtx = null;
-        let isPlaying = false;
+        let isTransmitting = false;
         let repeatTimeout = null;
-        let currentTimeout = null;
 
-        const PATTERN = [1234, 900, 1234]; // High, Low, High
+        // FSK parameters
+        const FREQ_0 = 900;  // 0 bit
+        const FREQ_1 = 1234; // 1 bit
+        const BIT_DURATION = 100; // ms per bit
+        const PREAMBLE_DURATION = 200; // ms of preamble tone
+        const POSTAMBLE_DURATION = 200; // ms of postamble tone
+
+        let currentCode = '1011001110001101'; // 16-bit code
 
         // ============================================
-        // Initialize audio
+        // Initialize
+        // ============================================
+        function generateBinaryRow() {
+            const row = document.getElementById('binary-row');
+            row.innerHTML = '';
+            for (let i = 0; i < currentCode.length; i++) {
+                const bit = document.createElement('div');
+                bit.className = 'bit';
+                bit.id = `bit-${i}`;
+                bit.innerText = currentCode[i];
+                row.appendChild(bit);
+            }
+        }
+
+        function generateNewCode() {
+            // Generate random 16-bit code
+            let code = '';
+            for (let i = 0; i < 16; i++) {
+                code += Math.random() > 0.5 ? '1' : '0';
+            }
+            currentCode = code;
+            document.getElementById('code-display').innerText = code;
+            generateBinaryRow();
+            log(`🔄 New code generated: ${code}`);
+        }
+
+        generateBinaryRow();
+
+        // ============================================
+        // Audio initialization
         // ============================================
         async function initAudio() {
             try {
@@ -295,30 +275,16 @@
         }
 
         // ============================================
-        // UI Controls
-        // ============================================
-        document.getElementById('duration-slider').addEventListener('input', (e) => {
-            document.getElementById('duration-value').innerText = e.target.value + ' ms';
-        });
-
-        document.getElementById('volume-slider').addEventListener('input', (e) => {
-            document.getElementById('volume-value').innerText = e.target.value + '%';
-        });
-
-        document.getElementById('gap-slider').addEventListener('input', (e) => {
-            document.getElementById('gap-value').innerText = e.target.value + ' ms';
-        });
-
-        // ============================================
         // Play a single tone
         // ============================================
-        function playTone(frequency, duration, volume, callback) {
+        function playTone(frequency, duration, volume = 0.5, callback) {
             const oscillator = audioCtx.createOscillator();
             const gainNode = audioCtx.createGain();
 
             oscillator.type = 'sine';
             oscillator.frequency.value = frequency;
 
+            // Smooth envelope
             gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
             gainNode.gain.linearRampToValueAtTime(volume, audioCtx.currentTime + 0.01);
             gainNode.gain.setValueAtTime(volume, audioCtx.currentTime + duration - 0.01);
@@ -328,133 +294,148 @@
             gainNode.connect(audioCtx.destination);
 
             oscillator.start();
-            oscillator.stop(audioCtx.currentTime + duration);
+
+            if (callback) {
+                setTimeout(callback, duration * 1000);
+            }
 
             return oscillator;
         }
 
         // ============================================
-        // Play the full tri-tone pattern
+        // Update sync LEDs
         // ============================================
-        async function playPattern() {
-            try {
-                await initAudio();
+        function setSyncLED(step) {
+            document.getElementById('sync1').classList.remove('active');
+            document.getElementById('sync2').classList.remove('active');
+            document.getElementById('sync3').classList.remove('active');
+            document.getElementById('sync4').classList.remove('active');
 
-                // Stop any current playback
-                stopAll();
-
-                const toneDuration = parseInt(document.getElementById('duration-slider').value) / 1000;
-                const gapDuration = parseInt(document.getElementById('gap-slider').value) / 1000;
-                const volume = parseInt(document.getElementById('volume-slider').value) / 100;
-
-                document.getElementById('pattern-progress').innerText = 'Playing...';
-
-                // Reset LEDs
-                document.getElementById('led1').classList.remove('active', 'completed');
-                document.getElementById('led2').classList.remove('active', 'completed');
-                document.getElementById('led3').classList.remove('active', 'completed');
-
-                log(`🎵 Playing tri-tone pattern: 1234Hz → 900Hz → 1234Hz`);
-
-                // Play first tone (1234 Hz)
-                setTimeout(() => {
-                    document.getElementById('led1').classList.add('active');
-                    playTone(1234, toneDuration, volume);
-                    log(`⬆️ Tone 1: 1234 Hz`);
-
-                    setTimeout(() => {
-                        document.getElementById('led1').classList.remove('active');
-                        document.getElementById('led1').classList.add('completed');
-                    }, toneDuration * 1000);
-                }, 0);
-
-                // Play second tone (900 Hz)
-                setTimeout(() => {
-                    document.getElementById('led2').classList.add('active');
-                    playTone(900, toneDuration, volume);
-                    log(`⬇️ Tone 2: 900 Hz`);
-
-                    setTimeout(() => {
-                        document.getElementById('led2').classList.remove('active');
-                        document.getElementById('led2').classList.add('completed');
-                    }, toneDuration * 1000);
-                }, (toneDuration + gapDuration) * 1000);
-
-                // Play third tone (1234 Hz)
-                setTimeout(() => {
-                    document.getElementById('led3').classList.add('active');
-                    playTone(1234, toneDuration, volume);
-                    log(`⬆️ Tone 3: 1234 Hz`);
-
-                    setTimeout(() => {
-                        document.getElementById('led3').classList.remove('active');
-                        document.getElementById('led3').classList.add('completed');
-                        document.getElementById('pattern-progress').innerText = 'Complete';
-
-                        setTimeout(() => {
-                            document.getElementById('led1').classList.remove('completed');
-                            document.getElementById('led2').classList.remove('completed');
-                            document.getElementById('led3').classList.remove('completed');
-                        }, 1000);
-                    }, toneDuration * 1000);
-                }, (toneDuration + gapDuration) * 2000);
-
-            } catch (e) {
-                log(`❌ Playback failed: ${e.message}`);
+            if (step === 'preamble') {
+                document.getElementById('sync1').classList.add('active');
+            } else if (step === 'data') {
+                document.getElementById('sync2').classList.add('active');
+            } else if (step === 'postamble') {
+                document.getElementById('sync3').classList.add('active');
+            } else if (step === 'complete') {
+                document.getElementById('sync4').classList.add('active');
             }
         }
 
         // ============================================
-        // Play repeating patterns
+        // Transmit the full code
         // ============================================
-        function playRepeating() {
+        async function transmitCode() {
+            try {
+                await initAudio();
+
+                if (isTransmitting) {
+                    log("⏸️ Already transmitting");
+                    return;
+                }
+
+                isTransmitting = true;
+                document.getElementById('transmit-status').innerText = 'Transmitting...';
+
+                log(`📡 Transmitting 16-bit code: ${currentCode}`);
+
+                // Clear bit highlights
+                document.querySelectorAll('.bit').forEach(bit => {
+                    bit.classList.remove('active');
+                });
+
+                // Step 1: Preamble - 200ms of 1234 Hz (sync tone)
+                setSyncLED('preamble');
+                log("🔊 Preamble tone");
+                await new Promise(resolve => {
+                    playTone(FREQ_1, PREAMBLE_DURATION / 1000, 0.7, resolve);
+                });
+
+                // Step 2: Transmit each bit
+                setSyncLED('data');
+                for (let i = 0; i < currentCode.length; i++) {
+                    const bit = currentCode[i];
+                    const freq = bit === '1' ? FREQ_1 : FREQ_0;
+
+                    // Highlight current bit
+                    document.getElementById(`bit-${i}`).classList.add('active');
+
+                    log(`Bit ${i+1}/${currentCode.length}: ${bit} (${freq} Hz)`);
+
+                    await new Promise(resolve => {
+                        playTone(freq, BIT_DURATION / 1000, 0.5, resolve);
+                    });
+
+                    // Remove highlight after a short delay
+                    setTimeout(() => {
+                        document.getElementById(`bit-${i}`).classList.remove('active');
+                    }, 50);
+                }
+
+                // Step 3: Postamble - 200ms of 1234 Hz (completion tone)
+                setSyncLED('postamble');
+                log("🔊 Postamble tone");
+                await new Promise(resolve => {
+                    playTone(FREQ_1, POSTAMBLE_DURATION / 1000, 0.7, resolve);
+                });
+
+                setSyncLED('complete');
+                log("✅ Transmission complete");
+
+                // Reset after delay
+                setTimeout(() => {
+                    setSyncLED('');
+                    document.getElementById('transmit-status').innerText = 'Ready';
+                    isTransmitting = false;
+                }, 500);
+
+            } catch (e) {
+                log(`❌ Transmission failed: ${e.message}`);
+                isTransmitting = false;
+            }
+        }
+
+        // ============================================
+        // Transmit multiple times
+        // ============================================
+        async function transmitRepeating() {
             if (repeatTimeout) {
                 clearTimeout(repeatTimeout);
                 repeatTimeout = null;
             }
 
             let count = 0;
-            const maxCount = 3;
-            const patternDuration = (parseInt(document.getElementById('duration-slider').value) * 3 +
-                                    parseInt(document.getElementById('gap-slider').value) * 2) + 500;
+            const maxCount = 5;
 
-            function playNext() {
-                if (count < maxCount) {
-                    playPattern();
+            const transmitNext = async () => {
+                if (count < maxCount && !isTransmitting) {
+                    await transmitCode();
                     count++;
-                    repeatTimeout = setTimeout(playNext, patternDuration);
+                    repeatTimeout = setTimeout(transmitNext, 1000);
                 } else {
                     repeatTimeout = null;
-                    log("✅ Repeating pattern complete");
+                    log("✅ Repeating transmissions complete");
                 }
-            }
+            };
 
-            log(`🔄 Playing ${maxCount} tri-tone patterns...`);
-            playNext();
+            log(`🔄 Transmitting code ${maxCount} times`);
+            transmitNext();
         }
 
         // ============================================
-        // Stop all playback
+        // Stop all
         // ============================================
         function stopAll() {
             if (repeatTimeout) {
                 clearTimeout(repeatTimeout);
                 repeatTimeout = null;
             }
-
-            if (currentTimeout) {
-                clearTimeout(currentTimeout);
-                currentTimeout = null;
-            }
-
-            // Note: Can't easily stop already-playing oscillators
-            // but we can prevent new ones and reset UI
-
-            document.getElementById('pattern-progress').innerText = 'Stopped';
-            document.getElementById('led1').classList.remove('active', 'completed');
-            document.getElementById('led2').classList.remove('active', 'completed');
-            document.getElementById('led3').classList.remove('active', 'completed');
-
+            isTransmitting = false;
+            setSyncLED('');
+            document.getElementById('transmit-status').innerText = 'Stopped';
+            document.querySelectorAll('.bit').forEach(bit => {
+                bit.classList.remove('active');
+            });
             log("⏹️ Stopped");
         }
 
@@ -470,7 +451,7 @@
         }
 
         // ============================================
-        // Auto-init on first button click
+        // Auto-init
         // ============================================
         document.querySelectorAll('button').forEach(btn => {
             btn.addEventListener('click', () => {
@@ -478,8 +459,7 @@
             });
         });
 
-        // Initial log
-        log("System ready - tri-tone pattern: 1234Hz → 900Hz → 1234Hz");
+        log("System ready - 16-bit digital encoder");
     </script>
 </body>
 </html>
