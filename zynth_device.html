@@ -121,24 +121,54 @@ zynth_device.html - Like devicedist.html but with a synth
             margin: 5px 0;
             font-size: 0.8rem;
         }
-        .permission-button {
+        .button-container {
+            display: flex;
+            gap: 10px;
+            margin: 15px 0;
+        }
+        .action-button {
             background: #00ffcc;
             color: #000;
             border: none;
-            padding: 10px 20px;
+            padding: 12px 20px;
             border-radius: 25px;
             font-weight: bold;
             cursor: pointer;
-            margin-top: 10px;
             transition: transform 0.2s;
+            flex: 1;
+            font-size: 1rem;
         }
-        .permission-button:hover {
+        .action-button:hover {
             transform: scale(1.05);
         }
-        .permission-button:disabled {
+        .action-button.secondary {
+            background: #442288;
+            color: #fff;
+        }
+        .action-button:disabled {
             background: #333;
             color: #666;
             cursor: not-allowed;
+            transform: none;
+        }
+        .permission-status {
+            font-size: 0.9rem;
+            padding: 5px 10px;
+            border-radius: 15px;
+            text-align: center;
+            margin-top: 5px;
+        }
+        .granted {
+            background: #1e4d1e;
+            color: #8bc34a;
+        }
+        .denied {
+            background: #4d1e1e;
+            color: #ff6b6b;
+        }
+        .pending {
+            background: #4d4d1e;
+            color: #ffcc00;
         }
     </style>
 </head>
@@ -166,16 +196,29 @@ zynth_device.html - Like devicedist.html but with a synth
                 <span class="label">Neighbors within 2m:</span>
                 <span class="value" id="neighbor-count">calculating...</span>
             </div>
-            <div class="status-row">
-                <span class="label">Mic permission:</span>
-                <span class="value" id="mic-status">checking...</span>
+
+            <!-- Manual Mic Permission Button and Status -->
+            <div class="status-row" style="flex-direction: column; align-items: stretch;">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
+                    <span class="label">Mic permission:</span>
+                    <span class="value" id="mic-status">checking...</span>
+                </div>
+                <div class="button-container">
+                    <button id="request-mic-btn" class="action-button">🎤 Request Mic</button>
+                    <button id="test-mic-btn" class="action-button secondary">🔊 Test Mic</button>
+                </div>
+                <div id="mic-permission-message" class="permission-status pending">Click 'Request Mic' to enable neighbor listening</div>
             </div>
+
             <div class="status-row">
                 <span class="label">Audio primed:</span>
                 <span class="value" id="audio-status">pending...</span>
             </div>
 
-            <button id="retry-permission" class="permission-button" style="display: none;">🎤 Request Mic Permission</button>
+            <div class="button-container">
+                <button id="prime-audio-btn" class="action-button">🔊 Prime Audio</button>
+                <button id="reset-btn" class="action-button secondary">🔄 Reset</button>
+            </div>
 
             <div class="note-indicator" id="indicator-container">
                 <div id="playing-indicator" class="note-light"></div>
@@ -242,6 +285,7 @@ zynth_device.html - Like devicedist.html but with a synth
         let micPermission = false;
         let listeningActive = false;
         let audioPrimed = false;
+        let mediaStream = null;
 
         // ============================================
         // Clock sync
@@ -251,14 +295,12 @@ zynth_device.html - Like devicedist.html but with a synth
         });
 
         // ============================================
-        // FIXED: Immediate Startup Sequence
+        // Simple Startup - Just get seat ID and listen
         // ============================================
         window.onload = () => {
-            // DON'T make this async - set up listener first!
-
             log("🚀 Device starting up...");
 
-            // Get seat ID from URL (synchronous)
+            // Get seat ID from URL
             const urlParams = new URLSearchParams(window.location.search);
             const seatId = urlParams.get('seat');
             isPillar = seatId?.startsWith('PILLAR_') || false;
@@ -267,32 +309,102 @@ zynth_device.html - Like devicedist.html but with a synth
             document.getElementById('device-type').innerText = isPillar ? '🏛️ Pillar Device' : '📱 Patron Device';
             log(`🔍 Device: ${seatId} (${isPillar ? 'pillar' : 'patron'})`);
 
-            // START LISTENING FOR CONDUCTOR IMMEDIATELY - this is critical!
+            // Start listening for conductor immediately
             listenForConductor();
 
-            // Now do the async setup in the background
-            performAsyncSetup();
+            // Try to prime audio automatically (but don't wait for it)
+            attemptAutoPrime();
+
+            log("✅ Startup complete. Waiting for conductor...");
         };
 
         // ============================================
-        // NEW: Separate async setup function
+        // Attempt to auto-prime audio (best effort)
         // ============================================
-        async function performAsyncSetup() {
-            log("🔧 Performing async setup...");
+        async function attemptAutoPrime() {
+            try {
+                await primeAudioSystem();
+            } catch (e) {
+                log(`⚠️ Auto-prime failed: ${e.message}`);
+            }
+        }
 
-            // Prime the audio system with a silent tone (for all devices)
+        // ============================================
+        // Manual Prime Audio Button
+        // ============================================
+        document.getElementById('prime-audio-btn').onclick = async () => {
+            log("👆 Manual prime requested");
             await primeAudioSystem();
+        };
 
-            // Request microphone permission immediately (only for patrons)
-            if (!isPillar) {
-                await requestMicrophonePermission();
-            } else {
-                document.getElementById('mic-status').innerText = '🔇 Not needed';
-                document.getElementById('audio-status').innerText = audioPrimed ? '✅ Primed' : '❌ Failed';
+        // ============================================
+        // Manual Reset Button
+        // ============================================
+        document.getElementById('reset-btn').onclick = () => {
+            log("🔄 Manual reset");
+            if (audioCtx) {
+                audioCtx.close();
+                audioCtx = null;
+            }
+            audioPrimed = false;
+            document.getElementById('audio-status').innerText = 'pending...';
+            attemptAutoPrime();
+        };
+
+        // ============================================
+        // Manual Mic Request Button
+        // ============================================
+        document.getElementById('request-mic-btn').onclick = async () => {
+            log("👆 Manual mic request");
+            await requestMicrophonePermission();
+        };
+
+        // ============================================
+        // Test Mic Button (plays a short tone through mic)
+        // ============================================
+        document.getElementById('test-mic-btn').onclick = async () => {
+            log("🔊 Testing microphone...");
+
+            if (!micPermission) {
+                log("❌ Please grant mic permission first");
+                return;
             }
 
-            log("✅ Async setup complete.");
-        }
+            try {
+                // Get a fresh stream
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+                // Create a simple oscillator to play through speakers
+                if (!audioCtx) {
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+
+                if (audioCtx.state === 'suspended') {
+                    await audioCtx.resume();
+                }
+
+                const oscillator = audioCtx.createOscillator();
+                const gainNode = audioCtx.createGain();
+
+                oscillator.type = 'sine';
+                oscillator.frequency.value = 880; // A5 - higher pitch so it's clearly a test
+
+                gainNode.gain.setValueAtTime(0.2, audioCtx.currentTime);
+                gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.5);
+
+                oscillator.connect(gainNode).connect(audioCtx.destination);
+                oscillator.start();
+                oscillator.stop(audioCtx.currentTime + 0.5);
+
+                log("✅ Test tone played - you should hear a brief beep");
+
+                // Release stream
+                stream.getTracks().forEach(track => track.stop());
+
+            } catch (e) {
+                log(`❌ Mic test failed: ${e.message}`);
+            }
+        };
 
         // ============================================
         // Prime Audio System with Silent Tone
@@ -312,20 +424,20 @@ zynth_device.html - Like devicedist.html but with a synth
                 const gainNode = audioCtx.createGain();
 
                 oscillator.type = 'sine';
-                oscillator.frequency.value = 440; // A4, but silent
+                oscillator.frequency.value = 440;
 
                 // Set volume to 0 (completely silent)
                 gainNode.gain.value = 0;
 
                 oscillator.connect(gainNode).connect(audioCtx.destination);
 
-                // Resume the context (this is the key step)
+                // Resume the context
                 if (audioCtx.state === 'suspended') {
                     await audioCtx.resume();
                     log("🔊 Audio context resumed");
                 }
 
-                // Play the silent tone for 100ms to wake up audio hardware
+                // Play the silent tone for 100ms
                 oscillator.start();
                 oscillator.stop(audioCtx.currentTime + 0.1);
 
@@ -333,9 +445,9 @@ zynth_device.html - Like devicedist.html but with a synth
                 audioPrimed = true;
                 document.getElementById('audio-status').innerText = '✅ Primed';
 
-                // Suspend the context to save power, but it's now ready
+                // Suspend to save power
                 await audioCtx.suspend();
-                log("🔊 Audio context suspended (primed and ready)");
+                log("🔊 Audio context suspended (ready)");
 
             } catch (e) {
                 log(`❌ Audio priming failed: ${e.message}`);
@@ -350,39 +462,48 @@ zynth_device.html - Like devicedist.html but with a synth
         async function requestMicrophonePermission() {
             log("🎤 Requesting microphone permission...");
             document.getElementById('mic-status').innerText = 'requesting...';
+            updateMicMessage('pending', 'Requesting...');
 
             try {
-                // Request permission without setting up full analysis yet
-                const tempStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                // Request permission
+                const tempStream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        echoCancellation: false,
+                        noiseSuppression: false,
+                        autoGainControl: false
+                    }
+                });
+
                 micPermission = true;
                 document.getElementById('mic-status').innerText = '✅ Granted';
+                updateMicMessage('granted', 'Microphone ready - neighbors can hear you');
                 log('🎤 Microphone permission granted');
 
-                // Hide retry button if visible
-                document.getElementById('retry-permission').style.display = 'none';
-
-                // Immediately stop the stream, we just needed the permission
-                tempStream.getTracks().forEach(track => track.stop());
+                // Store stream for potential future use
+                if (mediaStream) {
+                    mediaStream.getTracks().forEach(track => track.stop());
+                }
+                mediaStream = tempStream;
 
             } catch (err) {
                 micPermission = false;
                 document.getElementById('mic-status').innerText = '❌ Denied';
-                log('🎤 Microphone permission denied');
-
-                // Show retry button
-                document.getElementById('retry-permission').style.display = 'block';
+                updateMicMessage('denied', 'Permission denied - click to try again');
+                log(`🎤 Microphone permission denied: ${err.message}`);
             }
         }
 
         // ============================================
-        // Manual retry for mic permission
+        // Update mic message
         // ============================================
-        document.getElementById('retry-permission').onclick = async () => {
-            await requestMicrophonePermission();
-        };
+        function updateMicMessage(status, message) {
+            const msgDiv = document.getElementById('mic-permission-message');
+            msgDiv.innerText = message;
+            msgDiv.className = `permission-status ${status}`;
+        }
 
         // ============================================
-        // Listen for Conductor (called immediately)
+        // Listen for Conductor
         // ============================================
         function listenForConductor() {
             log("👂 Listening for conductor signals...");
@@ -402,7 +523,7 @@ zynth_device.html - Like devicedist.html but with a synth
                 config = test.config;
                 schedule = test.schedule || [];
 
-                // Resume the pre-primed audio context
+                // Resume the audio context if needed
                 if (audioCtx && audioCtx.state === 'suspended') {
                     await audioCtx.resume();
                     log("🔊 Audio context resumed for playback");
@@ -438,7 +559,6 @@ zynth_device.html - Like devicedist.html but with a synth
                         startPillarPlayback(config, test.pillar_warbles || [], test.startTime);
                     } else {
                         startPatronPlayback(config, schedule, test.startTime);
-                        // Future: startNeighborListening(test);
                     }
                     startCountdown(test.startTime + (config?.total_duration_ms || 30000));
                 }, secondsUntilStart * 1000);
@@ -453,7 +573,7 @@ zynth_device.html - Like devicedist.html but with a synth
 
             neighbors = allSeats.filter(seat =>
                 seat.id !== seatId &&
-                !seat.id.startsWith('PILLAR_') && // Don't count pillars as neighbors for now
+                !seat.id.startsWith('PILLAR_') &&
                 distance(mySeat, seat) <= 2.0
             );
 
@@ -488,10 +608,8 @@ zynth_device.html - Like devicedist.html but with a synth
             const now = Date.now() + serverOffset;
             const audioStartTime = audioCtx.currentTime + Math.max(0, (startTime - now) / 1000);
 
-            // Schedule continuous pillar pattern
-            schedulePillarLoop(pillarPattern, audioStartTime, 2.0); // 2 seconds per beat
+            schedulePillarLoop(pillarPattern, audioStartTime, 2.0);
 
-            // Schedule pillar warbles
             if (pillarWarbles && Array.isArray(pillarWarbles)) {
                 pillarWarbles.forEach(warble => {
                     if (warble.pillar === seatId) {
@@ -510,13 +628,12 @@ zynth_device.html - Like devicedist.html but with a synth
             function scheduleNext() {
                 const note = pattern[beatIndex % pattern.length];
                 if (note !== 'rest') {
-                    playTone(note, nextTime, 450, false, true); // 450ms note
+                    playTone(note, nextTime, 450, false, true);
                 }
 
                 nextTime += beatDuration;
                 beatIndex++;
 
-                // Schedule next beat slightly before current ends
                 const timeToNext = (nextTime - audioCtx.currentTime) * 1000;
                 if (timeToNext > 0) {
                     setTimeout(scheduleNext, Math.min(timeToNext, 100));
@@ -535,16 +652,13 @@ zynth_device.html - Like devicedist.html but with a synth
             osc.type = 'sine';
             osc.frequency.value = freq;
 
-            // Simple warble (FM synthesis)
             const modOsc = audioCtx.createOscillator();
             modOsc.frequency.value = warbleConfig.rate_hz || 2.5;
 
-            // Connect modulation to frequency
             const modGain = audioCtx.createGain();
             modGain.gain.value = warbleConfig.depth_hz || 30;
             modOsc.connect(modGain).connect(osc.frequency);
 
-            // Envelope
             gain.gain.setValueAtTime(0, time);
             gain.gain.linearRampToValueAtTime(0.5, time + 0.01);
             gain.gain.setValueAtTime(0.5, time + 0.45);
@@ -565,7 +679,6 @@ zynth_device.html - Like devicedist.html but with a synth
         function startPatronPlayback(config, schedule, startTime) {
             log('🎵 Starting patron pattern');
 
-            // Find my notes
             myNotes = schedule.filter(item => item.device_id === seatId);
             document.getElementById('my-notes').innerText = myNotes.length;
 
@@ -593,20 +706,16 @@ zynth_device.html - Like devicedist.html but with a synth
             const duration = note.duration_ms / 1000;
             const warbleConfig = config.warble;
 
-            // Flash indicator
             setTimeout(() => {
                 const indicator = document.getElementById('playing-indicator');
                 indicator.classList.add('playing');
                 setTimeout(() => indicator.classList.remove('playing'), 100);
             }, (time - audioCtx.currentTime) * 1000);
 
-            // Record that we're about to play (for calibration)
             lastPingSent = note.absolute_time_ms;
 
-            // Play the note with warble
             playTone(note.pitch, time, duration, warbleConfig?.enabled || false, false);
 
-            // Update next note display
             updateNextNote();
         }
 
@@ -619,20 +728,17 @@ zynth_device.html - Like devicedist.html but with a synth
             osc.frequency.value = freq;
 
             if (addWarble && !isPillar) {
-                // Simple FM synthesis for warble
                 const modOsc = audioCtx.createOscillator();
-                modOsc.frequency.value = 2.5; // 2.5Hz modulation
+                modOsc.frequency.value = 2.5;
 
-                // Connect modulation to frequency
                 const modGain = audioCtx.createGain();
-                modGain.gain.value = 30; // 30Hz depth
+                modGain.gain.value = 30;
                 modOsc.connect(modGain).connect(osc.frequency);
 
                 modOsc.start(startTime);
                 modOsc.stop(startTime + duration);
             }
 
-            // Smooth envelope
             gain.gain.setValueAtTime(0, startTime);
             gain.gain.linearRampToValueAtTime(0.3, startTime + 0.01);
             gain.gain.setValueAtTime(0.3, startTime + duration - 0.01);
@@ -648,8 +754,6 @@ zynth_device.html - Like devicedist.html but with a synth
         // ============================================
         function pitchToFreq(pitch) {
             const notes = {'C':0, 'C#':1, 'D':2, 'D#':3, 'E':4, 'F':5, 'F#':6, 'G':7, 'G#':8, 'A':9, 'A#':10, 'B':11};
-
-            // Handle flats by converting to sharps
             const flatToSharp = {'Db':'C#', 'Eb':'D#', 'Gb':'F#', 'Ab':'G#', 'Bb':'A#'};
 
             const match = pitch.match(/([A-G][b#]?)(\d+)/);
@@ -658,11 +762,9 @@ zynth_device.html - Like devicedist.html but with a synth
             let note = match[1];
             const octave = parseInt(match[2]);
 
-            // Convert flat to sharp if needed
             if (flatToSharp[note]) note = flatToSharp[note];
 
             const semitone = notes[note] + (octave - 4) * 12;
-            // A4 is 440Hz, A4 index is 9 (A in octave 4)
             return 440 * Math.pow(2, (semitone - 9) / 12);
         }
 
@@ -717,6 +819,9 @@ zynth_device.html - Like devicedist.html but with a synth
         window.addEventListener('beforeunload', () => {
             if (countdownInterval) clearInterval(countdownInterval);
             if (pillarInterval) clearInterval(pillarInterval);
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(track => track.stop());
+            }
             if (audioCtx) audioCtx.close();
         });
 
