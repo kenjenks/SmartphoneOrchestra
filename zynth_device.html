@@ -251,12 +251,14 @@ zynth_device.html
         });
 
         // ============================================
-        // NEW: Immediate Startup Sequence
+        // FIXED: Immediate Startup Sequence
         // ============================================
-        window.onload = async () => {
+        window.onload = () => {
+            // DON'T make this async - set up listener first!
+
             log("🚀 Device starting up...");
 
-            // Get seat ID from URL
+            // Get seat ID from URL (synchronous)
             const urlParams = new URLSearchParams(window.location.search);
             const seatId = urlParams.get('seat');
             isPillar = seatId?.startsWith('PILLAR_') || false;
@@ -264,6 +266,19 @@ zynth_device.html
             document.getElementById('seat-label').innerText = seatId || 'No Seat ID';
             document.getElementById('device-type').innerText = isPillar ? '🏛️ Pillar Device' : '📱 Patron Device';
             log(`🔍 Device: ${seatId} (${isPillar ? 'pillar' : 'patron'})`);
+
+            // START LISTENING FOR CONDUCTOR IMMEDIATELY - this is critical!
+            listenForConductor();
+
+            // Now do the async setup in the background
+            performAsyncSetup();
+        };
+
+        // ============================================
+        // NEW: Separate async setup function
+        // ============================================
+        async function performAsyncSetup() {
+            log("🔧 Performing async setup...");
 
             // Prime the audio system with a silent tone (for all devices)
             await primeAudioSystem();
@@ -276,14 +291,11 @@ zynth_device.html
                 document.getElementById('audio-status').innerText = audioPrimed ? '✅ Primed' : '❌ Failed';
             }
 
-            // Now start listening for conductor
-            listenForConductor();
-
-            log("✅ Startup complete. Waiting for conductor...");
-        };
+            log("✅ Async setup complete.");
+        }
 
         // ============================================
-        // NEW: Prime Audio System with Silent Tone
+        // Prime Audio System with Silent Tone
         // ============================================
         async function primeAudioSystem() {
             log("🔊 Priming audio system...");
@@ -333,7 +345,7 @@ zynth_device.html
         }
 
         // ============================================
-        // NEW: Request Microphone Permission
+        // Request Microphone Permission
         // ============================================
         async function requestMicrophonePermission() {
             log("🎤 Requesting microphone permission...");
@@ -370,7 +382,7 @@ zynth_device.html
         };
 
         // ============================================
-        // NEW: Listen for Conductor
+        // Listen for Conductor (called immediately)
         // ============================================
         function listenForConductor() {
             log("👂 Listening for conductor signals...");
@@ -428,7 +440,7 @@ zynth_device.html
                         startPatronPlayback(config, schedule, test.startTime);
                         // Future: startNeighborListening(test);
                     }
-                    startCountdown(test.startTime + config.total_duration_ms);
+                    startCountdown(test.startTime + (config?.total_duration_ms || 30000));
                 }, secondsUntilStart * 1000);
             });
         }
@@ -437,6 +449,8 @@ zynth_device.html
         // Neighbor calculation
         // ============================================
         function calculateNeighbors(allSeats) {
+            if (!mySeat) return;
+
             neighbors = allSeats.filter(seat =>
                 seat.id !== seatId &&
                 !seat.id.startsWith('PILLAR_') && // Don't count pillars as neighbors for now
@@ -478,7 +492,7 @@ zynth_device.html
             schedulePillarLoop(pillarPattern, audioStartTime, 2.0); // 2 seconds per beat
 
             // Schedule pillar warbles
-            if (pillarWarbles) {
+            if (pillarWarbles && Array.isArray(pillarWarbles)) {
                 pillarWarbles.forEach(warble => {
                     if (warble.pillar === seatId) {
                         const warbleTime = audioStartTime + warble.time_sec;
@@ -513,6 +527,8 @@ zynth_device.html
         }
 
         function schedulePillarWarble(freq, time, warbleConfig) {
+            if (!warbleConfig) return;
+
             const osc = audioCtx.createOscillator();
             const gain = audioCtx.createGain();
 
@@ -521,8 +537,12 @@ zynth_device.html
 
             // Simple warble (FM synthesis)
             const modOsc = audioCtx.createOscillator();
-            modOsc.frequency.value = warbleConfig.rate_hz;
-            modOsc.connect(osc.frequency);
+            modOsc.frequency.value = warbleConfig.rate_hz || 2.5;
+
+            // Connect modulation to frequency
+            const modGain = audioCtx.createGain();
+            modGain.gain.value = warbleConfig.depth_hz || 30;
+            modOsc.connect(modGain).connect(osc.frequency);
 
             // Envelope
             gain.gain.setValueAtTime(0, time);
@@ -584,7 +604,7 @@ zynth_device.html
             lastPingSent = note.absolute_time_ms;
 
             // Play the note with warble
-            playTone(note.pitch, time, duration, warbleConfig.enabled, false);
+            playTone(note.pitch, time, duration, warbleConfig?.enabled || false, false);
 
             // Update next note display
             updateNextNote();
