@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zynth Device - Single Note Detector</title>
+    <title>Zynth Device - Single Note Detector with Feedback</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <style>
@@ -132,7 +132,7 @@
     </style>
 </head>
 <body>
-    <h1>⏱️ Zynth Device - Single Note Detector</h1>
+    <h1>⏱️ Zynth Device - Single Note Detector with Feedback</h1>
 
     <div class="panel">
         <div style="display: flex; align-items: center; margin-bottom: 15px;">
@@ -160,7 +160,7 @@
             </div>
             <div style="display: flex; justify-content: space-between; margin-top: 5px;">
                 <span>Change: <span id="energyChange">0.00</span></span>
-                <span>Threshold: <span id="threshold">0.01</span></span>
+                <span>Threshold: <span id="threshold">0.03</span></span>
             </div>
         </div>
 
@@ -171,6 +171,10 @@
         <div class="status-row">
             <span class="label">Detected notes:</span>
             <span class="value" id="noteCount">0</span>
+        </div>
+        <div class="status-row">
+            <span class="label">Last delay:</span>
+            <span class="value" id="lastDelay">---</span>
         </div>
 
         <div class="log-container">
@@ -202,7 +206,7 @@
 
         // Test sequence state
         let sequenceActive = false;
-        let sequenceStartTime = 0;
+        let scheduledWallTime = 0;  // When the sequence starts
         let expectedNote = null;
         let detectedCount = 0;
 
@@ -212,22 +216,21 @@
         let lastEnergy = 0;
         let lastNoteTime = 0;
         let energyHistory = [];
-        const ENERGY_THRESHOLD = 0.01;
-        const MIN_CHANGE = 0.005;
-        const MIN_TIME_BETWEEN_NOTES = 1000;
+        const ENERGY_THRESHOLD = 0.03;  // Raised to avoid false positives
+        const MIN_CHANGE = 0.02;         // Raised to require sharper onset
+        const MIN_TIME_BETWEEN_NOTES = 2000; // 2 seconds between notes
 
         // FFT setup
         const FFT_SIZE = 2048;
         const FLUTE_RANGE = { min: 220, max: 1046 };
 
-        // Connection status with logging
+        // Connection status
         db.ref('.info/connected').on('value', snap => {
             const connected = snap.val();
             const statusEl = document.getElementById('firebaseStatus');
             const textEl = document.getElementById('connectionText');
 
             console.log('🔥 Firebase connection:', connected);
-            log(`🔌 Firebase ${connected ? 'connected' : 'disconnected'}`);
 
             if (connected) {
                 statusEl.className = 'firebase-status connected';
@@ -240,27 +243,25 @@
 
         db.ref(".info/serverTimeOffset").on("value", snap => {
             serverOffset = snap.val() || 0;
-            console.log('⏱️ Server offset:', serverOffset);
         });
 
-        // Listen for test sequence from conductor with debugging
+        // Listen for test sequence from conductor
         db.ref('zynth/single_note_test').on('value', snap => {
             const sequence = snap.val();
-            console.log('🔥 Firebase triggered!', sequence);
-            log('🔥 Firebase update received');
 
             if (sequence && sequence.status === 'ACTIVE') {
                 // New sequence starting
                 sequenceActive = true;
-                sequenceStartTime = sequence.startTime;
+                scheduledWallTime = sequence.scheduledWallTime;
                 expectedNote = sequence.note;
                 detectedCount = 0;
                 isNoteActive = false;
 
-                const startTimeStr = new Date(sequenceStartTime).toLocaleTimeString() +
-                    `.${String(sequenceStartTime % 1000).padStart(3, '0')}`;
-                log(`🎬 GO signal received - sequence starting at ${startTimeStr}`);
+                const startTimeStr = new Date(scheduledWallTime).toLocaleTimeString() +
+                    `.${String(scheduledWallTime % 1000).padStart(3, '0')}`;
+                log(`🎬 GO signal received - sequence starts at ${startTimeStr}`);
                 log(`📊 Expecting one note: ${expectedNote.pitch} at offset ${expectedNote.offset}ms (jitter: ${expectedNote.jitter > 0 ? '+' : ''}${expectedNote.jitter}ms)`);
+                log(`🎯 Expected play time: ${new Date(expectedNote.expectedPlayTime).toLocaleTimeString()}.${String(expectedNote.expectedPlayTime % 1000).padStart(3, '0')}`);
 
             } else if (!sequence) {
                 // Sequence ended
@@ -370,10 +371,10 @@
 
             // Look for onset during active sequence
             if (sequenceActive && expectedNote && !isNoteActive) {
-                // Only look for onsets around the expected time (±2 seconds)
-                const expectedTime = sequenceStartTime + expectedNote.offset + expectedNote.jitter;
+                // Only look for onsets around the expected time (±1 second)
+                const expectedTime = expectedNote.expectedPlayTime;
 
-                if (Math.abs(now - expectedTime) < 2000) {
+                if (Math.abs(now - expectedTime) < 1000) {
                     if (avgEnergy > ENERGY_THRESHOLD && energyChange > MIN_CHANGE) {
                         // Check if enough time has passed since last note
                         if (now - lastNoteTime > MIN_TIME_BETWEEN_NOTES) {
@@ -388,17 +389,27 @@
                             document.getElementById('lastOnset').innerText =
                                 new Date(now).toLocaleTimeString() + `.${String(now % 1000).padStart(3, '0')}`;
                             document.getElementById('noteCount').innerText = detectedCount;
+                            document.getElementById('lastDelay').innerText = delay + ' ms';
 
                             log(`🔊 NOTE DETECTED at ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
                             log(`   Expected: ${new Date(expectedTime).toLocaleTimeString()}.${String(expectedTime % 1000).padStart(3, '0')}`);
                             log(`   Delay: ${delay}ms, Energy: ${avgEnergy.toFixed(3)}, Change: ${energyChange.toFixed(3)}`);
+
+                            // Send feedback to conductor
+                            db.ref('zynth/device_feedback').set({
+                                delay: delay,
+                                detectedAt: now,
+                                expectedAt: expectedTime,
+                                note: expectedNote.pitch,
+                                timestamp: now
+                            });
                         }
                     }
                 }
             }
 
             // Note ending
-            if (isNoteActive && avgEnergy < ENERGY_THRESHOLD) {
+            if (isNoteActive && avgEnergy < ENERGY_THRESHOLD * 0.5) {
                 isNoteActive = false;
                 log(`✅ Note ended - duration: ${now - noteStartTime}ms`);
             }
@@ -413,7 +424,7 @@
         document.getElementById('copyLogBtn').onclick = copyLog;
 
         window.onload = () => {
-            log('⏱️ Single Note Detector ready');
+            log('⏱️ Single Note Detector with Feedback ready');
             log(`⚡ Threshold: ${ENERGY_THRESHOLD}, min change: ${MIN_CHANGE}`);
         };
     </script>
