@@ -196,6 +196,22 @@
         firebase.initializeApp(firebaseConfig);
         const db = firebase.database();
 
+        setTimeout(() => {
+            db.ref('zynth/test').set({
+                message: 'Hello from device',
+                timestamp: Date.now() + serverOffset
+            });
+            log('📤 Sent test message to Firebase');
+        }, 2000);
+
+        // And listen for the test
+        db.ref('zynth/test').on('value', snap => {
+            const test = snap.val();
+            if (test) {
+                log(`📥 Received test: ${test.message}`);
+            }
+        });
+
         // Audio state
         let audioCtx = null;
         let analyser = null;
