@@ -2,6 +2,559 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zynth Conductor - Single Flute Note</title>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
+    <style>
+        body {
+            background: #1a1a1a;
+            color: #eee;
+            font-family: 'Segoe UI', sans-serif;
+            padding: 20px;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        h1 {
+            color: #00ffcc;
+            border-bottom: 1px solid #333;
+            padding-bottom: 10px;
+        }
+        .panel {
+            background: #252525;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        .flute-icon {
+            text-align: center;
+            font-size: 3rem;
+            margin: 20px 0;
+            filter: drop-shadow(0 0 20px #00ffcc);
+        }
+        .note-display {
+            background: #1a1a1a;
+            border: 2px solid #00ffcc;
+            border-radius: 12px;
+            padding: 30px;
+            font-size: 3rem;
+            text-align: center;
+            color: #00ffcc;
+            margin: 20px 0;
+            font-family: monospace;
+        }
+        .slider-group {
+            margin: 20px 0;
+        }
+        .slider-label {
+            display: flex;
+            justify-content: space-between;
+            color: #888;
+            margin-bottom: 5px;
+        }
+        input[type=range] {
+            width: 100%;
+            height: 5px;
+            background: #333;
+            border-radius: 5px;
+            outline: none;
+        }
+        .param-value {
+            color: #00ffcc;
+            font-weight: bold;
+        }
+        button {
+            background: #00ffcc;
+            color: #000;
+            border: none;
+            padding: 20px 40px;
+            font-size: 1.5rem;
+            font-weight: bold;
+            border-radius: 50px;
+            cursor: pointer;
+            margin: 10px;
+            transition: transform 0.2s;
+            width: 100%;
+        }
+        button:hover {
+            transform: scale(1.02);
+        }
+        button.secondary {
+            background: #442288;
+            color: #fff;
+        }
+        .status {
+            font-family: monospace;
+            background: #000;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+            color: #0f0;
+        }
+        .visualizer {
+            width: 100%;
+            height: 100px;
+            background: #000;
+            border-radius: 8px;
+            margin: 20px 0;
+            border: 1px solid #333;
+        }
+        .log {
+            font-family: monospace;
+            font-size: 11px;
+            background: #000;
+            padding: 10px;
+            border-radius: 4px;
+            height: 150px;
+            overflow-y: auto;
+            color: #888;
+            margin-top: 20px;
+        }
+        .config-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin: 15px 0;
+        }
+        .config-item {
+            background: #1a1a1a;
+            padding: 10px;
+            border-radius: 4px;
+            text-align: center;
+        }
+        .config-label {
+            color: #888;
+            font-size: 0.8rem;
+        }
+        .config-value {
+            color: #00ffcc;
+            font-size: 1.2rem;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <h1>🎵 Zynth Conductor - Single Flute Note</h1>
+
+    <div class="flute-icon">🎵✨🎵</div>
+
+    <div class="panel">
+        <div class="note-display" id="noteDisplay">A4</div>
+
+        <div class="config-grid">
+            <div class="config-item">
+                <div class="config-label">Frequency</div>
+                <div class="config-value" id="freqDisplay">440 Hz</div>
+            </div>
+            <div class="config-item">
+                <div class="config-label">Duration</div>
+                <div class="config-value" id="durationDisplay">1000 ms</div>
+            </div>
+        </div>
+
+        <div class="slider-group">
+            <div class="slider-label">
+                <span>🎵 Pitch</span>
+                <span id="pitchValue" class="param-value">A4 (440 Hz)</span>
+            </div>
+            <input type="range" id="pitchSlider" min="220" max="880" value="440" step="1">
+        </div>
+
+        <div class="slider-group">
+            <div class="slider-label">
+                <span>⏱️ Duration (ms)</span>
+                <span id="durationValue" class="param-value">1000 ms</span>
+            </div>
+            <input type="range" id="durationSlider" min="200" max="3000" value="1000" step="50">
+        </div>
+
+        <div class="slider-group">
+            <div class="slider-label">
+                <span>🎵 Warble Depth (Hz) - from bach_baker.py</span>
+                <span id="depthValue" class="param-value">30 Hz</span>
+            </div>
+            <input type="range" id="depthSlider" min="0" max="60" value="30" step="5">
+        </div>
+
+        <div class="slider-group">
+            <div class="slider-label">
+                <span>🎵 Vibrato Rate (Hz) - from bach_baker.py</span>
+                <span id="rateValue" class="param-value">2.5 Hz</span>
+            </div>
+            <input type="range" id="rateSlider" min="1.5" max="4.0" value="2.5" step="0.1">
+        </div>
+
+        <button id="playBtn">🎵 PLAY FLUTE NOTE</button>
+        <button id="playWarbleBtn" class="secondary">🎵 PLAY WITH WARBLE</button>
+
+        <div class="status" id="audioStatus">🔇 Audio not initialized</div>
+    </div>
+
+    <canvas id="visualizer" class="visualizer"></canvas>
+
+    <div class="panel">
+        <h2>🎯 Next Steps</h2>
+        <p style="color: #888; line-height: 1.6;">
+            This is the building block for the tuning mode. The flute note uses:
+        </p>
+        <ul style="color: #aaa;">
+            <li>🎵 <strong>Pure tone</strong> - Fundamental + harmonics for flute-like sound</li>
+            <li>🎵 <strong>Warble</strong> - 2.5Hz vibrato, 30Hz depth (from bach_baker.py)</li>
+            <li>🎵 <strong>Smooth envelope</strong> - 20ms raised cosine fade in/out</li>
+            <li>🎵 <strong>Phase accumulation</strong> - No pops or clicks</li>
+        </ul>
+        <p style="color: #888; margin-top: 15px;">
+            Next: zynth_device.html will listen for this note and detect the warble.
+        </p>
+    </div>
+
+    <div class="log" id="log">
+        Ready...
+    </div>
+
+    <script>
+        // ============================================
+        // Firebase Configuration
+        // ============================================
+        const firebaseConfig = {
+            apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
+            authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
+            databaseURL: "https://smartphoneorchestra-dwt-default-rtdb.firebaseio.com/",
+            projectId: "smartphoneorchestra-dwt"
+        };
+
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
+        // ============================================
+        // Global State
+        // ============================================
+        let audioCtx = null;
+        let analyser = null;
+        let animationFrame = null;
+        let serverOffset = 0;
+
+        // Flute parameters (from bach_baker.py)
+        const FADE_MS = 20;  // Smooth fade in/out
+        const HARMONICS = [
+            { gain: 1.0, phase: 0.0 },   // Fundamental
+            { gain: 0.3, phase: 0.2 },   // Second harmonic
+            { gain: 0.1, phase: 0.5 }    // Third harmonic
+        ];
+
+        // Current note parameters
+        let currentFreq = 440;  // A4
+        let currentDuration = 1000; // ms
+        let warbleDepth = 30;   // Hz (from bach_baker.py)
+        let vibratoRate = 2.5;  // Hz (from bach_baker.py)
+
+        // ============================================
+        // Clock sync
+        // ============================================
+        db.ref(".info/serverTimeOffset").on("value", snap => {
+            serverOffset = snap.val() || 0;
+        });
+
+        // ============================================
+        // UI Setup
+        // ============================================
+        document.getElementById('pitchSlider').addEventListener('input', (e) => {
+            currentFreq = parseInt(e.target.value);
+
+            // Convert to nearest note name
+            const noteNames = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+            const semitone = Math.round(12 * Math.log2(currentFreq / 440) + 69);
+            const octave = Math.floor(semitone / 12) - 1;
+            const noteIdx = semitone % 12;
+            const noteName = noteNames[noteIdx] + octave;
+
+            document.getElementById('pitchValue').innerText = `${noteName} (${currentFreq} Hz)`;
+            document.getElementById('freqDisplay').innerText = currentFreq + ' Hz';
+            document.getElementById('noteDisplay').innerText = noteName;
+        });
+
+        document.getElementById('durationSlider').addEventListener('input', (e) => {
+            currentDuration = parseInt(e.target.value);
+            document.getElementById('durationValue').innerText = currentDuration + ' ms';
+            document.getElementById('durationDisplay').innerText = currentDuration + ' ms';
+        });
+
+        document.getElementById('depthSlider').addEventListener('input', (e) => {
+            warbleDepth = parseInt(e.target.value);
+            document.getElementById('depthValue').innerText = warbleDepth + ' Hz';
+        });
+
+        document.getElementById('rateSlider').addEventListener('input', (e) => {
+            vibratoRate = parseFloat(e.target.value);
+            document.getElementById('rateValue').innerText = vibratoRate.toFixed(1) + ' Hz';
+        });
+
+        // ============================================
+        // Audio Initialization
+        // ============================================
+        async function initAudio() {
+            try {
+                if (!audioCtx) {
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+                    // Create analyser for visualization
+                    analyser = audioCtx.createAnalyser();
+                    analyser.fftSize = 2048;
+                    analyser.smoothingTimeConstant = 0.2;
+
+                    log("🔊 AudioContext created");
+                }
+
+                if (audioCtx.state === 'suspended') {
+                    await audioCtx.resume();
+                    log("🔊 AudioContext resumed");
+                }
+
+                document.getElementById('audioStatus').innerHTML = '🔊 Audio ready';
+
+                // Start visualizer
+                if (!animationFrame) {
+                    drawVisualizer();
+                }
+
+                return true;
+            } catch (e) {
+                log(`❌ Audio init failed: ${e.message}`);
+                return false;
+            }
+        }
+
+        // ============================================
+        // Generate Flute Tone (from bach_baker.py concept)
+        // ============================================
+        function generateFluteTone(baseFreq, durationMs, addWarble = false) {
+            const sampleRate = audioCtx.sampleRate;
+            const nSamples = Math.floor(sampleRate * (durationMs / 1000));
+
+            const t = new Float32Array(nSamples);
+            for (let i = 0; i < nSamples; i++) {
+                t[i] = i / sampleRate;
+            }
+
+            let samples;
+
+            if (addWarble) {
+                // WARBLED TONE (from bach_baker.py)
+                // Create smooth frequency modulation
+                const rawMod = new Float32Array(nSamples);
+                for (let i = 0; i < nSamples; i++) {
+                    rawMod[i] = Math.sin(2 * Math.PI * vibratoRate * t[i]);
+                }
+
+                // Apply smoothing (simulating Gaussian filter)
+                const smoothMod = new Float32Array(nSamples);
+                const sigma = Math.floor(nSamples / 20);
+                for (let i = 0; i < nSamples; i++) {
+                    let sum = 0;
+                    let weight = 0;
+                    for (let j = -sigma; j <= sigma; j++) {
+                        const idx = i + j;
+                        if (idx >= 0 && idx < nSamples) {
+                            const w = Math.exp(-(j*j) / (2 * sigma*sigma));
+                            sum += rawMod[idx] * w;
+                            weight += w;
+                        }
+                    }
+                    smoothMod[i] = sum / weight;
+                }
+
+                // Normalize
+                let maxVal = 0;
+                for (let i = 0; i < nSamples; i++) {
+                    maxVal = Math.max(maxVal, Math.abs(smoothMod[i]));
+                }
+                if (maxVal > 0) {
+                    for (let i = 0; i < nSamples; i++) {
+                        smoothMod[i] /= maxVal;
+                    }
+                }
+
+                // Convert to frequency modulation
+                const modDepth = warbleDepth / baseFreq;
+                const warbleFactor = new Float32Array(nSamples);
+                for (let i = 0; i < nSamples; i++) {
+                    warbleFactor[i] = 1.0 + modDepth * smoothMod[i];
+                }
+
+                // Generate with phase accumulation (prevents pops)
+                const phase = new Float32Array(nSamples);
+                phase[0] = 0;
+                for (let i = 1; i < nSamples; i++) {
+                    phase[i] = phase[i-1] + 2 * Math.PI * baseFreq * warbleFactor[i] * t[1];
+                }
+
+                samples = new Float32Array(nSamples);
+                for (let i = 0; i < nSamples; i++) {
+                    samples[i] = Math.sin(phase[i]);
+                }
+            } else {
+                // PURE FLUTE TONE (with harmonics for natural sound)
+                samples = new Float32Array(nSamples);
+
+                // Add harmonics for flute-like timbre
+                for (let h = 0; h < HARMONICS.length; h++) {
+                    const harmonic = HARMONICS[h];
+                    const harmonicFreq = baseFreq * (h + 1);
+                    for (let i = 0; i < nSamples; i++) {
+                        samples[i] += harmonic.gain * Math.sin(2 * Math.PI * harmonicFreq * t[i] + harmonic.phase);
+                    }
+                }
+
+                // Normalize
+                maxVal = 0;
+                for (let i = 0; i < nSamples; i++) {
+                    maxVal = Math.max(maxVal, Math.abs(samples[i]));
+                }
+                if (maxVal > 0) {
+                    for (let i = 0; i < nSamples; i++) {
+                        samples[i] /= maxVal;
+                    }
+                }
+            }
+
+            // Apply raised cosine envelope (smooth attack/decay)
+            const fadeSamples = Math.floor(FADE_MS / 1000 * sampleRate);
+
+            for (let i = 0; i < nSamples; i++) {
+                if (i < fadeSamples) {
+                    // Fade in
+                    samples[i] *= 0.5 * (1 - Math.cos(Math.PI * i / fadeSamples));
+                } else if (i > nSamples - fadeSamples) {
+                    // Fade out
+                    const j = i - (nSamples - fadeSamples);
+                    samples[i] *= 0.5 * (1 - Math.cos(Math.PI * j / fadeSamples));
+                }
+            }
+
+            return samples;
+        }
+
+        // ============================================
+        // Play Note
+        // ============================================
+        async function playNote(withWarble = false) {
+            try {
+                await initAudio();
+
+                const noteType = withWarble ? 'warble' : 'pure';
+                log(`🎵 Playing ${noteType} flute note: ${currentFreq}Hz for ${currentDuration}ms`);
+
+                if (withWarble) {
+                    log(`   Warble depth: ${warbleDepth}Hz, rate: ${vibratoRate}Hz (from bach_baker.py)`);
+                }
+
+                // Generate the note
+                const samples = generateFluteTone(currentFreq, currentDuration, withWarble);
+
+                // Create buffer
+                const buffer = audioCtx.createBuffer(1, samples.length, audioCtx.sampleRate);
+                buffer.copyToChannel(samples, 0);
+
+                // Create and play source
+                const source = audioCtx.createBufferSource();
+                source.buffer = buffer;
+
+                // Connect to destination and analyser
+                source.connect(audioCtx.destination);
+                if (analyser) {
+                    source.connect(analyser);
+                }
+
+                source.start();
+
+                // Log completion after duration
+                setTimeout(() => {
+                    log(`✅ Note complete`);
+                }, currentDuration);
+
+                // Announce to Firebase for devices
+                await db.ref('zynth/last_note').set({
+                    frequency: currentFreq,
+                    duration: currentDuration,
+                    hasWarble: withWarble,
+                    depth: withWarble ? warbleDepth : 0,
+                    rate: withWarble ? vibratoRate : 0,
+                    timestamp: Date.now() + serverOffset
+                });
+
+            } catch (e) {
+                log(`❌ Playback failed: ${e.message}`);
+            }
+        }
+
+        // ============================================
+        // Visualizer
+        // ============================================
+        function drawVisualizer() {
+            if (!analyser) {
+                requestAnimationFrame(drawVisualizer);
+                return;
+            }
+
+            const canvas = document.getElementById('visualizer');
+            const ctx = canvas.getContext('2d');
+            const width = canvas.width;
+            const height = canvas.height;
+
+            const dataArray = new Uint8Array(analyser.frequencyBinCount);
+            analyser.getByteFrequencyData(dataArray);
+
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, width, height);
+
+            // Draw frequency spectrum
+            ctx.fillStyle = '#00ffcc';
+            const barWidth = 3;
+
+            for (let i = 0; i < 100; i++) {
+                const x = i * (barWidth + 1);
+                const value = dataArray[i * 10] || 0;
+                const barHeight = (value / 255) * height;
+
+                ctx.fillRect(x, height - barHeight, barWidth, barHeight);
+            }
+
+            requestAnimationFrame(drawVisualizer);
+        }
+
+        // ============================================
+        // Button handlers
+        // ============================================
+        document.getElementById('playBtn').onclick = () => playNote(false);
+        document.getElementById('playWarbleBtn').onclick = () => playNote(true);
+
+        // ============================================
+        // Logging
+        // ============================================
+        function log(message) {
+            const logDiv = document.getElementById('log');
+            const timestamp = new Date().toLocaleTimeString();
+            logDiv.innerHTML = `<div>[${timestamp}] ${message}</div>` + logDiv.innerHTML;
+            if (logDiv.children.length > 20) logDiv.removeChild(logDiv.lastChild);
+            console.log(message);
+        }
+
+        // ============================================
+        // Initialize
+        // ============================================
+        window.onload = () => {
+            log("🎵 Zynth Conductor ready - Single Flute Note");
+            log("   • Pure tone: Fundamental + harmonics");
+            log("   • Warble: 2.5Hz vibrato, 30Hz depth (from bach_baker.py)");
+            log("   • Smooth envelope: 20ms raised cosine");
+        };
+    </script>
+</body>
+</html><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Zynth Device - Single Flute Note Receiver</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
