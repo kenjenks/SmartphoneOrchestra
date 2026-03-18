@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zynth Device - MP3 Detector with Onset Detection</title>
+    <title>Zynth Device - Single Note Detector</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <style>
@@ -12,7 +12,7 @@
             color: #eee;
             font-family: 'Segoe UI', sans-serif;
             padding: 20px;
-            max-width: 900px;
+            max-width: 600px;
             margin: 0 auto;
         }
         h1 {
@@ -24,46 +24,26 @@
             padding: 20px;
             margin: 20px 0;
         }
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 10px;
-            margin: 20px 0;
-        }
-        .stat-card {
-            background: #1a1a1a;
-            padding: 15px;
+        .status-row {
+            display: flex;
+            justify-content: space-between;
+            margin: 10px 0;
+            padding: 10px;
+            background: #000;
             border-radius: 8px;
-            text-align: center;
         }
-        .stat-label {
+        .label {
             color: #888;
-            font-size: 0.7rem;
         }
-        .stat-value {
+        .value {
             color: #00ccff;
-            font-size: 1.2rem;
             font-weight: bold;
         }
-        .progress-bar {
-            width: 100%;
-            height: 20px;
-            background: #333;
-            border-radius: 10px;
-            overflow: hidden;
-            margin: 20px 0;
-        }
-        .progress-fill {
-            height: 100%;
-            background: #00ccff;
-            width: 0%;
-            transition: width 0.1s;
-        }
         .energy-meter {
-            background: #1a1a1a;
+            background: #000;
             padding: 15px;
             border-radius: 8px;
-            margin: 20px 0;
+            margin: 15px 0;
         }
         .meter-bar {
             width: 100%;
@@ -74,14 +54,9 @@
         }
         .meter-fill {
             height: 100%;
-            background: #ffaa00;
+            background: #00ccff;
             width: 0%;
             transition: width 0.05s;
-        }
-        .button-row {
-            display: flex;
-            gap: 10px;
-            margin: 20px 0;
         }
         button {
             background: #00ccff;
@@ -91,13 +66,23 @@
             font-size: 1.2rem;
             border-radius: 50px;
             cursor: pointer;
-            flex: 1;
+            margin: 10px 0;
+            width: 100%;
         }
         button.danger {
             background: #600;
             color: #fff;
         }
+        .button-row {
+            display: flex;
+            gap: 10px;
+            margin: 10px 0;
+        }
+        .button-row button {
+            margin: 0;
+        }
         .log-container {
+            position: relative;
             margin-top: 20px;
         }
         .log-header {
@@ -112,7 +97,13 @@
             border: 1px solid #555;
             padding: 5px 15px;
             border-radius: 15px;
+            font-size: 0.8rem;
             cursor: pointer;
+            width: auto;
+            margin: 0;
+        }
+        .copy-btn:hover {
+            background: #444;
         }
         .log {
             background: #000;
@@ -123,6 +114,11 @@
             font-family: monospace;
             font-size: 11px;
             color: #888;
+            user-select: text;
+            -webkit-user-select: text;
+            cursor: text;
+            white-space: pre-wrap;
+            word-wrap: break-word;
         }
         .firebase-status {
             display: inline-block;
@@ -133,17 +129,10 @@
         }
         .connected { background: #00ff00; }
         .disconnected { background: #ff0000; }
-        canvas {
-            width: 100%;
-            height: 100px;
-            background: #000;
-            border-radius: 8px;
-            margin: 15px 0;
-        }
     </style>
 </head>
 <body>
-    <h1>⏱️ Zynth Device - MP3 Detector with Onset Detection</h1>
+    <h1>⏱️ Zynth Device - Single Note Detector</h1>
 
     <div class="panel">
         <div style="display: flex; align-items: center; margin-bottom: 15px;">
@@ -151,27 +140,18 @@
             <span id="connectionText">Connecting to Firebase...</span>
         </div>
 
-        <div class="stats-grid">
-            <div class="stat-card">
-                <div class="stat-label">Status</div>
-                <div class="stat-value" id="status">Ready</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Detected</div>
-                <div class="stat-value" id="detectedCount">0/0</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Current Note</div>
-                <div class="stat-value" id="currentNote">---</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Delay (ms)</div>
-                <div class="stat-value" id="lastDelay">---</div>
-            </div>
+        <div class="status-row">
+            <span class="label">Status:</span>
+            <span class="value" id="status">Ready</span>
+        </div>
+
+        <div class="button-row">
+            <button id="enableBtn">🎤 Enable Mic</button>
+            <button id="disableBtn" class="danger">⏹️ Disable</button>
         </div>
 
         <div class="energy-meter">
-            <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+            <div style="display: flex; justify-content: space-between;">
                 <span>Flute Range Energy</span>
                 <span id="energyValue">0.00</span>
             </div>
@@ -180,19 +160,17 @@
             </div>
             <div style="display: flex; justify-content: space-between; margin-top: 5px;">
                 <span>Change: <span id="energyChange">0.00</span></span>
-                <span>Threshold: <span id="threshold">0.02</span></span>
+                <span>Threshold: <span id="threshold">0.01</span></span>
             </div>
         </div>
 
-        <div class="progress-bar">
-            <div class="progress-fill" id="progressFill"></div>
+        <div class="status-row">
+            <span class="label">Last onset:</span>
+            <span class="value" id="lastOnset">---</span>
         </div>
-
-        <canvas id="visualizer"></canvas>
-
-        <div class="button-row">
-            <button id="enableBtn">🎤 Enable Mic</button>
-            <button id="disableBtn" class="danger">⏹️ Disable</button>
+        <div class="status-row">
+            <span class="label">Detected notes:</span>
+            <span class="value" id="noteCount">0</span>
         </div>
 
         <div class="log-container">
@@ -225,8 +203,7 @@
         // Test sequence state
         let sequenceActive = false;
         let sequenceStartTime = 0;
-        let expectedNotes = [];
-        let expectedNoteIndex = 0;
+        let expectedNote = null;
         let detectedCount = 0;
 
         // Note tracking state
@@ -234,9 +211,9 @@
         let noteStartTime = 0;
         let lastEnergy = 0;
         let energyHistory = [];
-        let onsetThreshold = 0.02;  // Energy threshold for detection
-        let minTimeBetweenNotes = 200; // ms
-        let lastNoteTime = 0;
+        const ENERGY_THRESHOLD = 0.01;  // Very low threshold
+        const MIN_CHANGE = 0.005;        // Very small change to catch onsets
+        const MIN_TIME_BETWEEN_NOTES = 1000; // 1 second between notes
 
         // FFT setup
         const FFT_SIZE = 2048;
@@ -260,31 +237,25 @@
         });
 
         // Listen for test sequence from conductor
-        db.ref('zynth/mp3_test').on('value', snap => {
+        db.ref('zynth/single_note_test').on('value', snap => {
             const sequence = snap.val();
             if (sequence && sequence.status === 'ACTIVE') {
                 // New sequence starting
                 sequenceActive = true;
                 sequenceStartTime = sequence.startTime;
-                expectedNotes = sequence.notes;
-                expectedNoteIndex = 0;
+                expectedNote = sequence.note;
                 detectedCount = 0;
                 isNoteActive = false;
-
-                document.getElementById('detectedCount').innerText = `0/${expectedNotes.length}`;
-                document.getElementById('currentNote').innerText = 'Waiting...';
 
                 const startTimeStr = new Date(sequenceStartTime).toLocaleTimeString() +
                     `.${String(sequenceStartTime % 1000).padStart(3, '0')}`;
                 log(`🎬 GO signal received - sequence starting at ${startTimeStr}`);
-                log(`📊 Expecting ${expectedNotes.length} notes from MP3`);
+                log(`📊 Expecting one note: ${expectedNote.pitch} at offset ${expectedNote.offset}ms (jitter: ${expectedNote.jitter > 0 ? '+' : ''}${expectedNote.jitter}ms)`);
 
             } else if (!sequence) {
                 // Sequence ended
                 sequenceActive = false;
-                expectedNoteIndex = 0;
-                document.getElementById('currentNote').innerText = '---';
-                document.getElementById('detectedCount').innerText = `${detectedCount}/${expectedNotes.length}`;
+                expectedNote = null;
                 log('⏹️ Sequence ended');
             }
         });
@@ -312,10 +283,9 @@
 
                 isListening = true;
                 document.getElementById('status').innerText = 'Listening';
-                log('✅ Mic enabled - waiting for MP3 test');
+                log('✅ Mic enabled - waiting for single note test');
 
                 detectNote();
-                drawVisualizer();
 
             } catch (err) {
                 log(`❌ Mic error: ${err.message}`);
@@ -331,6 +301,24 @@
             analyser = null;
             document.getElementById('status').innerText = 'Ready';
             log('⏹️ Stopped');
+        }
+
+        function copyLog() {
+            const logDiv = document.getElementById('log');
+            const range = document.createRange();
+            range.selectNodeContents(logDiv);
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(range);
+
+            try {
+                document.execCommand('copy');
+                log('📋 Log copied to clipboard');
+            } catch (err) {
+                console.error('Copy failed:', err);
+            }
+
+            selection.removeAllRanges();
         }
 
         function detectNote() {
@@ -361,142 +349,53 @@
             }
             const avgEnergy = binCount > 0 ? totalEnergy / binCount : 0;
 
-            // Calculate energy change (for onset detection)
+            // Calculate energy change
             const energyChange = avgEnergy - lastEnergy;
 
             // Update displays
             document.getElementById('energyValue').innerText = avgEnergy.toFixed(3);
             document.getElementById('energyMeter').style.width = (avgEnergy * 100) + '%';
             document.getElementById('energyChange').innerText = energyChange.toFixed(3);
-            document.getElementById('threshold').innerText = onsetThreshold.toFixed(3);
+            document.getElementById('threshold').innerText = ENERGY_THRESHOLD.toFixed(3);
 
-            // Update progress if sequence active
-            if (sequenceActive && expectedNotes.length > 0) {
-                const progress = (expectedNoteIndex / expectedNotes.length) * 100;
-                document.getElementById('progressFill').style.width = progress + '%';
-            }
+            // Look for onset during active sequence
+            if (sequenceActive && expectedNote && !isNoteActive) {
+                // Only look for onsets around the expected time (±1 second)
+                const expectedTime = sequenceStartTime + expectedNote.offset + expectedNote.jitter;
 
-            // ONSET DETECTION: Look for sharp rise in energy
-            if (!isNoteActive && avgEnergy > onsetThreshold && energyChange > 0.03) {
-                // Check if enough time has passed since last note
-                if (now - lastNoteTime > minTimeBetweenNotes) {
-                    // Note started!
-                    isNoteActive = true;
-                    noteStartTime = now;
-                    lastNoteTime = now;
+                if (Math.abs(now - expectedTime) < 2000) { // 2 second window
+                    if (avgEnergy > ENERGY_THRESHOLD && energyChange > MIN_CHANGE) {
+                        // Check if enough time has passed since last note
+                        if (now - lastNoteTime > MIN_TIME_BETWEEN_NOTES) {
+                            // Note started!
+                            isNoteActive = true;
+                            noteStartTime = now;
+                            lastNoteTime = now;
+                            detectedCount++;
 
-                    document.getElementById('currentNote').innerText = 'ACTIVE';
+                            const delay = now - expectedTime;
 
-                    // Log the detection
-                    log(`🔊 ONSET at ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')} (energy: ${avgEnergy.toFixed(3)}, change: ${energyChange.toFixed(3)})`);
+                            document.getElementById('lastOnset').innerText =
+                                new Date(now).toLocaleTimeString() + `.${String(now % 1000).padStart(3, '0')}`;
+                            document.getElementById('noteCount').innerText = detectedCount;
 
-                    // If sequence is active, match to expected note
-                    if (sequenceActive && expectedNoteIndex < expectedNotes.length) {
-                        const expectedNote = expectedNotes[expectedNoteIndex];
-                        const expectedTime = sequenceStartTime + expectedNote.offset;
-                        const delay = now - expectedTime;
-
-                        detectedCount++;
-                        document.getElementById('detectedCount').innerText = `${detectedCount}/${expectedNotes.length}`;
-                        document.getElementById('lastDelay').innerText = delay;
-
-                        log(`   ✅ Matched to note ${expectedNoteIndex}: ${expectedNote.pitch} (delay: ${delay}ms)`);
+                            log(`🔊 NOTE DETECTED at ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
+                            log(`   Expected: ${new Date(expectedTime).toLocaleTimeString()}.${String(expectedTime % 1000).padStart(3, '0')}`);
+                            log(`   Delay: ${delay}ms, Energy: ${avgEnergy.toFixed(3)}, Change: ${energyChange.toFixed(3)}`);
+                        }
                     }
                 }
             }
 
-            // NOTE ENDING: Energy drops and stays low
-            if (isNoteActive && avgEnergy < onsetThreshold * 0.7) {
-                // Check recent history to confirm it's really the end
-                let lowEnergyCount = 0;
-                const samplesToCheck = Math.min(5, energyHistory.length);
-                for (let i = energyHistory.length - 1; i >= energyHistory.length - samplesToCheck; i--) {
-                    if (i >= 0 && energyHistory[i] < onsetThreshold * 0.7) {
-                        lowEnergyCount++;
-                    }
-                }
-
-                // If most recent samples are low energy, note has ended
-                if (lowEnergyCount >= 3) {
-                    isNoteActive = false;
-                    const noteDuration = now - noteStartTime;
-
-                    document.getElementById('currentNote').innerText = '---';
-                    log(`✅ Note ended - duration: ${noteDuration}ms`);
-
-                    if (sequenceActive) {
-                        expectedNoteIndex++;
-                    }
-                }
+            // Note ending
+            if (isNoteActive && avgEnergy < ENERGY_THRESHOLD) {
+                isNoteActive = false;
+                log(`✅ Note ended - duration: ${now - noteStartTime}ms`);
             }
 
-            // Update history
             lastEnergy = avgEnergy;
-            energyHistory.push(avgEnergy);
-            if (energyHistory.length > 50) energyHistory.shift();
 
             requestAnimationFrame(detectNote);
-        }
-
-        function drawVisualizer() {
-            if (!analyser || !isListening) {
-                requestAnimationFrame(drawVisualizer);
-                return;
-            }
-
-            const canvas = document.getElementById('visualizer');
-            const ctx = canvas.getContext('2d');
-            const width = canvas.width;
-            const height = canvas.height;
-
-            const dataArray = new Uint8Array(analyser.frequencyBinCount);
-            analyser.getByteFrequencyData(dataArray);
-
-            ctx.fillStyle = '#000';
-            ctx.fillRect(0, 0, width, height);
-
-            // Draw spectrum in flute range
-            ctx.fillStyle = '#00ccff';
-            const nyquist = audioCtx.sampleRate / 2;
-            const startBin = Math.floor(220 / nyquist * analyser.frequencyBinCount);
-            const endBin = Math.floor(1046 / nyquist * analyser.frequencyBinCount);
-            const binRange = endBin - startBin;
-
-            for (let i = 0; i < 50; i++) {
-                const binIndex = startBin + Math.floor((i / 50) * binRange);
-                if (binIndex < dataArray.length) {
-                    const x = i * (width / 50);
-                    const barHeight = (dataArray[binIndex] / 255) * height;
-                    ctx.fillRect(x, height - barHeight, width / 50 - 2, barHeight);
-                }
-            }
-
-            requestAnimationFrame(drawVisualizer);
-        }
-
-        function copyLog() {
-            const logDiv = document.getElementById('log');
-            const range = document.createRange();
-            range.selectNodeContents(logDiv);
-            const selection = window.getSelection();
-            selection.removeAllRanges();
-            selection.addRange(range);
-
-            try {
-                document.execCommand('copy');
-                log('📋 Log copied to clipboard');
-            } catch (err) {
-                console.error('Copy failed:', err);
-            }
-
-            selection.removeAllRanges();
-        }
-
-        function log(message) {
-            const logDiv = document.getElementById('log');
-            const timestamp = new Date().toLocaleTimeString();
-            logDiv.innerHTML = `<div>[${timestamp}] ${message}</div>` + logDiv.innerHTML;
-            console.log(message);
         }
 
         document.getElementById('enableBtn').onclick = enableMicrophone;
@@ -504,9 +403,8 @@
         document.getElementById('copyLogBtn').onclick = copyLog;
 
         window.onload = () => {
-            log('⏱️ MP3 Detector with Onset Detection ready');
-            log('🎯 Looking for sharp energy rises in flute range (220-1046Hz)');
-            log(`⚡ Threshold: ${onsetThreshold}, min change: 0.03`);
+            log('⏱️ Single Note Detector ready');
+            log(`⚡ Threshold: ${ENERGY_THRESHOLD}, min change: ${MIN_CHANGE}`);
         };
     </script>
 </body>
