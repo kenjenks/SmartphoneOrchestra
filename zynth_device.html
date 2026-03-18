@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zynth Device - 30 Second Test with Delay Measurement</title>
+    <title>Zynth Device - MP3 Detector</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <style>
@@ -12,7 +12,7 @@
             color: #eee;
             font-family: 'Segoe UI', sans-serif;
             padding: 20px;
-            max-width: 800px;
+            max-width: 900px;
             margin: 0 auto;
         }
         h1 {
@@ -58,59 +58,6 @@
             background: #00ccff;
             width: 0%;
             transition: width 0.1s;
-        }
-        .comparison-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.8rem;
-            margin: 20px 0;
-        }
-        .comparison-table th {
-            background: #1a1a1a;
-            color: #00ccff;
-            padding: 8px;
-            text-align: left;
-        }
-        .comparison-table td {
-            padding: 8px;
-            border-bottom: 1px solid #333;
-        }
-        .comparison-table .match {
-            color: #00ff00;
-        }
-        .comparison-table .mismatch {
-            color: #ff6600;
-        }
-        .note-indicator {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 5px;
-            margin: 20px 0;
-            justify-content: center;
-        }
-        .note-dot {
-            width: 30px;
-            height: 30px;
-            border-radius: 50%;
-            background: #333;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 0.7rem;
-            transition: all 0.1s;
-        }
-        .note-dot.active {
-            background: #00ccff;
-            color: #000;
-            box-shadow: 0 0 20px #00ccff;
-        }
-        .note-dot.playing {
-            animation: pulse 0.5s infinite;
-        }
-        @keyframes pulse {
-            0% { transform: scale(1); }
-            50% { transform: scale(1.2); }
-            100% { transform: scale(1); }
         }
         .button-row {
             display: flex;
@@ -170,7 +117,7 @@
     </style>
 </head>
 <body>
-    <h1>⏱️ Zynth Device - 30 Second Test with Delay Measurement</h1>
+    <h1>⏱️ Zynth Device - MP3 Detector</h1>
 
     <div class="panel">
         <div style="display: flex; align-items: center; margin-bottom: 15px;">
@@ -184,16 +131,16 @@
                 <div class="stat-value" id="status">Ready</div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Notes Detected</div>
-                <div class="stat-value" id="detectedCount">0/0</div>
+                <div class="stat-label">Detected</div>
+                <div class="stat-value" id="detectedCount">0</div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Avg Delay</div>
-                <div class="stat-value" id="avgDelay">0ms</div>
+                <div class="stat-label">Energy</div>
+                <div class="stat-value" id="energyLevel">0.00</div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Accuracy</div>
-                <div class="stat-value" id="accuracy">0%</div>
+                <div class="stat-label">State</div>
+                <div class="stat-value" id="noteState">---</div>
             </div>
         </div>
 
@@ -205,24 +152,6 @@
             <button id="enableBtn">🎤 Enable Mic</button>
             <button id="disableBtn" class="danger">⏹️ Disable</button>
         </div>
-
-        <div class="note-indicator" id="noteIndicator"></div>
-
-        <h3>Delay Comparison</h3>
-        <table class="comparison-table" id="comparisonTable">
-            <thead>
-                <tr>
-                    <th>Note</th>
-                    <th>Pitch</th>
-                    <th>Simulated Delay</th>
-                    <th>Measured Delay</th>
-                    <th>Difference</th>
-                </tr>
-            </thead>
-            <tbody id="comparisonBody">
-                <!-- Filled by JavaScript -->
-            </tbody>
-        </table>
 
         <div class="log-container">
             <div class="log-header">
@@ -255,27 +184,23 @@
         let sequenceActive = false;
         let sequenceStartTime = 0;
         let expectedNotes = [];
-        let detectedNotes = [];
         let expectedNoteIndex = 0;
         let isNoteActive = false;
-        let noteStartTime = 0;
-        let currentNoteIndex = -1;
+        let detectedCount = 0;
 
         // Detection parameters
-        const ENERGY_THRESHOLD = 0.15;
+        const ENERGY_THRESHOLD = 0.08;
         const MIN_NOTE_DURATION = 100;
         const MAX_NOTE_DURATION = 2000;
         const DETECTION_WINDOW_MS = 500;
-        const FREQ_TOLERANCE = 15;
 
         // FFT setup
         const FFT_SIZE = 2048;
         const FLUTE_RANGE = { min: 220, max: 1046 };
 
-        // Statistics
+        // Energy history for onset detection
         let energyHistory = [];
-        let delays = [];
-        let comparisonData = [];
+        let lastEnergy = 0;
 
         // Connection status
         db.ref('.info/connected').on('value', snap => {
@@ -294,8 +219,8 @@
             serverOffset = snap.val() || 0;
         });
 
-        // Listen for test sequence from conductor
-        db.ref('zynth/mp3_test').on('value', snap => {  // ← Changed from 'zynth/30sec_test'
+        // Listen for test sequence from conductor - UPDATED PATH
+        db.ref('zynth/mp3_test').on('value', snap => {
             const sequence = snap.val();
             if (sequence && sequence.status === 'ACTIVE') {
                 // New sequence starting
@@ -303,47 +228,23 @@
                 sequenceStartTime = sequence.startTime;
                 expectedNotes = sequence.notes;
                 expectedNoteIndex = 0;
-                detectedNotes = new Array(expectedNotes.length).fill(null);
-                jitterMeasurements = [];
-                totalAbsJitter = 0;
-                maxMeasuredJitter = 0;
+                detectedCount = 0;
 
-                document.getElementById('maxJitter').innerText = `±${sequence.maxJitter}ms`;
-                document.getElementById('detectedCount').innerText = `0/${expectedNotes.length}`;
+                document.getElementById('detectedCount').innerText = '0';
 
                 const startTimeStr = new Date(sequenceStartTime).toLocaleTimeString() +
                     `.${String(sequenceStartTime % 1000).padStart(3, '0')}`;
                 log(`🎬 GO signal received - sequence starting at ${startTimeStr}`);
-                log(`📊 Expecting ${expectedNotes.length} notes with ±${sequence.maxJitter}ms jitter from MP3`);
+                log(`📊 Expecting ${expectedNotes.length} notes from MP3`);
 
             } else if (!sequence) {
                 // Sequence ended
                 sequenceActive = false;
                 expectedNoteIndex = 0;
+                document.getElementById('noteState').innerText = '---';
                 log('⏹️ Sequence ended');
             }
         });
-
-        function createNoteIndicators() {
-            const container = document.getElementById('noteIndicator');
-            container.innerHTML = '';
-            for (let i = 0; i < expectedNotes.length; i++) {
-                const dot = document.createElement('div');
-                dot.className = 'note-dot';
-                dot.id = `note-${i}`;
-                dot.innerText = i;
-                container.appendChild(dot);
-            }
-        }
-
-        function updateNoteIndicator(index, state) {
-            const dot = document.getElementById(`note-${index}`);
-            if (dot) {
-                dot.classList.remove('active', 'playing');
-                if (state === 'active') dot.classList.add('active');
-                if (state === 'playing') dot.classList.add('playing');
-            }
-        }
 
         async function enableMicrophone() {
             try {
@@ -368,10 +269,9 @@
 
                 isListening = true;
                 document.getElementById('status').innerText = 'Listening';
-                log('✅ Mic enabled - waiting for 30-second test');
+                log('✅ Mic enabled - waiting for MP3 test');
 
                 detectNote();
-                drawVisualizer();
 
             } catch (err) {
                 log(`❌ Mic error: ${err.message}`);
@@ -387,37 +287,6 @@
             analyser = null;
             document.getElementById('status').innerText = 'Ready';
             log('⏹️ Stopped');
-        }
-
-        function updateComparisonTable() {
-            const tbody = document.getElementById('comparisonBody');
-            tbody.innerHTML = '';
-
-            let totalDiff = 0;
-            let matchCount = 0;
-
-            comparisonData.forEach(item => {
-                const diff = Math.abs(item.measured - item.simulated);
-                totalDiff += diff;
-                if (diff < 20) matchCount++; // Within 20ms is a match
-
-                const row = document.createElement('tr');
-                row.innerHTML = `
-                    <td>${item.index}</td>
-                    <td>${item.pitch}</td>
-                    <td>${item.simulated} ms</td>
-                    <td>${item.measured !== null ? item.measured + ' ms' : '---'}</td>
-                    <td class="${diff < 20 ? 'match' : 'mismatch'}">${item.measured !== null ? diff + ' ms' : '---'}</td>
-                `;
-                tbody.appendChild(row);
-            });
-
-            if (comparisonData.length > 0) {
-                const avgDelay = delays.reduce((a, b) => a + b, 0) / delays.length;
-                const accuracy = (matchCount / comparisonData.length) * 100;
-                document.getElementById('avgDelay').innerText = Math.round(avgDelay) + 'ms';
-                document.getElementById('accuracy').innerText = Math.round(accuracy) + '%';
-            }
         }
 
         function detectNote() {
@@ -439,16 +308,16 @@
             const minBin = Math.floor(FLUTE_RANGE.min / nyquist * bufferLength);
             const maxBin = Math.ceil(FLUTE_RANGE.max / nyquist * bufferLength);
 
-            // Find dominant frequency within flute range
-            let maxVal = 0;
-            let maxIdx = minBin;
+            // Calculate average energy in flute range
+            let totalEnergy = 0;
+            let binCount = 0;
             for (let i = minBin; i < maxBin && i < bufferLength; i++) {
-                if (dataArray[i] > maxVal) {
-                    maxVal = dataArray[i];
-                    maxIdx = i;
-                }
+                totalEnergy += dataArray[i] / 255;
+                binCount++;
             }
-            const dominantFreq = (maxIdx / bufferLength) * nyquist;
+            const avgEnergy = totalEnergy / binCount;
+
+            document.getElementById('energyLevel').innerText = avgEnergy.toFixed(3);
 
             // Update progress if sequence active
             if (sequenceActive && expectedNotes.length > 0) {
@@ -456,142 +325,53 @@
                 document.getElementById('progressFill').style.width = progress + '%';
             }
 
-            // Only detect notes if sequence is active
-            if (sequenceActive && expectedNoteIndex < expectedNotes.length) {
-                const expectedNote = expectedNotes[expectedNoteIndex];
-                const expectedTime = sequenceStartTime + expectedNote.offset;
+            // Simple onset detection - when energy rises significantly
+            if (!isNoteActive && avgEnergy > ENERGY_THRESHOLD) {
+                // Check if this is a new note onset
+                const timeSinceLastNote = now - (detectedCount > 0 ? lastNoteTime : 0);
 
-                // Only look for notes within the expected time window
-                if (Math.abs(now - expectedTime) < DETECTION_WINDOW_MS) {
+                if (timeSinceLastNote > MIN_NOTE_DURATION) {
+                    // Note started!
+                    isNoteActive = true;
+                    const noteStartTime = now;
+                    lastNoteTime = now;
 
-                    if (!isNoteActive) {
-                        // Look for the expected note
-                        const targetFreq = expectedNote.freq;
-                        const binIndex = Math.floor(targetFreq / nyquist * bufferLength);
+                    document.getElementById('noteState').innerText = 'ACTIVE';
 
-                        let energy = 0;
-                        let binCount = 0;
-                        if (binIndex >= minBin && binIndex <= maxBin) {
-                            for (let i = -1; i <= 1; i++) {
-                                const idx = binIndex + i;
-                                if (idx >= minBin && idx <= maxBin && idx >= 0 && idx < bufferLength) {
-                                    energy += dataArray[idx] / 255;
-                                    binCount++;
-                                }
-                            }
-                            energy = binCount > 0 ? energy / binCount : 0;
-                        }
+                    // If sequence is active, match to expected note
+                    if (sequenceActive && expectedNoteIndex < expectedNotes.length) {
+                        const expectedNote = expectedNotes[expectedNoteIndex];
+                        const expectedTime = sequenceStartTime + expectedNote.offset;
+                        const delay = now - expectedTime;
 
-                        if (energy > ENERGY_THRESHOLD && Math.abs(dominantFreq - targetFreq) < FREQ_TOLERANCE) {
-                            // Note detected!
-                            isNoteActive = true;
-                            noteStartTime = now;
-                            currentNoteIndex = expectedNoteIndex;
+                        detectedCount++;
+                        document.getElementById('detectedCount').innerText = detectedCount;
 
-                            // Calculate measured delay
-                            const measuredDelay = now - expectedTime;
-                            delays.push(measuredDelay);
-
-                            // Store for comparison
-                            comparisonData.push({
-                                index: expectedNoteIndex,
-                                pitch: expectedNote.pitch,
-                                simulated: expectedNote.simulatedDelay,
-                                measured: measuredDelay
-                            });
-
-                            // Update UI
-                            updateNoteIndicator(expectedNoteIndex, 'playing');
-                            document.getElementById('detectedCount').innerText = `${expectedNoteIndex + 1}/${expectedNotes.length}`;
-                            updateComparisonTable();
-
-                            log(`🔊 NOTE ${expectedNoteIndex} (${expectedNote.pitch}) - Simulated: ${expectedNote.simulatedDelay}ms, Measured: ${measuredDelay}ms, Diff: ${Math.abs(measuredDelay - expectedNote.simulatedDelay)}ms`);
-                        }
+                        log(`🔊 NOTE ${expectedNoteIndex} DETECTED: ${expectedNote.pitch} at ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')} (delay: ${delay}ms)`);
+                    } else {
+                        log(`🔊 NOTE DETECTED at ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
                     }
                 }
             }
 
-            // Handle active note ending
-            if (isNoteActive && currentNoteIndex >= 0) {
-                const expectedNote = expectedNotes[currentNoteIndex];
-                const targetFreq = expectedNote.freq;
-                const binIndex = Math.floor(targetFreq / nyquist * bufferLength);
+            // Note ending detection
+            if (isNoteActive && avgEnergy < ENERGY_THRESHOLD * 0.5) {
+                isNoteActive = false;
+                document.getElementById('noteState').innerText = '---';
 
-                let energy = 0;
-                let binCount = 0;
-                if (binIndex >= minBin && binIndex <= maxBin) {
-                    for (let i = -1; i <= 1; i++) {
-                        const idx = binIndex + i;
-                        if (idx >= minBin && idx <= maxBin && idx >= 0 && idx < bufferLength) {
-                            energy += dataArray[idx] / 255;
-                            binCount++;
-                        }
-                    }
-                    energy = binCount > 0 ? energy / binCount : 0;
-                }
-
-                const noteDuration = now - noteStartTime;
-
-                if (noteDuration > MAX_NOTE_DURATION || energy < ENERGY_THRESHOLD) {
-                    // Note ended
-                    isNoteActive = false;
-                    updateNoteIndicator(currentNoteIndex, 'active');
+                if (sequenceActive) {
                     expectedNoteIndex++;
-                    currentNoteIndex = -1;
-
-                    log(`✅ Note ${expectedNoteIndex - 1} ended`);
-
-                    // Check if sequence complete
-                    if (expectedNoteIndex >= expectedNotes.length) {
-                        log('🎯 Sequence complete - all notes detected');
-                        log('📊 Final delay comparison:');
-                        comparisonData.forEach(item => {
-                            log(`   Note ${item.index}: Sim=${item.simulated}ms, Meas=${item.measured}ms, Diff=${Math.abs(item.measured - item.simulated)}ms`);
-                        });
-                    }
+                    log(`✅ Note ended - ${expectedNoteIndex}/${expectedNotes.length}`);
+                } else {
+                    log(`✅ Note ended`);
                 }
             }
 
-            // Store energy history
-            energyHistory.push({ time: now, energy: maxVal / 255 });
-            if (energyHistory.length > 50) energyHistory.shift();
+            // Store energy for history
+            energyHistory.push(avgEnergy);
+            if (energyHistory.length > 10) energyHistory.shift();
 
             requestAnimationFrame(detectNote);
-        }
-
-        function drawVisualizer() {
-            if (!analyser || !isListening) {
-                requestAnimationFrame(drawVisualizer);
-                return;
-            }
-
-            const canvas = document.getElementById('visualizer');
-            if (!canvas) return;
-
-            const ctx = canvas.getContext('2d');
-            const width = canvas.width;
-            const height = canvas.height;
-
-            const dataArray = new Uint8Array(analyser.frequencyBinCount);
-            analyser.getByteFrequencyData(dataArray);
-
-            ctx.fillStyle = '#000';
-            ctx.fillRect(0, 0, width, height);
-
-            // Draw spectrum
-            ctx.fillStyle = '#00ccff';
-            const nyquist = audioCtx.sampleRate / 2;
-            const startBin = Math.floor(300 / nyquist * analyser.frequencyBinCount);
-            const endBin = Math.floor(600 / nyquist * analyser.frequencyBinCount);
-
-            for (let i = startBin; i < endBin; i++) {
-                if (i >= dataArray.length) break;
-                const x = (i - startBin) * (width / (endBin - startBin));
-                const barHeight = (dataArray[i] / 255) * height;
-                ctx.fillRect(x, height - barHeight, 4, barHeight);
-            }
-
-            requestAnimationFrame(drawVisualizer);
         }
 
         function copyLog() {
@@ -624,8 +404,8 @@
         document.getElementById('copyLogBtn').onclick = copyLog;
 
         window.onload = () => {
-            log('⏱️ 30 Second Test with Delay Measurement ready');
-            log('🎯 Will compare simulated vs measured delays');
+            log('⏱️ MP3 Detector ready');
+            log('🎯 Listening for MP3 test on zynth/mp3_test');
         };
     </script>
 </body>
