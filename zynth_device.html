@@ -205,6 +205,8 @@
         let animationFrame = null;
         let serverOffset = 0;
         let lastLogTime = 0;
+        let currentAvgEnergy = 0;
+        let ambientLogInterval = null;
 
         // Test sequence state
         let sequenceActive = false;
@@ -331,6 +333,14 @@
                 document.getElementById('status').innerText = 'Listening';
                 log('✅ Mic enabled - waiting for single note test');
 
+                // Start ambient energy logging
+                if (ambientLogInterval) clearInterval(ambientLogInterval);
+                ambientLogInterval = setInterval(() => {
+                    if (isListening && !sequenceActive) {
+                        log(`📊 Ambient energy: ${currentAvgEnergy.toFixed(4)}`);
+                    }
+                }, 3000);
+
                 detectNote();
 
             } catch (err) {
@@ -339,6 +349,10 @@
         }
 
         function disableMicrophone() {
+            if (ambientLogInterval) {
+                clearInterval(ambientLogInterval);
+                ambientLogInterval = null;
+            }
             if (mediaStream) {
                 mediaStream.getTracks().forEach(t => t.stop());
                 mediaStream = null;
@@ -377,6 +391,9 @@
                 binCount++;
             }
             const avgEnergy = binCount > 0 ? totalEnergy / binCount : 0;
+
+            // Store current energy for ambient logging
+            currentAvgEnergy = avgEnergy;
 
             // Calculate energy change
             const energyChange = avgEnergy - lastEnergy;
