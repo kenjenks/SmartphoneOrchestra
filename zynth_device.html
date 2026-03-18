@@ -312,8 +312,16 @@
         // Pattern detection
         const PATTERN_TOLERANCE_MS = 200;  // Very generous tolerance
         const NOTE_TIMEOUT_MS = 5000;       // Wait up to 5 seconds for pattern
+        const PATTERN_COOLDOWN_MS = 2000;   // Wait 2 seconds after a successful pattern
+        const MIN_NOTE_INTERVAL_MS = 1500;  // Minimum time between note starts
 
         const FFT_SIZE = 2048;  // Smaller FFT = faster response
+
+        // Flute frequency range (A3 to C6)
+        const FLUTE_RANGE = {
+            min: 220,  // A3
+            max: 1046  // C6
+        };
 
         // Pattern detection state
         let patternState = {
@@ -326,6 +334,10 @@
             validPatternCount: 0,
             pendingTimeout: null
         };
+
+        // Cooldown state
+        let cooldownUntil = 0;
+        let lastNoteStartTime = 0;
 
         // Current expected values from conductor
         let currentExpectedFreq = 440;
@@ -455,7 +467,7 @@
         }
 
         // ============================================
-        // Pattern Detection (with frequency filtering)
+        // Pattern Detection (with cooldown)
         // ============================================
         function detectPattern() {
             if (!isListening || !analyser) {
@@ -465,6 +477,13 @@
 
             const now = Date.now();
 
+            // Check cooldown period after successful pattern
+            if (now < cooldownUntil) {
+                // Still in cooldown - ignore all detections
+                requestAnimationFrame(detectPattern);
+                return;
+            }
+
             // Get frequency data
             const bufferLength = analyser.frequencyBinCount;
             const dataArray = new Uint8Array(bufferLength);
@@ -472,40 +491,30 @@
 
             const nyquist = audioCtx.sampleRate / 2;
 
-            // Define flute frequency range (C4 to C6)
-            const FLUTE_RANGE = {
-                min: 220,  // A3 (below flute range, but includes A4=440)
-                max: 1046  // C6
-            };
-
-            // Calculate total energy and find dominant frequency WITHIN FLUTE RANGE
-            let totalEnergy = 0;
-            let maxEnergy = 0;
-            let maxEnergyFreq = 0;
-            let maxEnergyIdx = 0;
-
             // Only scan bins within flute frequency range
             const minBin = Math.floor(FLUTE_RANGE.min / nyquist * bufferLength);
             const maxBin = Math.ceil(FLUTE_RANGE.max / nyquist * bufferLength);
 
+            // Find dominant frequency within flute range
+            let maxEnergy = 0;
+            let maxEnergyFreq = 0;
+            let maxEnergyIdx = 0;
+
             for (let i = minBin; i < maxBin && i < bufferLength; i++) {
                 const energy = dataArray[i] / 255;
-                totalEnergy += energy;
 
                 if (energy > maxEnergy) {
                     maxEnergy = energy;
                     maxEnergyIdx = i;
                 }
             }
-            totalEnergy /= (maxBin - minBin);
 
-            // Calculate the frequency of the loudest bin within flute range
             maxEnergyFreq = (maxEnergyIdx / bufferLength) * nyquist;
 
-            // Build a list of significant frequencies for debugging (only within flute range)
-            if (Math.random() < 0.02) { // 2% of frames for debugging
+            // Build frequency scan for debugging (occasionally)
+            if (Math.random() < 0.01) { // 1% of frames
                 let significantFreqs = [];
-                for (let i = minBin; i < maxBin; i += 5) {
+                for (let i = minBin; i < maxBin; i += 10) {
                     const freq = (i / bufferLength) * nyquist;
                     const val = dataArray[i] / 255;
                     if (val > 0.01) {
@@ -514,47 +523,29 @@
                 }
                 if (significantFreqs.length > 0) {
                     console.log("🎤 Mic sees (flute range):", significantFreqs.join(', '));
-                    // Also show in the log occasionally
-                    if (Math.random() < 0.1) {
-                        log(`📊 Flute range: ${significantFreqs.slice(0, 3).join(', ')}...`);
-                    }
                 }
             }
 
             // Update displays
-            document.getElementById('rawEnergy').innerText = totalEnergy.toFixed(3);
+            document.getElementById('rawEnergy').innerText = maxEnergy.toFixed(3);
             document.getElementById('energyValue').innerText = maxEnergy.toFixed(3);
             document.getElementById('energyLevel').innerText = maxEnergy.toFixed(3);
             document.getElementById('energyMeter').style.width = (maxEnergy * 100) + '%';
             document.getElementById('peakFreq').innerText = Math.round(maxEnergyFreq);
             document.getElementById('currentFreq').innerText = Math.round(currentExpectedFreq);
 
-            // Log out-of-band noise for debugging (but don't trigger detections)
-            if (maxEnergy > ENERGY_THRESHOLD * 2) {
-                // Check if there's significant energy outside flute range
-                let outOfBandEnergy = 0;
-                for (let i = 0; i < minBin; i++) {
-                    outOfBandEnergy += dataArray[i] / 255;
-                }
-                for (let i = maxBin; i < bufferLength; i++) {
-                    outOfBandEnergy += dataArray[i] / 255;
-                }
-                outOfBandEnergy /= (bufferLength - (maxBin - minBin));
-
-                if (outOfBandEnergy > maxEnergy * 0.5) {
-                    console.log(`⚠️ Significant out-of-band noise: ${outOfBandEnergy.toFixed(3)}`);
-                }
-            }
-
             // ONLY PROCESS if we have significant energy WITHIN flute range
-            if (maxEnergy > ENERGY_THRESHOLD) {
+            // AND we're not in the middle of a note already
+            if (maxEnergy > ENERGY_THRESHOLD && !patternState.isInNote) {
 
-                // Log every detection for debugging
-                console.log(`🔊 Flute-range energy: ${maxEnergy.toFixed(3)} at ${Math.round(maxEnergyFreq)}Hz`);
+                // Check if this is far enough from the last note start
+                if (now - lastNoteStartTime > MIN_NOTE_INTERVAL_MS) {
 
-                if (!patternState.isInNote) {
+                    console.log(`🔊 Potential note start: ${maxEnergy.toFixed(3)} at ${Math.round(maxEnergyFreq)}Hz`);
+
                     // Start a new note
                     patternState.isInNote = true;
+                    lastNoteStartTime = now;
                     patternState.noteStartTime = now;
                     patternState.detectedWarbles = [{
                         time: 0,
@@ -578,59 +569,57 @@
                             updatePatternDots(patternState.expectedTimes.length, 0);
                         }
                     }, NOTE_TIMEOUT_MS);
-
-                } else {
-                    // Already in a note - check if this is a new warble
-                    const timeSinceStart = now - patternState.noteStartTime;
-                    const lastWarbleTime = patternState.detectedWarbles.length > 0
-                        ? patternState.detectedWarbles[patternState.detectedWarbles.length - 1].time
-                        : -1000;
-
-                    // Only count if enough time has passed since last detection (prevent double-counting)
-                    // AND the frequency is in the ballpark of the first detection
-                    const freqDiff = Math.abs(maxEnergyFreq - patternState.detectedWarbles[0].freq);
-                    const isSameSource = freqDiff < 50; // Within 50Hz of the first detection (stricter now)
-
-                    if (timeSinceStart - lastWarbleTime > 100 && isSameSource) {
-                        patternState.detectedWarbles.push({
-                            time: timeSinceStart,
-                            energy: maxEnergy,
-                            freq: maxEnergyFreq
-                        });
-
-                        // Update visualization
-                        updatePatternDots(
-                            patternState.expectedTimes.length,
-                            patternState.detectedWarbles.length
-                        );
-
-                        updateTimeline(patternState.expectedTimes, patternState.detectedWarbles);
-
-                        log(`   🔴 Warble ${patternState.detectedWarbles.length} at +${Math.round(timeSinceStart)}ms (${Math.round(maxEnergyFreq)}Hz)`);
-
-                        document.getElementById('warbleCount').innerText =
-                            `${patternState.detectedWarbles.length}/${patternState.expectedTimes.length}`;
-
-                        // Check if we have all expected warbles
-                        if (patternState.detectedWarbles.length === patternState.expectedTimes.length) {
-                            validatePattern();
-                        }
-                    } else if (timeSinceStart - lastWarbleTime > 100) {
-                        // Different frequency source or too soon - ignore
-                        console.log(`   Ignoring sound at ${Math.round(maxEnergyFreq)}Hz - diff: ${Math.round(freqDiff)}Hz from source`);
-                    }
                 }
-            } else {
-                // No significant energy in flute range - if we were in a note but lost signal, reset after a while
-                if (patternState.isInNote && now - patternState.noteStartTime > 1000) {
-                    const timeSinceLastWarble = now - (patternState.detectedWarbles[patternState.detectedWarbles.length - 1]?.time || patternState.noteStartTime);
-                    if (timeSinceLastWarble > 1000) {
-                        log("⏰ Signal lost - resetting");
-                        patternState.isInNote = false;
-                        patternState.detectedWarbles = [];
-                        document.getElementById('detectionStatus').innerText = 'Signal lost';
-                        updatePatternDots(patternState.expectedTimes.length, 0);
+
+            } else if (patternState.isInNote && maxEnergy > ENERGY_THRESHOLD) {
+                // Already in a note - check if this is a new warble
+                const timeSinceStart = now - patternState.noteStartTime;
+                const lastWarbleTime = patternState.detectedWarbles.length > 0
+                    ? patternState.detectedWarbles[patternState.detectedWarbles.length - 1].time
+                    : -1000;
+
+                // Only count if enough time has passed since last detection (prevent double-counting)
+                // AND the frequency is in the ballpark of the first detection
+                const freqDiff = Math.abs(maxEnergyFreq - patternState.detectedWarbles[0].freq);
+                const isSameSource = freqDiff < 100; // Within 100Hz of the first detection
+
+                if (timeSinceStart - lastWarbleTime > 100 && isSameSource) {
+                    patternState.detectedWarbles.push({
+                        time: timeSinceStart,
+                        energy: maxEnergy,
+                        freq: maxEnergyFreq
+                    });
+
+                    // Update visualization
+                    updatePatternDots(
+                        patternState.expectedTimes.length,
+                        patternState.detectedWarbles.length
+                    );
+
+                    updateTimeline(patternState.expectedTimes, patternState.detectedWarbles);
+
+                    log(`   🔴 Warble ${patternState.detectedWarbles.length} at +${Math.round(timeSinceStart)}ms (${Math.round(maxEnergyFreq)}Hz)`);
+
+                    document.getElementById('warbleCount').innerText =
+                        `${patternState.detectedWarbles.length}/${patternState.expectedTimes.length}`;
+
+                    // Check if we have all expected warbles
+                    if (patternState.detectedWarbles.length === patternState.expectedTimes.length) {
+                        validatePattern();
                     }
+                } else if (timeSinceStart - lastWarbleTime > 100) {
+                    console.log(`   Ignoring sound at ${Math.round(maxEnergyFreq)}Hz - diff: ${Math.round(freqDiff)}Hz from source`);
+                }
+
+            } else if (patternState.isInNote && maxEnergy <= ENERGY_THRESHOLD) {
+                // No energy - if we've been silent for a while, end the note
+                const timeSinceLastWarble = now - (patternState.detectedWarbles[patternState.detectedWarbles.length - 1]?.time || patternState.noteStartTime);
+                if (timeSinceLastWarble > 1000) {
+                    log("⏰ Note ended - silence");
+                    patternState.isInNote = false;
+                    patternState.detectedWarbles = [];
+                    document.getElementById('detectionStatus').innerText = 'Note ended';
+                    updatePatternDots(patternState.expectedTimes.length, 0);
                 }
             }
 
@@ -638,7 +627,7 @@
         }
 
         // ============================================
-        // Validate detected pattern (VERY generous)
+        // Validate detected pattern
         // ============================================
         function validatePattern() {
             if (!patternState.isInNote) return;
@@ -677,7 +666,8 @@
             }
 
             if (patternValid) {
-                // SUCCESS!
+                // SUCCESS! Set cooldown to prevent immediate re-triggering
+                cooldownUntil = Date.now() + PATTERN_COOLDOWN_MS;
                 patternState.validPatternCount++;
 
                 document.getElementById('patternCount').innerText = patternState.validPatternCount;
@@ -695,15 +685,23 @@
                     setTimeout(() => dot.classList.remove('detected'), 500);
                 });
 
+                // Reset pattern state but keep cooldown active
+                patternState.isInNote = false;
+                patternState.detectedWarbles = [];
+                if (patternState.pendingTimeout) {
+                    clearTimeout(patternState.pendingTimeout);
+                    patternState.pendingTimeout = null;
+                }
+
             } else {
                 log(`❌ Pattern rejected - intervals off by up to ${Math.round(maxDeviation)}ms`);
                 log(`   Expected: ${expectedIntervals.map(i => Math.round(i)).join('-')}ms`);
                 log(`   Got: ${detectedIntervals.map(i => Math.round(i)).join('-')}ms`);
                 document.getElementById('detectionStatus').innerText = 'Pattern rejected';
-            }
 
-            // Reset for next note
-            resetPatternState();
+                // Reset for next attempt
+                resetPatternState();
+            }
         }
 
         function resetPatternState() {
@@ -745,11 +743,21 @@
             ctx.fillRect(0, 0, width, height);
 
             ctx.fillStyle = '#ff3366';
-            for (let i = 0; i < 100; i++) {
-                const x = i * 4;
-                const value = dataArray[i * 10] || 0;
-                const barHeight = (value / 255) * height;
-                ctx.fillRect(x, height - barHeight, 3, barHeight);
+
+            // Draw only flute range
+            const nyquist = audioCtx.sampleRate / 2;
+            const minBin = Math.floor(FLUTE_RANGE.min / nyquist * analyser.frequencyBinCount);
+            const maxBin = Math.ceil(FLUTE_RANGE.max / nyquist * analyser.frequencyBinCount);
+            const binCount = maxBin - minBin;
+
+            for (let i = 0; i < 50; i++) {
+                const binIndex = minBin + Math.floor((i / 50) * binCount);
+                if (binIndex < dataArray.length) {
+                    const x = i * 8;
+                    const value = dataArray[binIndex] / 255;
+                    const barHeight = value * height;
+                    ctx.fillRect(x, height - barHeight, 6, barHeight);
+                }
             }
 
             requestAnimationFrame(drawVisualizer);
@@ -777,9 +785,9 @@
 
             log("🔴 Zynth Device - SUPER SENSITIVE MODE");
             log("   • Energy threshold: VERY LOW (0.001)");
-            log("   • Frequency tolerance: VERY WIDE (100Hz)");
+            log("   • Flute range: 220-1046Hz");
             log("   • Pattern tolerance: GENEROUS (200ms)");
-            log("   • Any sound near 440Hz will trigger detection!");
+            log("   • Cooldown: 2 seconds after pattern");
 
             listenForConductor();
         };
