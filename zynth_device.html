@@ -177,11 +177,12 @@
         let isNoteActive = false;
         let noteStartTime = 0;
         let energyHistory = [];
-        const ENERGY_THRESHOLD = 0.08;  // Raised threshold
+        const ENERGY_THRESHOLD = 0.15;  // Raised threshold to ignore ambient noise
         const MIN_NOTE_DURATION = 100; // ms
         const MIN_TIME_BETWEEN_NOTES = 2000; // 2 seconds between notes
         const MAX_NOTE_DURATION = 2000; // Max note length
         const TARGET_FREQ = 440; // A4
+        const FREQ_TOLERANCE = 10; // Only accept frequencies within 10Hz of 440Hz
 
         // Statistics
         let detectedNotes = [];
@@ -189,6 +190,12 @@
 
         // FFT setup
         const FFT_SIZE = 2048;
+
+        // Flute frequency range (A3 to C6)
+        const FLUTE_RANGE = {
+            min: 220,  // A3
+            max: 1046  // C6
+        };
 
         db.ref(".info/serverTimeOffset").on("value", snap => {
             serverOffset = snap.val() || 0;
@@ -253,12 +260,6 @@
 
             const nyquist = audioCtx.sampleRate / 2;
 
-            // Define flute frequency range (A3 to C6)
-            const FLUTE_RANGE = {
-                min: 220,  // A3
-                max: 1046  // C6
-            };
-
             // Only scan bins within flute frequency range for dominant frequency
             const minBin = Math.floor(FLUTE_RANGE.min / nyquist * bufferLength);
             const maxBin = Math.ceil(FLUTE_RANGE.max / nyquist * bufferLength);
@@ -317,8 +318,8 @@
                     const timeSinceLastNote = now - (detectedNotes.length > 0 ? detectedNotes[detectedNotes.length - 1].start : 0);
 
                     if (timeSinceLastNote > MIN_TIME_BETWEEN_NOTES) {
-                        // Also check that the dominant frequency is close to 440Hz
-                        if (Math.abs(dominantFreq - TARGET_FREQ) < 50) {
+                        // TIGHTENED frequency check - only accept within 10Hz of 440
+                        if (Math.abs(dominantFreq - TARGET_FREQ) < FREQ_TOLERANCE) {
                             // Note started
                             isNoteActive = true;
                             noteStartTime = now;
