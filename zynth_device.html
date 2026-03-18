@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zynth Device - Two Note Tester</title>
+    <title>Zynth Device - Two Note Tester with GO Signal</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <style>
@@ -161,6 +161,20 @@
             white-space: pre-wrap;
             word-wrap: break-word;
         }
+        .firebase-status {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        .connected {
+            background: #00ff00;
+            box-shadow: 0 0 10px #00ff00;
+        }
+        .disconnected {
+            background: #ff0000;
+        }
         canvas {
             width: 100%;
             height: 100px;
@@ -171,9 +185,14 @@
     </style>
 </head>
 <body>
-    <h1>⏱️ Zynth Device - Two Note Tester</h1>
+    <h1>⏱️ Zynth Device - Two Note Tester with GO Signal</h1>
 
     <div class="panel">
+        <div style="display: flex; align-items: center; margin-bottom: 15px;">
+            <span class="firebase-status" id="firebaseStatus"></span>
+            <span id="connectionText">Connecting to Firebase...</span>
+        </div>
+
         <div class="status-row">
             <span class="label">Status:</span>
             <span class="value" id="status">Ready</span>
@@ -190,7 +209,7 @@
         </div>
 
         <div class="timing-display" id="timingDisplay">
-            Waiting for notes...
+            Waiting for GO signal...
         </div>
 
         <div class="energy-meter">
@@ -209,12 +228,20 @@
         </div>
 
         <div class="status-row">
+            <span class="label">Sequence start:</span>
+            <span class="value" id="seqStart">---</span>
+        </div>
+        <div class="status-row">
             <span class="label">Last note:</span>
             <span class="value" id="lastNote">---</span>
         </div>
         <div class="status-row">
             <span class="label">Onset time:</span>
             <span class="value" id="lastOnset">---</span>
+        </div>
+        <div class="status-row">
+            <span class="label">Delay from scheduled:</span>
+            <span class="value" id="lastDelay">---</span>
         </div>
         <div class="status-row">
             <span class="label">Duration:</span>
@@ -260,6 +287,14 @@
             { name: 'A4', freq: 440, duration: 278.6, dot: document.getElementById('note1Dot') }
         ];
 
+        // Test sequence state
+        let sequenceActive = false;
+        let sequenceStartTime = 0;
+        let expectedNotes = [];
+        let detectedNotes = [];
+        let expectedNoteIndex = 0;
+        const DETECTION_WINDOW_MS = 500; // Only accept notes within 500ms of expected time
+
         // Timing detection state
         let isNoteActive = false;
         let noteStartTime = 0;
@@ -267,25 +302,60 @@
         let energyHistory = [];
         const ENERGY_THRESHOLD = 0.15;
         const MIN_NOTE_DURATION = 100;
-        const MIN_TIME_BETWEEN_NOTES = 2000;
         const MAX_NOTE_DURATION = 2000;
-        const FREQ_TOLERANCE = 15; // Hz tolerance for each note
-
-        // Statistics
-        let detectedNotes = [];
-        let noteCount = 0;
+        const FREQ_TOLERANCE = 15;
 
         // FFT setup
         const FFT_SIZE = 2048;
+        const FLUTE_RANGE = { min: 220, max: 1046 };
 
-        // Flute frequency range (A3 to C6)
-        const FLUTE_RANGE = {
-            min: 220,  // A3
-            max: 1046  // C6
-        };
+        // Connection status
+        db.ref('.info/connected').on('value', snap => {
+            const statusEl = document.getElementById('firebaseStatus');
+            const textEl = document.getElementById('connectionText');
+            if (snap.val()) {
+                statusEl.className = 'firebase-status connected';
+                textEl.innerText = 'Firebase Connected';
+            } else {
+                statusEl.className = 'firebase-status disconnected';
+                textEl.innerText = 'Firebase Disconnected';
+            }
+        });
 
         db.ref(".info/serverTimeOffset").on("value", snap => {
             serverOffset = snap.val() || 0;
+        });
+
+        // Listen for test sequence from conductor
+        db.ref('zynth/test_sequence').on('value', snap => {
+            const sequence = snap.val();
+            if (sequence && sequence.status === 'ACTIVE') {
+                // New sequence starting
+                sequenceActive = true;
+                sequenceStartTime = sequence.startTime;
+                expectedNotes = sequence.notes;
+                expectedNoteIndex = 0;
+                detectedNotes = [];
+
+                const startTimeStr = new Date(sequenceStartTime).toLocaleTimeString() +
+                    `.${String(sequenceStartTime % 1000).padStart(3, '0')}`;
+                document.getElementById('seqStart').innerText = startTimeStr;
+                document.getElementById('timingDisplay').innerText = '⏳ Waiting for first note';
+                document.getElementById('noteCount').innerText = '0/2';
+
+                log(`🎬 GO signal received - sequence starting at ${startTimeStr} (buffer: ${sequence.bufferMs}ms)`);
+
+                // Clear any active note indicators
+                notes.forEach(note => note.dot.classList.remove('active', 'playing'));
+
+            } else if (!sequence) {
+                // Sequence ended
+                sequenceActive = false;
+                expectedNoteIndex = 0;
+                document.getElementById('seqStart').innerText = '---';
+                document.getElementById('timingDisplay').innerText = 'Waiting for GO signal...';
+                log('⏹️ Sequence ended');
+            }
         });
 
         async function enableMicrophone() {
@@ -311,13 +381,7 @@
 
                 isListening = true;
                 document.getElementById('status').innerText = 'Listening';
-                log('✅ Mic enabled - listening for G4 (392Hz) and A4 (440Hz)');
-
-                // Reset UI
-                notes.forEach(note => note.dot.classList.remove('active', 'playing'));
-                detectedNotes = [];
-                noteCount = 0;
-                document.getElementById('noteCount').innerText = '0/2';
+                log('✅ Mic enabled - waiting for GO signal');
 
                 detectNote();
                 drawVisualizer();
@@ -414,59 +478,65 @@
                 energy440 = binCount > 0 ? energy440 / binCount : 0;
             }
 
-            // Get energy at 392Hz for note detection
-            let energy392 = 0;
-            binCount = 0;
-            if (binIndex392 >= minBin && binIndex392 <= maxBin) {
-                for (let i = -1; i <= 1; i++) {
-                    const idx = binIndex392 + i;
-                    if (idx >= minBin && idx <= maxBin && idx >= 0 && idx < bufferLength) {
-                        energy392 += dataArray[idx] / 255;
-                        binCount++;
-                    }
-                }
-                energy392 = binCount > 0 ? energy392 / binCount : 0;
-            }
-
-            // Update meter with 440Hz energy
+            // Update meter
             document.getElementById('energyValue').innerText = energy440.toFixed(3);
             document.getElementById('energyMeter').style.width = (energy440 * 100) + '%';
 
-            // Simple state machine for note detection
-            if (!isNoteActive) {
-                // Look for either note
-                let detectedFreq = -1;
-                let energy = 0;
+            // Only detect notes if sequence is active
+            if (sequenceActive && expectedNoteIndex < expectedNotes.length) {
+                const expectedNote = expectedNotes[expectedNoteIndex];
+                const expectedTime = sequenceStartTime + expectedNote.offset;
+                const timeWindow = DETECTION_WINDOW_MS;
 
-                if (energy392 > ENERGY_THRESHOLD && Math.abs(dominantFreq - 392) < FREQ_TOLERANCE) {
-                    detectedFreq = 392;
-                    energy = energy392;
-                } else if (energy440 > ENERGY_THRESHOLD && Math.abs(dominantFreq - 440) < FREQ_TOLERANCE) {
-                    detectedFreq = 440;
-                    energy = energy440;
-                }
+                // Only look for notes within the expected time window
+                if (Math.abs(now - expectedTime) < timeWindow) {
 
-                if (detectedFreq > 0) {
-                    const timeSinceLastNote = now - (detectedNotes.length > 0 ? detectedNotes[detectedNotes.length - 1].onset : 0);
+                    if (!isNoteActive) {
+                        // Look for the expected note
+                        const targetFreq = expectedNote.freq;
+                        const binIndex = Math.floor(targetFreq / nyquist * bufferLength);
 
-                    if (timeSinceLastNote > MIN_TIME_BETWEEN_NOTES) {
-                        const noteIndex = getNoteIndexFromFreq(detectedFreq);
+                        let energy = 0;
+                        let binCount = 0;
+                        if (binIndex >= minBin && binIndex <= maxBin) {
+                            for (let i = -1; i <= 1; i++) {
+                                const idx = binIndex + i;
+                                if (idx >= minBin && idx <= maxBin && idx >= 0 && idx < bufferLength) {
+                                    energy += dataArray[idx] / 255;
+                                    binCount++;
+                                }
+                            }
+                            energy = binCount > 0 ? energy / binCount : 0;
+                        }
 
-                        isNoteActive = true;
-                        noteStartTime = now;
-                        currentNoteIndex = noteIndex;
+                        if (energy > ENERGY_THRESHOLD && Math.abs(dominantFreq - targetFreq) < FREQ_TOLERANCE) {
+                            // Note detected!
+                            isNoteActive = true;
+                            noteStartTime = now;
+                            currentNoteIndex = expectedNoteIndex;
 
-                        // Update UI
-                        notes[noteIndex].dot.classList.add('active', 'playing');
-                        document.getElementById('timingDisplay').innerText = `🔴 ${notes[noteIndex].name}`;
+                            // Calculate delay
+                            const delay = now - expectedTime;
 
-                        log(`🔊 NOTE ${noteIndex} ONSET: ${notes[noteIndex].name} at ${new Date(noteStartTime).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')} (freq: ${Math.round(dominantFreq)}Hz)`);
+                            // Update UI
+                            notes[expectedNoteIndex].dot.classList.add('active', 'playing');
+                            document.getElementById('timingDisplay').innerText = `🔴 ${notes[expectedNoteIndex].name}`;
+                            document.getElementById('lastNote').innerText = notes[expectedNoteIndex].name;
+                            document.getElementById('lastOnset').innerText = new Date(now).toLocaleTimeString() +
+                                `.${String(now % 1000).padStart(3, '0')}`;
+                            document.getElementById('lastDelay').innerText = (delay > 0 ? '+' : '') + delay + ' ms';
+
+                            log(`🔊 NOTE ${expectedNoteIndex} ONSET: ${notes[expectedNoteIndex].name} at ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')} (delay: ${delay}ms)`);
+                        }
                     }
                 }
-            } else {
-                // Currently in a note - check if it's still playing
-                const currentFreq = notes[currentNoteIndex].freq;
-                const binIndex = Math.floor(currentFreq / nyquist * bufferLength);
+            }
+
+            // Handle active note ending
+            if (isNoteActive) {
+                const expectedNote = expectedNotes[currentNoteIndex];
+                const targetFreq = expectedNote.freq;
+                const binIndex = Math.floor(targetFreq / nyquist * bufferLength);
 
                 let energy = 0;
                 let binCount = 0;
@@ -490,16 +560,15 @@
                     document.getElementById('timingDisplay').innerText = `⚠️ TIMEOUT ${noteDuration}ms`;
                     log(`⚠️ Note ${currentNoteIndex} timeout after ${noteDuration}ms`);
 
-                    detectedNotes.push({
-                        index: currentNoteIndex,
+                    detectedNotes[currentNoteIndex] = {
                         onset: noteStartTime,
                         offset: now,
                         duration: noteDuration,
                         forced: true
-                    });
+                    };
 
-                    noteCount++;
-                    document.getElementById('noteCount').innerText = `${noteCount}/2`;
+                    expectedNoteIndex++;
+                    document.getElementById('noteCount').innerText = `${expectedNoteIndex}/${expectedNotes.length}`;
                     currentNoteIndex = -1;
 
                 } else if (energy < ENERGY_THRESHOLD) {
@@ -519,30 +588,30 @@
                         isNoteActive = false;
                         notes[currentNoteIndex].dot.classList.remove('active', 'playing');
 
-                        detectedNotes.push({
-                            index: currentNoteIndex,
+                        detectedNotes[currentNoteIndex] = {
                             onset: noteStartTime,
                             offset: now,
                             duration: noteDuration
-                        });
-
-                        noteCount++;
+                        };
 
                         document.getElementById('timingDisplay').innerText = `✅ ${notes[currentNoteIndex].name} ${Math.round(noteDuration)}ms`;
-                        document.getElementById('lastNote').innerText = notes[currentNoteIndex].name;
-                        document.getElementById('lastOnset').innerText = new Date(noteStartTime).toLocaleTimeString() +
-                            `.${String(noteStartTime % 1000).padStart(3, '0')}`;
                         document.getElementById('lastDuration').innerText = Math.round(noteDuration) + ' ms';
-                        document.getElementById('noteCount').innerText = `${noteCount}/2`;
 
                         log(`✅ NOTE ${currentNoteIndex} ENDED: ${notes[currentNoteIndex].name} - duration: ${Math.round(noteDuration)}ms`);
 
+                        expectedNoteIndex++;
+                        document.getElementById('noteCount').innerText = `${expectedNoteIndex}/${expectedNotes.length}`;
                         currentNoteIndex = -1;
+
+                        // Check if sequence complete
+                        if (expectedNoteIndex >= expectedNotes.length) {
+                            log('🎯 Sequence complete - all notes detected');
+                        }
                     }
                 }
             }
 
-            // Store energy history (using 440Hz energy as reference)
+            // Store energy history
             energyHistory.push({ time: now, energy: energy440 });
             if (energyHistory.length > 50) energyHistory.shift();
 
@@ -604,8 +673,8 @@
         document.getElementById('copyLogBtn').onclick = copyLog;
 
         window.onload = () => {
-            log('⏱️ Two Note Tester ready');
-            log('🎯 Listening for G4 (392Hz) and A4 (440Hz)');
+            log('⏱️ Two Note Tester with GO Signal ready');
+            log('🎯 Will only detect notes within 500ms of expected time');
         };
     </script>
 </body>

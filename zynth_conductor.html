@@ -3,7 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zynth Conductor - Two Note Test</title>
+    <title>Zynth Conductor - Two Note Test with GO Signal</title>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <style>
         body {
             background: #1a1a1a;
@@ -49,23 +51,56 @@
             font-size: 0.9rem;
             margin-top: 10px;
         }
-        button {
-            background: #00ccff;
-            color: #000;
-            border: none;
-            padding: 20px;
-            font-size: 1.5rem;
-            border-radius: 50px;
-            cursor: pointer;
-            width: 100%;
-            margin: 10px 0;
-        }
         .status {
             background: #000;
             padding: 15px;
             border-radius: 8px;
             font-family: monospace;
             margin: 20px 0;
+            border-left: 4px solid #00ccff;
+        }
+        .button-row {
+            display: flex;
+            gap: 10px;
+            margin: 20px 0;
+        }
+        button {
+            background: #00ccff;
+            color: #000;
+            border: none;
+            padding: 15px 30px;
+            font-size: 1.2rem;
+            border-radius: 50px;
+            cursor: pointer;
+            flex: 1;
+        }
+        button.danger {
+            background: #600;
+            color: #fff;
+        }
+        .log-container {
+            position: relative;
+            margin-top: 20px;
+        }
+        .log-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 5px;
+        }
+        .copy-btn {
+            background: #333;
+            color: #fff;
+            border: 1px solid #555;
+            padding: 5px 15px;
+            border-radius: 15px;
+            font-size: 0.8rem;
+            cursor: pointer;
+            width: auto;
+            margin: 0;
+        }
+        .copy-btn:hover {
+            background: #444;
         }
         .log {
             background: #000;
@@ -76,13 +111,37 @@
             font-family: monospace;
             font-size: 11px;
             color: #888;
+            user-select: text;
+            -webkit-user-select: text;
+            cursor: text;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .firebase-status {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        .connected {
+            background: #00ff00;
+            box-shadow: 0 0 10px #00ff00;
+        }
+        .disconnected {
+            background: #ff0000;
         }
     </style>
 </head>
 <body>
-    <h1>🎵 Zynth Conductor - Two Note Test</h1>
+    <h1>🎵 Zynth Conductor - Two Note Test with GO Signal</h1>
 
     <div class="panel">
+        <div style="display: flex; align-items: center; margin-bottom: 15px;">
+            <span class="firebase-status" id="firebaseStatus"></span>
+            <span id="connectionText">Connecting to Firebase...</span>
+        </div>
+
         <div class="note-grid">
             <div class="note-card" id="note0Card">
                 <div class="note-pitch">G4</div>
@@ -96,15 +155,37 @@
             </div>
         </div>
 
-        <button id="playBtn">🔊 PLAY TWO NOTES</button>
+        <div class="button-row">
+            <button id="playBtn">🔊 PLAY TWO NOTES</button>
+            <button id="stopBtn" class="danger">⏹️ STOP</button>
+        </div>
 
-        <div class="status" id="status">Ready</div>
+        <div class="status" id="status">
+            ⏸️ Ready
+        </div>
 
-        <div class="log" id="log"></div>
+        <div class="log-container">
+            <div class="log-header">
+                <span style="color: #888;">Event Log</span>
+                <button class="copy-btn" id="copyLogBtn">📋 COPY LOG</button>
+            </div>
+            <div class="log" id="log"></div>
+        </div>
     </div>
 
     <script>
+        const firebaseConfig = {
+            apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
+            authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
+            databaseURL: "https://smartphoneorchestra-dwt-default-rtdb.firebaseio.com/",
+            projectId: "smartphoneorchestra-dwt"
+        };
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
         let audioCtx = null;
+        let serverOffset = 0;
+        let isPlaying = false;
 
         // First two notes from tuning_mode.json
         const notes = [
@@ -112,69 +193,158 @@
             { pitch: 'A4', freq: 440, duration: 278.6, offset: 696.6 }
         ];
 
-        async function playNote(freq, durationMs, noteIndex) {
+        // Clock sync
+        db.ref(".info/serverTimeOffset").on("value", snap => {
+            serverOffset = snap.val() || 0;
+        });
+
+        // Connection status
+        db.ref('.info/connected').on('value', snap => {
+            const statusEl = document.getElementById('firebaseStatus');
+            const textEl = document.getElementById('connectionText');
+            if (snap.val()) {
+                statusEl.className = 'firebase-status connected';
+                textEl.innerText = 'Firebase Connected';
+            } else {
+                statusEl.className = 'firebase-status disconnected';
+                textEl.innerText = 'Firebase Disconnected';
+            }
+        });
+
+        async function playNote(freq, durationMs, noteIndex, scheduledTime) {
             return new Promise(async (resolve) => {
                 if (!audioCtx) {
                     audioCtx = new AudioContext();
                 }
-                if (audioCtx.state === 'suspended') {
-                    await audioCtx.resume();
-                }
 
-                const sampleRate = audioCtx.sampleRate;
-                const samples = Math.floor(sampleRate * (durationMs / 1000));
+                // Calculate delay until scheduled time
+                const now = Date.now() + serverOffset;
+                const delayMs = Math.max(0, scheduledTime - now);
 
-                // Generate sine wave with envelope
-                const buffer = audioCtx.createBuffer(1, samples, sampleRate);
-                const data = buffer.getChannelData(0);
+                setTimeout(async () => {
+                    if (audioCtx.state === 'suspended') {
+                        await audioCtx.resume();
+                    }
 
-                for (let i = 0; i < samples; i++) {
-                    const t = i / samples;
-                    // Simple envelope to make onset/offset clear
-                    let envelope = 1;
-                    if (t < 0.01) envelope = t / 0.01; // 10ms attack
-                    if (t > 0.99) envelope = (1 - t) / 0.01; // 10ms release
+                    const sampleRate = audioCtx.sampleRate;
+                    const samples = Math.floor(sampleRate * (durationMs / 1000));
 
-                    data[i] = Math.sin(2 * Math.PI * freq * i / sampleRate) * envelope * 0.5;
-                }
+                    // Generate sine wave with envelope
+                    const buffer = audioCtx.createBuffer(1, samples, sampleRate);
+                    const data = buffer.getChannelData(0);
 
-                const source = audioCtx.createBufferSource();
-                source.buffer = buffer;
-                source.connect(audioCtx.destination);
+                    for (let i = 0; i < samples; i++) {
+                        const t = i / samples;
+                        // Simple envelope to make onset/offset clear
+                        let envelope = 1;
+                        if (t < 0.01) envelope = t / 0.01; // 10ms attack
+                        if (t > 0.99) envelope = (1 - t) / 0.01; // 10ms release
 
-                const startTime = Date.now();
-                source.start();
+                        data[i] = Math.sin(2 * Math.PI * freq * i / sampleRate) * envelope * 0.5;
+                    }
 
-                // Highlight active note
-                document.querySelectorAll('.note-card').forEach(card => card.classList.remove('active'));
-                document.getElementById(`note${noteIndex}Card`).classList.add('active');
+                    const source = audioCtx.createBufferSource();
+                    source.buffer = buffer;
+                    source.connect(audioCtx.destination);
 
-                log(`🔊 Note ${noteIndex}: ${notes[noteIndex].pitch} at ${new Date().toLocaleTimeString()}.${String(startTime % 1000).padStart(3, '0')}`);
+                    const actualStartTime = Date.now() + serverOffset;
+                    source.start();
 
-                source.onended = () => {
-                    document.getElementById(`note${noteIndex}Card`).classList.remove('active');
-                    log(`✅ Note ${noteIndex} ended after ${Date.now() - startTime}ms`);
-                    resolve();
-                };
+                    // Highlight active note
+                    document.querySelectorAll('.note-card').forEach(card => card.classList.remove('active'));
+                    document.getElementById(`note${noteIndex}Card`).classList.add('active');
+
+                    log(`🔊 Note ${noteIndex}: ${notes[noteIndex].pitch} at ${new Date(actualStartTime).toLocaleTimeString()}.${String(actualStartTime % 1000).padStart(3, '0')} (scheduled: ${new Date(scheduledTime).toLocaleTimeString()}.${String(scheduledTime % 1000).padStart(3, '0')})`);
+
+                    source.onended = () => {
+                        document.getElementById(`note${noteIndex}Card`).classList.remove('active');
+                        log(`✅ Note ${noteIndex} ended after ${Date.now() + serverOffset - actualStartTime}ms`);
+                        resolve();
+                    };
+                }, delayMs);
             });
         }
 
         async function playTwoNotes() {
-            log('🎬 Starting two-note sequence');
+            if (isPlaying) {
+                log('⚠️ Already playing');
+                return;
+            }
+
+            isPlaying = true;
+            document.getElementById('status').innerHTML = '🔴 Playing...';
+
+            // Calculate scheduled start times with 1 second buffer
+            const now = Date.now() + serverOffset;
+            const bufferMs = 1000; // 1 second buffer like conductor.html
+            const startTime = now + bufferMs;
+
+            // Note 0 at startTime + 301.9ms offset
+            const note0Time = startTime + notes[0].offset;
+            // Note 1 at startTime + 696.6ms offset
+            const note1Time = startTime + notes[1].offset;
+
+            log('🎬 Sending GO signal with 1s buffer');
+            log(`📅 Sequence starting at ${new Date(startTime).toLocaleTimeString()}.${String(startTime % 1000).padStart(3, '0')}`);
+
+            // Send GO signal to Firebase
+            await db.ref('zynth/test_sequence').set({
+                status: 'ACTIVE',
+                startTime: startTime,
+                bufferMs: bufferMs,
+                notes: [
+                    { pitch: notes[0].pitch, freq: notes[0].freq, offset: notes[0].offset, duration: notes[0].duration },
+                    { pitch: notes[1].pitch, freq: notes[1].freq, offset: notes[1].offset, duration: notes[1].duration }
+                ],
+                timestamp: now
+            });
+
+            log(`📅 Note 0 (G4) scheduled at ${new Date(note0Time).toLocaleTimeString()}.${String(note0Time % 1000).padStart(3, '0')}`);
+            log(`📅 Note 1 (A4) scheduled at ${new Date(note1Time).toLocaleTimeString()}.${String(note1Time % 1000).padStart(3, '0')}`);
 
             // Play first note (G4)
-            await playNote(notes[0].freq, notes[0].duration, 0);
-
-            // Gap between notes (from tuning_mode: 696.6 - (301.9 + 371.5) = 23.2ms)
-            const gap = notes[1].offset - (notes[0].offset + notes[0].duration);
-            log(`⏱️ Gap between notes: ${gap.toFixed(1)}ms`);
-
-            await new Promise(resolve => setTimeout(resolve, gap));
+            await playNote(notes[0].freq, notes[0].duration, 0, note0Time);
 
             // Play second note (A4)
-            await playNote(notes[1].freq, notes[1].duration, 1);
+            await playNote(notes[1].freq, notes[1].duration, 1, note1Time);
 
             log('✅ Two-note sequence complete');
+
+            // Clear the test sequence
+            await db.ref('zynth/test_sequence').remove();
+
+            document.getElementById('status').innerHTML = '⏸️ Ready';
+            isPlaying = false;
+        }
+
+        function stopSequence() {
+            if (audioCtx) {
+                audioCtx.close();
+                audioCtx = null;
+            }
+            db.ref('zynth/test_sequence').remove();
+            document.querySelectorAll('.note-card').forEach(card => card.classList.remove('active'));
+            document.getElementById('status').innerHTML = '⏸️ Stopped';
+            isPlaying = false;
+            log('⏹️ Sequence stopped');
+        }
+
+        function copyLog() {
+            const logDiv = document.getElementById('log');
+            const range = document.createRange();
+            range.selectNodeContents(logDiv);
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(range);
+
+            try {
+                document.execCommand('copy');
+                log('📋 Log copied to clipboard');
+            } catch (err) {
+                console.error('Copy failed:', err);
+            }
+
+            selection.removeAllRanges();
         }
 
         function log(message) {
@@ -185,8 +355,11 @@
         }
 
         document.getElementById('playBtn').onclick = playTwoNotes;
+        document.getElementById('stopBtn').onclick = stopSequence;
+        document.getElementById('copyLogBtn').onclick = copyLog;
 
-        log('🎵 Conductor ready - click PLAY TWO NOTES to test');
+        log('🎵 Conductor ready - click PLAY TWO NOTES to test with GO signal');
+        log('⏱️ Using 1 second buffer like conductor.html');
     </script>
 </body>
 </html>
