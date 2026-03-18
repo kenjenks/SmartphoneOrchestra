@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Synth Device - 30 Second Test</title>
+    <title>Zynth Device - Warble Receiver</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <style>
@@ -65,96 +65,104 @@
             color: #00ffcc;
             font-weight: bold;
         }
-        .note-indicator {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin: 20px 0;
+        .detection-panel {
+            background: #0a0a0a;
+            border: 2px solid #00ffcc;
+            border-radius: 12px;
+            padding: 20px;
+            margin: 15px 0;
         }
-        .note-light {
-            width: 60px;
-            height: 60px;
-            border-radius: 50%;
-            background: #222;
-            transition: all 0.1s ease;
-            box-shadow: 0 0 20px rgba(0,255,204,0);
+        .detection-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+            margin: 15px 0;
         }
-        .note-light.playing {
+        .detection-bit {
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 15px;
+            text-align: center;
+            font-size: 1.5rem;
+            font-weight: bold;
+            transition: all 0.2s;
+        }
+        .detection-bit.detected {
             background: #00ffcc;
-            box-shadow: 0 0 40px #00ffcc;
+            color: #000;
+            box-shadow: 0 0 20px #00ffcc;
         }
-        .pillar-light {
-            width: 60px;
-            height: 60px;
-            border-radius: 50%;
+        .detection-bit.zero {
             background: #442288;
-            transition: all 0.1s ease;
-            box-shadow: 0 0 20px rgba(136,68,204,0);
+            color: #fff;
         }
-        .pillar-light.playing {
-            background: #8844cc;
-            box-shadow: 0 0 40px #8844cc;
+        .detection-bit.pending {
+            background: #333;
+            color: #666;
         }
-        #log {
+        .modulation-meter {
+            background: #000;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 15px 0;
+            border-left: 4px solid #ffcc00;
+        }
+        .meter-bar {
+            width: 100%;
+            height: 10px;
+            background: #333;
+            border-radius: 5px;
+            margin: 5px 0;
+            overflow: hidden;
+        }
+        .meter-fill {
+            height: 100%;
+            background: #ffcc00;
+            width: 0%;
+            transition: width 0.1s;
+        }
+        button {
+            background: #00ffcc;
+            color: #000;
+            border: none;
+            padding: 15px 30px;
+            font-size: 1.2rem;
+            font-weight: bold;
+            border-radius: 50px;
+            cursor: pointer;
+            margin: 10px;
+            transition: transform 0.2s;
+        }
+        button:hover {
+            transform: scale(1.05);
+        }
+        button.secondary {
+            background: #442288;
+            color: #fff;
+        }
+        button.danger {
+            background: #600;
+            color: #fff;
+        }
+        .visualizer {
+            width: 100%;
+            height: 80px;
+            background: #000;
+            border-radius: 8px;
+            margin: 15px 0;
+            border: 1px solid #333;
+        }
+        .log {
             font-family: monospace;
             font-size: 11px;
             background: #000;
             padding: 10px;
             border-radius: 4px;
-            height: 200px;
+            height: 150px;
             overflow-y: auto;
             color: #888;
             margin-top: 20px;
-            border: 1px solid #333;
-        }
-        #timer {
-            font-size: 2rem;
-            font-weight: bold;
-            color: #00ffcc;
-            text-align: center;
-            margin: 10px 0;
-        }
-        .config-item {
-            display: flex;
-            justify-content: space-between;
-            margin: 5px 0;
-            font-size: 0.8rem;
-        }
-        .button-container {
-            display: flex;
-            gap: 10px;
-            margin: 15px 0;
-            flex-wrap: wrap;
-        }
-        .action-button {
-            background: #00ffcc;
-            color: #000;
-            border: none;
-            padding: 12px 20px;
-            border-radius: 25px;
-            font-weight: bold;
-            cursor: pointer;
-            transition: transform 0.2s;
-            flex: 1;
-            font-size: 1rem;
-            min-width: 120px;
-        }
-        .action-button:hover {
-            transform: scale(1.05);
-        }
-        .action-button.secondary {
-            background: #442288;
-            color: #fff;
-        }
-        .action-button.danger {
-            background: #600;
-            color: #fff;
-        }
-        .action-button:disabled {
-            background: #333;
-            color: #666;
-            cursor: not-allowed;
-            transform: none;
         }
         .permission-status {
             font-size: 0.9rem;
@@ -167,32 +175,6 @@
         .granted {
             background: #1e4d1e;
             color: #8bc34a;
-        }
-        .denied {
-            background: #4d1e1e;
-            color: #ff6b6b;
-        }
-        .pending {
-            background: #4d4d1e;
-            color: #ffcc00;
-        }
-        .audio-status {
-            font-family: monospace;
-            font-size: 0.9rem;
-            padding: 5px;
-            background: #000;
-            border-radius: 4px;
-            margin: 5px 0;
-        }
-        .debug-box {
-            background: #0a0a0a;
-            border: 1px solid #333;
-            border-radius: 4px;
-            padding: 10px;
-            margin: 10px 0;
-            font-family: monospace;
-            font-size: 10px;
-            color: #00ff00;
         }
     </style>
 </head>
@@ -208,95 +190,74 @@
                 <span class="label">Status:</span>
                 <span class="value" id="status-value">Starting up...</span>
             </div>
-            <div class="status-row">
-                <span class="label">Time until next note:</span>
-                <span class="value" id="countdown">--s</span>
-            </div>
-            <div class="status-row">
-                <span class="label">Next note:</span>
-                <span class="value" id="next-note">--</span>
-            </div>
-            <div class="status-row">
-                <span class="label">Neighbors within 2m:</span>
-                <span class="value" id="neighbor-count">calculating...</span>
-            </div>
 
-            <!-- Patron Mic Section (shown for non-pillars) -->
-            <div id="mic-section" style="display: none;">
+            <!-- Mic Section -->
+            <div id="mic-section">
                 <div class="status-row" style="flex-direction: column; align-items: stretch;">
                     <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
-                        <span class="label">Mic permission:</span>
+                        <span class="label">🎤 Ear status:</span>
                         <span class="value" id="mic-status">checking...</span>
                     </div>
-                    <div class="button-container">
-                        <button id="request-mic-btn" class="action-button">🎤 Request Mic</button>
-                        <button id="test-mic-btn" class="action-button secondary">🔊 Test Mic</button>
+                    <div style="display: flex; gap: 10px;">
+                        <button id="request-mic-btn" class="secondary">🎤 Enable Ear</button>
+                        <button id="stop-mic-btn" class="danger">⏹️ Disable</button>
                     </div>
-                    <div id="mic-permission-message" class="permission-status pending">Click 'Request Mic' to enable neighbor listening</div>
                 </div>
             </div>
 
-            <!-- Pillar Mic Section (shown for pillars) -->
-            <div id="pillar-mic-section" style="display: none;">
-                <div class="status-row" style="flex-direction: column; align-items: stretch;">
-                    <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
-                        <span class="label">Mic permission:</span>
-                        <span class="value" id="pillar-mic-status">🔇 Not needed</span>
+            <!-- Detection Panel -->
+            <div class="detection-panel">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 15px;">
+                    <span style="color: #00ffcc; font-weight: bold;">🎵 Received Data</span>
+                    <span id="frame-complete" style="color: #ffcc00;">Waiting...</span>
+                </div>
+
+                <div class="detection-grid" id="bitGrid">
+                    <!-- 16 bits go here -->
+                </div>
+
+                <div class="modulation-meter">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                        <span>🎵 Warble Confidence</span>
+                        <span id="confidence-value" style="color: #ffcc00;">0%</span>
                     </div>
-                    <div class="permission-status granted" style="text-align: center;">
-                        🏛️ Pillars are sound sources only - they don't need microphones
+                    <div class="meter-bar">
+                        <div class="meter-fill" id="confidence-meter" style="width: 0%;"></div>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; margin-top: 10px; font-size: 0.8rem;">
+                        <span>Vibrato: <span id="detected-rate">---</span> Hz</span>
+                        <span>Depth: <span id="detected-depth">---</span> Hz</span>
                     </div>
                 </div>
             </div>
 
             <!-- Audio Status -->
             <div class="status-row">
-                <span class="label">Audio context state:</span>
+                <span class="label">Audio context:</span>
                 <span class="value" id="audio-state">uninitialized</span>
             </div>
-            <div class="status-row">
-                <span class="label">Audio primed:</span>
-                <span class="value" id="audio-status">pending...</span>
-            </div>
+
+            <!-- Visualizer -->
+            <canvas id="visualizer" class="visualizer"></canvas>
 
             <!-- Control Buttons -->
-            <div class="button-container">
-                <button id="prime-audio-btn" class="action-button">🔊 Prime Audio</button>
-                <button id="check-audio-btn" class="action-button secondary">🔍 Check Audio</button>
-                <button id="reset-btn" class="action-button danger">🔄 Reset</button>
+            <div style="display: flex; gap: 10px; margin: 10px 0;">
+                <button id="prime-audio-btn" class="secondary">🔊 Prime Audio</button>
+                <button id="reset-btn" class="danger">🔄 Reset</button>
             </div>
 
-            <!-- Visual Indicator -->
-            <div class="note-indicator" id="indicator-container">
-                <div id="playing-indicator" class="note-light"></div>
+            <!-- Last Frame -->
+            <div class="status-row">
+                <span class="label">Last received frame:</span>
+                <span class="value" id="last-frame">---</span>
             </div>
-
-            <!-- Timer -->
-            <div id="timer">--:--</div>
-
-            <!-- Test Info -->
-            <div style="margin-top: 10px;">
-                <div class="config-item">
-                    <span class="label">Test duration:</span>
-                    <span class="value" id="test-duration">30s</span>
-                </div>
-                <div class="config-item">
-                    <span class="label">Notes in test:</span>
-                    <span class="value" id="total-notes">--</span>
-                </div>
-                <div class="config-item">
-                    <span class="label">My assigned notes:</span>
-                    <span class="value" id="my-notes">--</span>
-                </div>
-            </div>
-
-            <!-- Debug Info -->
-            <div class="debug-box" id="debug-info">
-                <div>🔊 Click buttons above to initialize audio</div>
+            <div class="status-row">
+                <span class="label">Valid frames:</span>
+                <span class="value" id="frame-count">0</span>
             </div>
 
             <!-- Event Log -->
-            <div id="log"></div>
+            <div id="log" class="log"></div>
         </div>
     </div>
 
@@ -318,62 +279,64 @@
         // Global State
         // ============================================
         let audioCtx = null;
-        let mySeat = null;
-        let isPillar = false;
-        let config = null;
-        let schedule = [];
-        let myNotes = [];
-        let nextNoteIndex = 0;
-        let countdownInterval = null;
-        let pillarInterval = null;
-        let serverOffset = 0;
-
-        // Calibration state
-        let micDelaySamples = [];
-        let speakerDelaySamples = [];
-        let lastPingSent = 0;
-        let calibratedMicDelay = null;
-        let calibratedSpeakerDelay = null;
-
-        // Neighbor state
-        let neighbors = [];
-        let micPermission = false;
-        let listeningActive = false;
-        let audioPrimed = false;
+        let analyser = null;
         let mediaStream = null;
+        let isListening = false;
+        let animationFrame = null;
+        let serverOffset = 0;
         let seatId = null;
+        let isPillar = false;
+        let micPermission = false;
+        let audioPrimed = false;
+
+        // Warble detection parameters (from successful receiver test)
+        const BASE_FLUTE_FREQ = 440;
+        const WARBLE_ENERGY_THRESHOLD = 0.02;
+        const WARBLE_FREQ_BINS = 3;
+        const WARBLE_MIN_CONFIDENCE = 0.6;
+        const WARBLE_LOOKBACK_FRAMES = 15;
+        const WARBLE_COOLDOWN_MS = 200;
+
+        const MIN_WARBLE_DEPTH = 15;
+        const MAX_WARBLE_DEPTH = 80;
+        const MIN_VIBRATO_RATE = 1.5;
+        const MAX_VIBRATO_RATE = 4.5;
+        const MIN_SIGN_CHANGES = 3;
+
+        const NOTE_DURATION = 300;      // ms per note
+        const GAP_DURATION = 50;         // ms gap between notes
+        const FRAME_SIZE = 16;            // 16 bits per frame
+        const FRAME_TIMEOUT = 6000;       // 6 seconds max for full frame
+
+        // Decoder state
+        const STATE_IDLE = 0;
+        const STATE_LISTENING = 1;
+        const STATE_DETECTING = 2;
+        const STATE_COMPLETE = 3;
+
+        let decoderState = STATE_IDLE;
+        let currentBits = new Array(FRAME_SIZE).fill(undefined);
+        let warbleBuffer = [];
+        let validFrameCount = 0;
+        let currentNoteIndex = 0;
+        let lastDetectionTime = 0;
+        let frameStartTime = 0;
+        let frameTimeout = null;
+
+        const FFT_SIZE = 4096;
 
         // ============================================
         // Clock sync
         // ============================================
         db.ref(".info/serverTimeOffset").on("value", snap => {
             serverOffset = snap.val() || 0;
-            updateDebugInfo(`Server offset: ${serverOffset}ms`);
         });
 
         // ============================================
-        // Update debug info
-        // ============================================
-        function updateDebugInfo(message) {
-            const debugDiv = document.getElementById('debug-info');
-            if (message) {
-                debugDiv.innerHTML = `🔊 ${message}<br>` + debugDiv.innerHTML;
-            } else {
-                debugDiv.innerHTML = `
-                    <div>Audio Context: ${audioCtx?.state || 'null'}</div>
-                    <div>Audio Primed: ${audioPrimed}</div>
-                    <div>Mic Permission: ${micPermission}</div>
-                    <div>Is Pillar: ${isPillar}</div>
-                    <div>My Notes: ${myNotes.length}</div>
-                `;
-            }
-        }
-
-        // ============================================
-        // Simple Startup
+        // Initialize
         // ============================================
         window.onload = () => {
-            log("🚀 Device starting up...");
+            log("🚀 Zynth Device starting up...");
 
             // Get seat ID from URL
             const urlParams = new URLSearchParams(window.location.search);
@@ -381,599 +344,572 @@
             isPillar = seatId?.startsWith('PILLAR_') || false;
 
             document.getElementById('seat-label').innerText = seatId || 'No Seat ID';
-            document.getElementById('device-type').innerText = isPillar ? '🏛️ Pillar Device' : '📱 Patron Device';
-            log(`🔍 Device: ${seatId} (${isPillar ? 'pillar' : 'patron'})`);
+            document.getElementById('device-type').innerText = isPillar ? '🏛️ Pillar (Transmit Only)' : '📱 Patron (Receiver)';
 
-            // Show/hide appropriate mic section
             if (isPillar) {
-                document.getElementById('pillar-mic-section').style.display = 'block';
                 document.getElementById('mic-section').style.display = 'none';
-                document.getElementById('pillar-mic-status').innerText = '🔇 Not needed';
+                document.getElementById('status-value').innerText = 'Pillar mode - transmit only';
             } else {
-                document.getElementById('mic-section').style.display = 'block';
-                document.getElementById('pillar-mic-section').style.display = 'none';
+                document.getElementById('status-value').innerText = 'Ready - enable ear';
             }
 
-            // Start listening for conductor immediately
-            listenForConductor();
+            // Initialize bit grid
+            updateBitGrid();
 
-            log("✅ Startup complete. Use buttons above to initialize audio.");
-            updateAudioStateDisplay();
+            // Start listening for frames from conductor
+            listenForFrames();
+
+            log(`✅ Startup complete. Device: ${seatId}`);
         };
 
         // ============================================
-        // Update audio state display
+        // Bit Grid UI
         // ============================================
-        function updateAudioStateDisplay() {
-            const stateEl = document.getElementById('audio-state');
-            if (audioCtx) {
-                stateEl.innerText = audioCtx.state;
-                stateEl.style.color = audioCtx.state === 'running' ? '#00ffcc' : '#ffcc00';
+        function updateBitGrid() {
+            const grid = document.getElementById('bitGrid');
+            grid.innerHTML = '';
+
+            for (let i = 0; i < FRAME_SIZE; i++) {
+                const bit = currentBits[i];
+                const cell = document.createElement('div');
+                cell.className = 'detection-bit';
+
+                if (bit === 1) {
+                    cell.classList.add('detected');
+                    cell.innerText = '1';
+                } else if (bit === 0) {
+                    cell.classList.add('zero');
+                    cell.innerText = '0';
+                } else {
+                    cell.classList.add('pending');
+                    cell.innerText = '?';
+                }
+
+                grid.appendChild(cell);
+            }
+
+            // Update frame status
+            const receivedCount = currentBits.filter(b => b !== undefined).length;
+            if (receivedCount === FRAME_SIZE) {
+                document.getElementById('frame-complete').innerHTML = '✅ Frame Complete';
+                document.getElementById('last-frame').innerText = currentBits.join('');
             } else {
-                stateEl.innerText = 'not created';
-                stateEl.style.color = '#888';
+                document.getElementById('frame-complete').innerHTML = `⏳ ${receivedCount}/16 bits`;
             }
         }
 
         // ============================================
-        // Check Audio Button
+        // Reset decoder
         // ============================================
-        document.getElementById('check-audio-btn').onclick = () => {
-            log(`🔍 Audio check: context=${audioCtx?.state}, primed=${audioPrimed}`);
-            updateDebugInfo();
-            updateAudioStateDisplay();
+        function resetDecoder() {
+            currentBits = new Array(FRAME_SIZE).fill(undefined);
+            currentNoteIndex = 0;
+            decoderState = STATE_IDLE;
+            lastDetectionTime = 0;
 
-            if (audioCtx) {
-                log(`   Sample rate: ${audioCtx.sampleRate}Hz`);
-                log(`   Base latency: ${audioCtx.baseLatency || 0}s`);
-            }
-        };
-
-        // ============================================
-        // Prime Audio Button
-        // ============================================
-        document.getElementById('prime-audio-btn').onclick = async () => {
-            log("👆 Manual prime requested");
-            await primeAudioSystem();
-        };
-
-        // ============================================
-        // Reset Button
-        // ============================================
-        document.getElementById('reset-btn').onclick = () => {
-            log("🔄 Manual reset");
-            if (audioCtx) {
-                audioCtx.close();
-                audioCtx = null;
-            }
-            audioPrimed = false;
-            audioCtx = null;
-            document.getElementById('audio-status').innerText = 'pending...';
-            updateAudioStateDisplay();
-            log("✅ Reset complete. Click 'Prime Audio' to reinitialize.");
-        };
-
-        // ============================================
-        // Manual Mic Request Button
-        // ============================================
-        document.getElementById('request-mic-btn').onclick = async () => {
-            log("👆 Manual mic request");
-            await requestMicrophonePermission();
-        };
-
-        // ============================================
-        // Test Mic Button
-        // ============================================
-        document.getElementById('test-mic-btn').onclick = async () => {
-            log("🔊 Testing microphone...");
-
-            if (!micPermission) {
-                log("❌ Please grant mic permission first");
-                return;
+            if (frameTimeout) {
+                clearTimeout(frameTimeout);
+                frameTimeout = null;
             }
 
-            try {
-                // Ensure audio context is running
-                if (!audioCtx) {
-                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-                }
-                if (audioCtx.state !== 'running') {
-                    await audioCtx.resume();
-                }
-
-                // Create a test tone
-                const oscillator = audioCtx.createOscillator();
-                const gainNode = audioCtx.createGain();
-
-                oscillator.type = 'sine';
-                oscillator.frequency.value = 880; // A5
-
-                gainNode.gain.setValueAtTime(0.2, audioCtx.currentTime);
-                gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.5);
-
-                oscillator.connect(gainNode).connect(audioCtx.destination);
-                oscillator.start();
-                oscillator.stop(audioCtx.currentTime + 0.5);
-
-                log("✅ Test tone played");
-
-            } catch (e) {
-                log(`❌ Test failed: ${e.message}`);
-            }
-        };
-
-        // ============================================
-        // Prime Audio System with Silent Tone
-        // ============================================
-        async function primeAudioSystem() {
-            log("🔊 Priming audio system...");
-            document.getElementById('audio-status').innerText = 'priming...';
-
-            try {
-                // Create audio context if needed
-                if (!audioCtx) {
-                    log("   Creating new AudioContext");
-                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-                }
-
-                log(`   Initial state: ${audioCtx.state}`);
-
-                // Resume if suspended
-                if (audioCtx.state === 'suspended') {
-                    log("   Resuming audio context...");
-                    await audioCtx.resume();
-                    log(`   New state: ${audioCtx.state}`);
-                }
-
-                // Create a silent tone to wake up hardware
-                const oscillator = audioCtx.createOscillator();
-                const gainNode = audioCtx.createGain();
-
-                oscillator.type = 'sine';
-                oscillator.frequency.value = 440;
-
-                // Set volume to 0 (completely silent)
-                gainNode.gain.value = 0;
-
-                oscillator.connect(gainNode).connect(audioCtx.destination);
-
-                // Play the silent tone for 100ms
-                oscillator.start();
-                oscillator.stop(audioCtx.currentTime + 0.1);
-
-                log("🔊 Silent tone played");
-                audioPrimed = true;
-                document.getElementById('audio-status').innerText = '✅ Primed';
-                updateAudioStateDisplay();
-
-                // Suspend to save power (but keep primed)
-                await audioCtx.suspend();
-                log("🔊 Audio context suspended (ready)");
-                updateAudioStateDisplay();
-
-            } catch (e) {
-                log(`❌ Audio priming failed: ${e.message}`);
-                document.getElementById('audio-status').innerText = '❌ Failed';
-                audioPrimed = false;
-            }
+            updateBitGrid();
+            log("🔄 Decoder reset");
         }
 
         // ============================================
-        // Request Microphone Permission
+        // Listen for frames from conductor
         // ============================================
-        async function requestMicrophonePermission() {
+        function listenForFrames() {
+            db.ref('zynth/last_frame').on('value', snap => {
+                const frame = snap.val();
+                if (frame && !isPillar) {
+                    log(`📡 Frame detected from conductor: ${frame.data}`);
+                    // The actual detection happens via microphone
+                    // This just notifies us that a transmission occurred
+                }
+            });
+        }
+
+        // ============================================
+        // Request microphone permission
+        // ============================================
+        async function requestMicrophone() {
+            if (isPillar) return;
+
             log("🎤 Requesting microphone permission...");
             document.getElementById('mic-status').innerText = 'requesting...';
-            updateMicMessage('pending', 'Requesting...');
 
             try {
-                const tempStream = await navigator.mediaDevices.getUserMedia({
+                const stream = await navigator.mediaDevices.getUserMedia({
                     audio: {
                         echoCancellation: false,
                         noiseSuppression: false,
-                        autoGainControl: false
+                        autoGainControl: false,
+                        sampleRate: 44100
                     }
                 });
 
                 micPermission = true;
-                document.getElementById('mic-status').innerText = '✅ Granted';
-                updateMicMessage('granted', 'Microphone ready - neighbors can hear you');
-                log('🎤 Microphone permission granted');
+                document.getElementById('mic-status').innerHTML = '✅ Active';
 
+                // Store stream for later use
                 if (mediaStream) {
                     mediaStream.getTracks().forEach(track => track.stop());
                 }
-                mediaStream = tempStream;
+                mediaStream = stream;
+
+                // Initialize audio context if needed
+                if (!audioCtx) {
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+
+                // Create analyser for detection
+                const source = audioCtx.createMediaStreamSource(stream);
+                analyser = audioCtx.createAnalyser();
+                analyser.fftSize = FFT_SIZE;
+                analyser.smoothingTimeConstant = 0.2;
+                source.connect(analyser);
+
+                if (audioCtx.state === 'suspended') {
+                    await audioCtx.resume();
+                }
+
+                isListening = true;
+                decoderState = STATE_LISTENING;
+                resetDecoder();
+
+                log("✅ Ear activated - listening for warbles");
+                document.getElementById('status-value').innerText = 'Listening...';
+
+                // Start detection loop
+                detectWarble();
+                drawVisualizer();
 
             } catch (err) {
                 micPermission = false;
-                document.getElementById('mic-status').innerText = '❌ Denied';
-                updateMicMessage('denied', 'Permission denied - click to try again');
+                document.getElementById('mic-status').innerHTML = '❌ Denied';
                 log(`🎤 Permission denied: ${err.message}`);
             }
         }
 
         // ============================================
-        // Update mic message
+        // Stop listening
         // ============================================
-        function updateMicMessage(status, message) {
-            const msgDiv = document.getElementById('mic-permission-message');
-            if (msgDiv) {
-                msgDiv.innerText = message;
-                msgDiv.className = `permission-status ${status}`;
+        function stopListening() {
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(track => track.stop());
+                mediaStream = null;
             }
+
+            isListening = false;
+            analyser = null;
+
+            document.getElementById('mic-status').innerHTML = '🔇 Off';
+            document.getElementById('status-value').innerText = 'Ear disabled';
+
+            if (animationFrame) {
+                cancelAnimationFrame(animationFrame);
+                animationFrame = null;
+            }
+
+            resetDecoder();
+            log("⏹️ Stopped listening");
         }
 
         // ============================================
-        // Listen for Conductor
+        // Prime audio (silent warm-up)
         // ============================================
-        function listenForConductor() {
-            log("👂 Listening for conductor signals...");
-            document.getElementById('status-value').innerText = 'Waiting for conductor';
+        async function primeAudio() {
+            log("🔊 Priming audio system...");
 
-            db.ref('synth/current').on('value', async (snap) => {
-                const test = snap.val();
-                if (!test || test.status !== 'ACTIVE') {
-                    document.getElementById('status-value').innerText = 'Waiting for conductor';
-                    stopAllPlayback();
-                    return;
-                }
-
-                log(`🎵 Test found! Starting at ${new Date(test.startTime).toLocaleTimeString()}`);
-                log(`🔊 Audio context state before playback: ${audioCtx?.state || 'null'}`);
-
-                document.getElementById('status-value').innerText = 'Test loaded';
-
-                config = test.config;
-                schedule = test.schedule || [];
-
-                // CRITICAL: Ensure audio context is running
+            try {
                 if (!audioCtx) {
-                    log("⚠️ No audio context - creating one now");
                     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
                 }
 
-                if (audioCtx.state !== 'running') {
-                    log(`⚠️ Audio context ${audioCtx.state} - attempting to resume...`);
-                    try {
-                        await audioCtx.resume();
-                        log(`✅ Audio context now ${audioCtx.state}`);
-                    } catch (e) {
-                        log(`❌ Failed to resume: ${e.message}`);
-                    }
+                if (audioCtx.state === 'suspended') {
+                    await audioCtx.resume();
                 }
 
-                // Find my seat coordinates
-                if (!isPillar) {
-                    mySeat = test.seats.find(s => s.id === seatId);
-                    if (!mySeat) {
-                        log(`❌ Seat ${seatId} not found in configuration`);
-                        document.getElementById('status-value').innerText = 'Seat not found';
-                        return;
-                    }
-                    log(`📍 Seat ${seatId} at (${mySeat.x}, ${mySeat.y})`);
+                // Play silent tone to wake hardware
+                const oscillator = audioCtx.createOscillator();
+                const gainNode = audioCtx.createGain();
 
-                    // Calculate neighbors
-                    calculateNeighbors(test.seats);
-                } else {
-                    mySeat = test.seats.find(s => s.id === seatId);
-                    log(`🏛️ Pillar ${seatId} at (${mySeat.x}, ${mySeat.y})`);
-                }
+                oscillator.frequency.value = 440;
+                gainNode.gain.value = 0; // Silent
 
-                document.getElementById('total-notes').innerText = schedule.length;
+                oscillator.connect(gainNode).connect(audioCtx.destination);
+                oscillator.start();
+                oscillator.stop(audioCtx.currentTime + 0.1);
 
-                // Schedule playback
-                const now = Date.now() + serverOffset;
-                const secondsUntilStart = Math.max(0, (test.startTime - now) / 1000);
+                audioPrimed = true;
+                document.getElementById('audio-state').innerText = audioCtx.state;
+                log("🔊 Audio primed");
 
-                log(`⏱️ Test starts in ${secondsUntilStart.toFixed(1)} seconds`);
+                // Suspend to save power
+                await audioCtx.suspend();
+                document.getElementById('audio-state').innerText = audioCtx.state;
 
-                setTimeout(() => {
-                    log(`🎯 Starting playback now at ${audioCtx.currentTime}`);
-                    if (isPillar) {
-                        startPillarPlayback(config, test.pillar_warbles || [], test.startTime);
-                    } else {
-                        startPatronPlayback(config, schedule, test.startTime);
-                    }
-                    startCountdown(test.startTime + (config?.total_duration_ms || 30000));
-                }, secondsUntilStart * 1000);
-            });
+            } catch (e) {
+                log(`❌ Audio priming failed: ${e.message}`);
+            }
         }
 
         // ============================================
-        // Neighbor calculation
+        // Warble Detection (from working receiver)
         // ============================================
-        function calculateNeighbors(allSeats) {
-            if (!mySeat) return;
+        function detectWarble() {
+            if (!isListening || !analyser || !audioCtx) {
+                requestAnimationFrame(detectWarble);
+                return;
+            }
 
-            neighbors = allSeats.filter(seat =>
-                seat.id !== seatId &&
-                !seat.id.startsWith('PILLAR_') &&
-                distance(mySeat, seat) <= 2.0
-            );
+            const now = Date.now();
 
-            document.getElementById('neighbor-count').innerText = neighbors.length;
-            log(`📍 Found ${neighbors.length} neighbors within 2m`);
+            // Get frequency data
+            const bufferLength = analyser.frequencyBinCount;
+            const dataArray = new Uint8Array(bufferLength);
+            analyser.getByteFrequencyData(dataArray);
 
-            if (neighbors.length > 0) {
-                neighbors.forEach(n => {
-                    const d = distance(mySeat, n).toFixed(2);
-                    log(`   • ${n.id} at ${d}m`);
+            // Convert to float [0,1]
+            const floatData = new Float32Array(bufferLength);
+            for (let i = 0; i < bufferLength; i++) {
+                floatData[i] = dataArray[i] / 255;
+            }
+
+            // Store in buffer for temporal analysis
+            warbleBuffer.push({
+                time: now,
+                data: floatData.slice()
+            });
+
+            if (warbleBuffer.length > WARBLE_LOOKBACK_FRAMES * 2) {
+                warbleBuffer.shift();
+            }
+
+            if (warbleBuffer.length < WARBLE_LOOKBACK_FRAMES) {
+                requestAnimationFrame(detectWarble);
+                return;
+            }
+
+            const recentFrames = warbleBuffer.slice(-WARBLE_LOOKBACK_FRAMES);
+
+            // Calculate frequency bin for base flute tone
+            const nyquist = audioCtx.sampleRate / 2;
+            const binIndex = Math.floor(BASE_FLUTE_FREQ / nyquist * bufferLength);
+
+            if (binIndex < 0 || binIndex >= bufferLength) {
+                requestAnimationFrame(detectWarble);
+                return;
+            }
+
+            // Get energy in surrounding bins
+            let energy = 0;
+            let binCount = 0;
+            for (let i = -WARBLE_FREQ_BINS; i <= WARBLE_FREQ_BINS; i++) {
+                const idx = binIndex + i;
+                if (idx >= 0 && idx < bufferLength) {
+                    energy += floatData[idx];
+                    binCount++;
+                }
+            }
+            energy = energy / binCount;
+
+            // Check for note timeout (if we're in DETECTING state)
+            if (decoderState === STATE_DETECTING && currentNoteIndex < FRAME_SIZE) {
+                const timeSinceLastDetection = now - lastDetectionTime;
+
+                // If we've waited too long for next note, assume it's a 0
+                if (timeSinceLastDetection > NOTE_DURATION + GAP_DURATION + 100) {
+                    log(`   Bit ${currentNoteIndex + 1}/16: 0 (timeout)`, 'detection');
+
+                    currentBits[currentNoteIndex] = 0;
+                    updateBitGrid();
+
+                    currentNoteIndex++;
+                    lastDetectionTime = now;
+
+                    if (currentNoteIndex >= FRAME_SIZE) {
+                        completeFrame();
+                    }
+                }
+            }
+
+            if (energy < WARBLE_ENERGY_THRESHOLD) {
+                requestAnimationFrame(detectWarble);
+                return;
+            }
+
+            // Extract frequency peaks
+            const peakFreqs = [];
+            for (let i = 0; i < recentFrames.length; i++) {
+                const frame = recentFrames[i];
+
+                let maxEnergy = 0;
+                let maxIdx = binIndex;
+
+                for (let j = -3; j <= 3; j++) {
+                    const idx = binIndex + j;
+                    if (idx >= 0 && idx < frame.data.length && frame.data[idx] > maxEnergy) {
+                        maxEnergy = frame.data[idx];
+                        maxIdx = idx;
+                    }
+                }
+
+                const peakFreq = (maxIdx / bufferLength) * nyquist;
+                peakFreqs.push(peakFreq);
+            }
+
+            if (peakFreqs.length < 5) {
+                requestAnimationFrame(detectWarble);
+                return;
+            }
+
+            const freqChanges = [];
+            for (let i = 1; i < peakFreqs.length; i++) {
+                freqChanges.push(peakFreqs[i] - peakFreqs[i-1]);
+            }
+
+            // Look for alternating sign changes
+            let signChanges = 0;
+            for (let i = 1; i < freqChanges.length; i++) {
+                if (Math.sign(freqChanges[i]) !== Math.sign(freqChanges[i-1]) &&
+                    Math.abs(freqChanges[i]) > 2) {
+                    signChanges++;
+                }
+            }
+
+            // Calculate frequency range and clamp
+            const rawFreqRange = Math.max(...peakFreqs) - Math.min(...peakFreqs);
+            const freqRange = Math.min(MAX_WARBLE_DEPTH, rawFreqRange);
+
+            // Calculate vibrato rate
+            let zeroCrossings = 0;
+            for (let i = 1; i < peakFreqs.length; i++) {
+                if ((peakFreqs[i] - BASE_FLUTE_FREQ) * (peakFreqs[i-1] - BASE_FLUTE_FREQ) < 0) {
+                    zeroCrossings++;
+                }
+            }
+            const vibratoRate = (zeroCrossings / 2) / (WARBLE_LOOKBACK_FRAMES * 23 / 1000);
+
+            // Update display
+            document.getElementById('detected-rate').innerText = vibratoRate.toFixed(1);
+            document.getElementById('detected-depth').innerText = Math.round(freqRange);
+
+            // Calculate confidence score
+            let modulationScore = 0;
+
+            if (freqRange >= MIN_WARBLE_DEPTH && freqRange <= MAX_WARBLE_DEPTH) {
+                modulationScore += 0.4;
+            }
+            if (signChanges >= MIN_SIGN_CHANGES) {
+                modulationScore += 0.3;
+            }
+            if (vibratoRate >= MIN_VIBRATO_RATE && vibratoRate <= MAX_VIBRATO_RATE) {
+                modulationScore += 0.3;
+            }
+            if (energy > WARBLE_ENERGY_THRESHOLD * 2) {
+                modulationScore += 0.1;
+            }
+
+            modulationScore = Math.min(1, modulationScore);
+
+            document.getElementById('confidence-meter').style.width = (modulationScore * 100) + '%';
+            document.getElementById('confidence-value').innerText = Math.round(modulationScore * 100) + '%';
+
+            // If warble detected with good confidence
+            if (modulationScore >= WARBLE_MIN_CONFIDENCE) {
+                if (now - lastDetectionTime > WARBLE_COOLDOWN_MS) {
+                    processWarbleDetection(modulationScore);
+                    lastDetectionTime = now;
+                }
+            }
+
+            requestAnimationFrame(detectWarble);
+        }
+
+        // ============================================
+        // Process a detected warble
+        // ============================================
+        function processWarbleDetection(confidence) {
+            // Flash visualizer
+            const canvas = document.getElementById('visualizer');
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#00ffcc';
+            ctx.globalAlpha = 0.3;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.globalAlpha = 1.0;
+
+            switch(decoderState) {
+                case STATE_LISTENING:
+                    // Start of new frame
+                    decoderState = STATE_DETECTING;
+                    currentBits = new Array(FRAME_SIZE).fill(undefined);
+                    currentNoteIndex = 0;
+                    frameStartTime = Date.now();
+
+                    // Set timeout for frame completion
+                    if (frameTimeout) clearTimeout(frameTimeout);
+                    frameTimeout = setTimeout(() => {
+                        if (decoderState === STATE_DETECTING) {
+                            log("⚠️ Frame timeout - resetting");
+                            resetDecoder();
+                            decoderState = STATE_LISTENING;
+                        }
+                    }, FRAME_TIMEOUT);
+
+                    log(`🎯 Frame started! (conf: ${Math.round(confidence*100)}%)`);
+                    // Fall through
+
+                case STATE_DETECTING:
+                    if (currentNoteIndex < FRAME_SIZE) {
+                        currentBits[currentNoteIndex] = 1;
+                        log(`   Bit ${currentNoteIndex + 1}/16: 1 (warble)`);
+
+                        updateBitGrid();
+                        currentNoteIndex++;
+
+                        if (currentNoteIndex >= FRAME_SIZE) {
+                            completeFrame();
+                        }
+                    }
+                    break;
+            }
+        }
+
+        // ============================================
+        // Complete a frame
+        // ============================================
+        function completeFrame() {
+            // Fill any missing bits as 0
+            for (let i = 0; i < FRAME_SIZE; i++) {
+                if (currentBits[i] === undefined) {
+                    currentBits[i] = 0;
+                    log(`   Bit ${i + 1}/16: 0 (filling missing)`);
+                }
+            }
+
+            const frameData = currentBits.join('');
+            document.getElementById('last-frame').innerText = frameData;
+
+            validFrameCount++;
+            document.getElementById('frame-count').innerText = validFrameCount;
+
+            log(`🎯 VALID FRAME: ${frameData}`, 'detection');
+
+            decoderState = STATE_COMPLETE;
+
+            // Auto-reset after 2 seconds
+            setTimeout(() => {
+                if (decoderState === STATE_COMPLETE) {
+                    resetDecoder();
+                    decoderState = STATE_LISTENING;
+                }
+            }, 2000);
+
+            // Report back to Firebase
+            if (seatId && !isPillar) {
+                db.ref(`zynth/detections/${seatId}`).push({
+                    frame: frameData,
+                    timestamp: Date.now() + serverOffset,
+                    confidence: parseInt(document.getElementById('confidence-value').innerText)
                 });
             }
         }
 
-        function distance(a, b) {
-            return Math.sqrt(Math.pow(a.x - b.x, 2) + Math.pow(a.y - b.y, 2));
-        }
-
         // ============================================
-        // Pillar playback
+        // Visualizer
         // ============================================
-        function startPillarPlayback(config, pillarWarbles, startTime) {
-            log('🏛️ Starting pillar pattern');
-            log(`🔊 Audio context at start: ${audioCtx.state}`);
-
-            document.getElementById('status-value').innerText = 'Playing pillar pattern';
-
-            const pillarPattern = config.pillar_patterns[seatId];
-            if (!pillarPattern) {
-                log(`❌ No pattern for pillar ${seatId}`);
+        function drawVisualizer() {
+            if (!analyser || !isListening) {
+                requestAnimationFrame(drawVisualizer);
                 return;
             }
 
-            const now = Date.now() + serverOffset;
-            const audioStartTime = audioCtx.currentTime + Math.max(0, (startTime - now) / 1000);
+            const canvas = document.getElementById('visualizer');
+            const ctx = canvas.getContext('2d');
+            const width = canvas.width;
+            const height = canvas.height;
 
-            log(`📅 First note at audio time: ${audioStartTime.toFixed(3)}s`);
+            const dataArray = new Uint8Array(analyser.frequencyBinCount);
+            analyser.getByteFrequencyData(dataArray);
 
-            schedulePillarLoop(pillarPattern, audioStartTime, 2.0);
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, width, height);
 
-            if (pillarWarbles && Array.isArray(pillarWarbles)) {
-                pillarWarbles.forEach(warble => {
-                    if (warble.pillar === seatId) {
-                        const warbleTime = audioStartTime + warble.time_sec;
-                        schedulePillarWarble(warble.frequency, warbleTime, config.warble);
-                        log(`📢 Pillar warble at ${warble.time_sec}s (${warble.frequency}Hz)`);
-                    }
-                });
-            }
-        }
+            // Draw frequency spectrum
+            ctx.fillStyle = '#00ffcc';
+            const barWidth = 3;
 
-        function schedulePillarLoop(pattern, startTime, beatDuration) {
-            let nextTime = startTime;
-            let beatIndex = 0;
+            const startBin = Math.floor(200 / (audioCtx.sampleRate / FFT_SIZE));
+            const endBin = Math.floor(800 / (audioCtx.sampleRate / FFT_SIZE));
 
-            function scheduleNext() {
-                // Check if audio context is still running
-                if (audioCtx.state !== 'running') {
-                    log(`⚠️ Audio context ${audioCtx.state} - stopping pillar loop`);
-                    return;
-                }
+            for (let i = startBin; i < endBin; i++) {
+                if (i >= dataArray.length) break;
 
-                const note = pattern[beatIndex % pattern.length];
-                if (note !== 'rest') {
-                    playTone(note, nextTime, 450, false, true);
-                }
+                const x = (i - startBin) * (barWidth + 1);
+                const value = dataArray[i];
+                const barHeight = (value / 255) * height;
 
-                nextTime += beatDuration;
-                beatIndex++;
-
-                const timeToNext = (nextTime - audioCtx.currentTime) * 1000;
-                if (timeToNext > 0 && timeToNext < 5000) {
-                    setTimeout(scheduleNext, Math.min(timeToNext, 100));
-                }
+                ctx.fillRect(x, height - barHeight, barWidth, barHeight);
             }
 
-            // Start first note
-            setTimeout(scheduleNext, Math.max(0, (startTime - audioCtx.currentTime) * 1000));
-        }
+            // Highlight base frequency
+            const baseBin = Math.floor(BASE_FLUTE_FREQ / (audioCtx.sampleRate / FFT_SIZE));
+            if (baseBin >= startBin && baseBin < endBin) {
+                const x = (baseBin - startBin) * (barWidth + 1);
+                ctx.fillStyle = '#ff3366';
+                ctx.fillRect(x, 0, barWidth, height);
+            }
 
-        function schedulePillarWarble(freq, time, warbleConfig) {
-            if (!warbleConfig) return;
-
-            const delayMs = Math.max(0, (time - audioCtx.currentTime) * 1000);
-            setTimeout(() => {
-                if (audioCtx.state !== 'running') return;
-
-                const osc = audioCtx.createOscillator();
-                const gain = audioCtx.createGain();
-
-                osc.type = 'sine';
-                osc.frequency.value = freq;
-
-                const modOsc = audioCtx.createOscillator();
-                modOsc.frequency.value = warbleConfig.rate_hz || 2.5;
-
-                const modGain = audioCtx.createGain();
-                modGain.gain.value = warbleConfig.depth_hz || 30;
-                modOsc.connect(modGain).connect(osc.frequency);
-
-                gain.gain.setValueAtTime(0, audioCtx.currentTime);
-                gain.gain.linearRampToValueAtTime(0.5, audioCtx.currentTime + 0.01);
-                gain.gain.setValueAtTime(0.5, audioCtx.currentTime + 0.45);
-                gain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.5);
-
-                osc.connect(gain).connect(audioCtx.destination);
-
-                modOsc.start();
-                osc.start();
-
-                modOsc.stop(audioCtx.currentTime + 0.5);
-                osc.stop(audioCtx.currentTime + 0.5);
-
-                log(`📢 Warble played at ${freq}Hz`);
-            }, delayMs);
+            requestAnimationFrame(drawVisualizer);
         }
 
         // ============================================
-        // Patron playback
+        // Logging
         // ============================================
-        function startPatronPlayback(config, schedule, startTime) {
-            log('🎵 Starting patron pattern');
-            log(`🔊 Audio context at start: ${audioCtx.state}`);
-
-            myNotes = schedule.filter(item => item.device_id === seatId);
-            document.getElementById('my-notes').innerText = myNotes.length;
-
-            if (myNotes.length === 0) {
-                log(`❌ No notes assigned to ${seatId}`);
-                document.getElementById('status-value').innerText = 'No notes assigned';
-                return;
-            }
-
-            log(`📋 I have ${myNotes.length} notes to play`);
-
-            const now = Date.now() + serverOffset;
-
-            myNotes.forEach(note => {
-                const noteTime = audioCtx.currentTime + ((note.absolute_time_ms - now) / 1000);
-                if (noteTime > audioCtx.currentTime) {
-                    scheduleNote(note, noteTime, config);
-                }
-            });
-
-            document.getElementById('status-value').innerText = `Playing ${myNotes.length} notes`;
-        }
-
-        function scheduleNote(note, time, config) {
-            const duration = note.duration_ms / 1000;
-            const warbleConfig = config.warble;
-
-            const delayMs = Math.max(0, (time - audioCtx.currentTime) * 1000);
-
-            setTimeout(() => {
-                // Flash indicator
-                const indicator = document.getElementById('playing-indicator');
-                indicator.classList.add('playing');
-                setTimeout(() => indicator.classList.remove('playing'), 100);
-
-                // Record that we're about to play
-                lastPingSent = note.absolute_time_ms;
-
-                // Play the note
-                playTone(note.pitch, audioCtx.currentTime, duration, warbleConfig?.enabled || false, false);
-
-                log(`🎵 Played ${note.pitch} at ${new Date().toLocaleTimeString()}`);
-
-            }, delayMs);
-
-            updateNextNote();
-        }
-
-        function playTone(pitch, startTime, duration, addWarble, isPillar = false) {
-            if (audioCtx.state !== 'running') {
-                log(`❌ Cannot play - audio context ${audioCtx.state}`);
-                return;
-            }
-
-            const freq = pitchToFreq(pitch);
-            const osc = audioCtx.createOscillator();
-            const gain = audioCtx.createGain();
-
-            osc.type = 'sine';
-            osc.frequency.value = freq;
-
-            if (addWarble && !isPillar) {
-                const modOsc = audioCtx.createOscillator();
-                modOsc.frequency.value = 2.5;
-
-                const modGain = audioCtx.createGain();
-                modGain.gain.value = 30;
-                modOsc.connect(modGain).connect(osc.frequency);
-
-                modOsc.start(startTime);
-                modOsc.stop(startTime + duration);
-            }
-
-            // Smooth envelope
-            gain.gain.setValueAtTime(0, startTime);
-            gain.gain.linearRampToValueAtTime(0.3, startTime + 0.01);
-            gain.gain.setValueAtTime(0.3, startTime + duration - 0.01);
-            gain.gain.linearRampToValueAtTime(0, startTime + duration);
-
-            osc.connect(gain).connect(audioCtx.destination);
-            osc.start(startTime);
-            osc.stop(startTime + duration);
-        }
-
-        // ============================================
-        // Utility functions
-        // ============================================
-        function pitchToFreq(pitch) {
-            const notes = {'C':0, 'C#':1, 'D':2, 'D#':3, 'E':4, 'F':5, 'F#':6, 'G':7, 'G#':8, 'A':9, 'A#':10, 'B':11};
-            const flatToSharp = {'Db':'C#', 'Eb':'D#', 'Gb':'F#', 'Ab':'G#', 'Bb':'A#'};
-
-            const match = pitch.match(/([A-G][b#]?)(\d+)/);
-            if (!match) return 440;
-
-            let note = match[1];
-            const octave = parseInt(match[2]);
-
-            if (flatToSharp[note]) note = flatToSharp[note];
-
-            const semitone = notes[note] + (octave - 4) * 12;
-            return 440 * Math.pow(2, (semitone - 9) / 12);
-        }
-
-        function updateNextNote() {
-            const now = Date.now() + serverOffset;
-            const nextNote = myNotes.find(n => n.absolute_time_ms > now);
-
-            if (nextNote) {
-                const secondsUntil = ((nextNote.absolute_time_ms - now) / 1000).toFixed(1);
-                document.getElementById('next-note').innerText = `${nextNote.pitch} in ${secondsUntil}s`;
-            } else {
-                document.getElementById('next-note').innerText = '--';
-            }
-        }
-
-        function startCountdown(endTime) {
-            if (countdownInterval) clearInterval(countdownInterval);
-
-            countdownInterval = setInterval(() => {
-                const now = Date.now() + serverOffset;
-                const remaining = Math.max(0, endTime - now) / 1000;
-
-                const minutes = Math.floor(remaining / 60);
-                const seconds = Math.floor(remaining % 60);
-                document.getElementById('timer').innerText =
-                    `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-
-                updateNextNote();
-            }, 100);
-        }
-
-        function stopAllPlayback() {
-            if (countdownInterval) {
-                clearInterval(countdownInterval);
-                countdownInterval = null;
-            }
-            listeningActive = false;
-            document.getElementById('status-value').innerText = 'Waiting for conductor';
-            document.getElementById('timer').innerText = '--:--';
-        }
-
-        function log(message) {
+        function log(message, type = 'normal') {
             const logDiv = document.getElementById('log');
             const timestamp = new Date().toLocaleTimeString();
+            const className = type === 'detection' ? 'log-entry detection' : 'log-entry';
             logDiv.innerHTML = `<div>[${timestamp}] ${message}</div>` + logDiv.innerHTML;
-            if (logDiv.children.length > 30) logDiv.removeChild(logDiv.lastChild);
-            console.log(message); // Also log to browser console
+            if (logDiv.children.length > 20) logDiv.removeChild(logDiv.lastChild);
+            console.log(message);
         }
+
+        // ============================================
+        // Button handlers
+        // ============================================
+        document.getElementById('request-mic-btn').onclick = requestMicrophone;
+        document.getElementById('stop-mic-btn').onclick = stopListening;
+        document.getElementById('prime-audio-btn').onclick = primeAudio;
+
+        document.getElementById('reset-btn').onclick = () => {
+            if (audioCtx) {
+                audioCtx.close();
+                audioCtx = null;
+            }
+            audioPrimed = false;
+            stopListening();
+            resetDecoder();
+            document.getElementById('audio-state').innerText = 'closed';
+            log("🔄 System reset");
+        };
 
         // ============================================
         // Cleanup
         // ============================================
         window.addEventListener('beforeunload', () => {
-            if (countdownInterval) clearInterval(countdownInterval);
-            if (pillarInterval) clearInterval(pillarInterval);
             if (mediaStream) {
                 mediaStream.getTracks().forEach(track => track.stop());
             }
-            if (audioCtx) audioCtx.close();
+            if (animationFrame) {
+                cancelAnimationFrame(animationFrame);
+            }
+            if (audioCtx) {
+                audioCtx.close();
+            }
         });
-
     </script>
 </body>
 </html>
