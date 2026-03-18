@@ -523,25 +523,82 @@
                 timestamp: now
             });
 
-            // Play each note with its jitter
-            for (let i = 0; i < allNotes.length; i++) {
-                const note = allNotes[i];
-                const noteTime = startTime + note.offset;
-
-                // Update progress
-                const progress = ((i + 1) / allNotes.length) * 100;
-                document.getElementById('progressFill').style.width = progress + '%';
-
-                await playNote(note, jitters[i], i, noteTime);
+            // Initialize audio context
+            if (!audioCtx) {
+                audioCtx = new AudioContext();
+            }
+            if (audioCtx.state === 'suspended') {
+                await audioCtx.resume();
             }
 
-            log('✅ 30-second sequence complete');
+            // Schedule ALL notes at once
+            const sampleRate = audioCtx.sampleRate;
+            const activeSources = [];
 
-            // Clear the test sequence
-            await db.ref('zynth/jitter_test').remove();
+            for (let i = 0; i < allNotes.length; i++) {
+                const note = allNotes[i];
+                const jitter = jitters[i];
+                const noteTime = startTime + note.offset + jitter; // Apply jitter to actual play time
 
-            document.getElementById('progressFill').style.width = '0%';
-            isPlaying = false;
+                // Calculate delay until this note should play
+                const delayMs = Math.max(0, noteTime - (Date.now() + serverOffset));
+
+                // Schedule this note
+                setTimeout(() => {
+                    const samples = Math.floor(sampleRate * (note.duration / 1000));
+
+                    // Generate sine wave with envelope
+                    const buffer = audioCtx.createBuffer(1, samples, sampleRate);
+                    const data = buffer.getChannelData(0);
+
+                    for (let j = 0; j < samples; j++) {
+                        const t = j / samples;
+                        let envelope = 1;
+                        if (t < 0.01) envelope = t / 0.01;
+                        if (t > 0.99) envelope = (1 - t) / 0.01;
+
+                        data[j] = Math.sin(2 * Math.PI * note.freq * j / sampleRate) * envelope * 0.5;
+                    }
+
+                    const source = audioCtx.createBufferSource();
+                    source.buffer = buffer;
+                    source.connect(audioCtx.destination);
+
+                    source.start();
+                    activeSources.push(source);
+
+                    const logTime = Date.now() + serverOffset;
+                    log(`🔊 Note ${i}: ${note.pitch} at ${new Date(logTime).toLocaleTimeString()}.${String(logTime % 1000).padStart(3, '0')} (jitter: ${jitter > 0 ? '+' : ''}${jitter}ms)`);
+
+                    source.onended = () => {
+                        log(`✅ Note ${i} ended`);
+                        // Remove from active sources
+                        const index = activeSources.indexOf(source);
+                        if (index > -1) activeSources.splice(index, 1);
+                    };
+
+                }, delayMs);
+
+                // Update progress (just for UI, doesn't affect playback)
+                setTimeout(() => {
+                    const progress = ((i + 1) / allNotes.length) * 100;
+                    document.getElementById('progressFill').style.width = progress + '%';
+                }, delayMs);
+            }
+
+            // Calculate when the last note should end
+            const lastNote = allNotes[allNotes.length - 1];
+            const lastJitter = jitters[allNotes.length - 1];
+            const lastNoteEnd = startTime + lastNote.offset + lastJitter + lastNote.duration;
+            const timeUntilEnd = lastNoteEnd - (Date.now() + serverOffset);
+
+            // Mark sequence complete after last note ends
+            setTimeout(() => {
+                log('✅ 30-second sequence complete');
+                db.ref('zynth/jitter_test').remove();
+                document.getElementById('progressFill').style.width = '0%';
+                isPlaying = false;
+            }, Math.max(0, timeUntilEnd + 1000));
         }
 
         function stopSequence() {
