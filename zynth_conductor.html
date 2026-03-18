@@ -204,6 +204,7 @@
     </div>
 
     <script>
+        // ========== FIREBASE CONFIG ==========
         const firebaseConfig = {
             apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
             authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
@@ -213,7 +214,7 @@
         firebase.initializeApp(firebaseConfig);
         const db = firebase.database();
 
-        // Audio state
+        // ========== GLOBAL VARIABLES ==========
         let audioCtx = null;
         let audioBuffer = null;
         let serverOffset = 0;
@@ -229,9 +230,38 @@
         // MP3 URL
         const MP3_URL = "https://static.wixstatic.com/mp3/9178d1_f151780a64db4af297d38519c1b2b825.mp3";
 
+        // ========== HELPER FUNCTIONS ==========
+        function log(message) {
+            const logDiv = document.getElementById('log');
+            if (!logDiv) return;
+            const timestamp = new Date().toLocaleTimeString();
+            logDiv.innerHTML = `<div>[${timestamp}] ${message}</div>` + logDiv.innerHTML;
+            console.log(message);
+        }
+
+        function copyLog() {
+            const logDiv = document.getElementById('log');
+            const range = document.createRange();
+            range.selectNodeContents(logDiv);
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(range);
+
+            try {
+                document.execCommand('copy');
+                log('📋 Log copied to clipboard');
+            } catch (err) {
+                console.error('Copy failed:', err);
+            }
+
+            selection.removeAllRanges();
+        }
+
+        // ========== FIREBASE LISTENERS ==========
         // Clock sync
         db.ref(".info/serverTimeOffset").on("value", snap => {
             serverOffset = snap.val() || 0;
+            log(`⏱️ Server offset: ${serverOffset}ms`);
         });
 
         // Connection status
@@ -241,9 +271,11 @@
             if (snap.val()) {
                 statusEl.className = 'firebase-status connected';
                 textEl.innerText = 'Firebase Connected';
+                log('🔌 Firebase connected');
             } else {
                 statusEl.className = 'firebase-status disconnected';
                 textEl.innerText = 'Firebase Disconnected';
+                log('🔌 Firebase disconnected');
             }
         });
 
@@ -256,7 +288,7 @@
             }
         });
 
-        // Load MP3 file
+        // ========== AUDIO FUNCTIONS ==========
         async function loadMP3() {
             try {
                 document.getElementById('audioStatus').innerHTML = '⏳ Loading MP3 file...';
@@ -277,31 +309,14 @@
             }
         }
 
-        // Jitter slider
+        // ========== JITTER CONTROL ==========
         let maxJitter = 200;
         document.getElementById('jitterSlider').addEventListener('input', (e) => {
             maxJitter = parseInt(e.target.value);
             document.getElementById('jitterValue').innerText = maxJitter + ' ms';
         });
 
-        function copyLog() {
-            const logDiv = document.getElementById('log');
-            const range = document.createRange();
-            range.selectNodeContents(logDiv);
-            const selection = window.getSelection();
-            selection.removeAllRanges();
-            selection.addRange(range);
-
-            try {
-                document.execCommand('copy');
-                log('📋 Log copied to clipboard');
-            } catch (err) {
-                console.error('Copy failed:', err);
-            }
-
-            selection.removeAllRanges();
-        }
-
+        // ========== PLAYBACK FUNCTION ==========
         async function playNote() {
             if (isPlaying) {
                 log('⚠️ Already playing');
@@ -334,14 +349,14 @@
             // Send GO signal to Firebase
             await db.ref('zynth/single_note_test').set({
                 status: 'ACTIVE',
-                scheduledWallTime: scheduledWallTime,  // When the sequence starts
+                scheduledWallTime: scheduledWallTime,
                 note: {
                     index: 0,
                     pitch: firstNote.pitch,
-                    offset: firstNote.offset,  // Offset into MP3
+                    offset: firstNote.offset,
                     duration: firstNote.duration,
                     jitter: jitter,
-                    expectedPlayTime: notePlayTime  // When the note should actually play
+                    expectedPlayTime: notePlayTime
                 },
                 timestamp: now
             });
@@ -368,26 +383,26 @@
                 source.onended = () => {
                     log(`✅ Note ended`);
                     isPlaying = false;
+
+                    // Clear the test
+                    db.ref('zynth/single_note_test').remove();
                 };
 
             }, delayMs);
         }
 
-        function log(message) {
-            const logDiv = document.getElementById('log');
-            const timestamp = new Date().toLocaleTimeString();
-            logDiv.innerHTML = `<div>[${timestamp}] ${message}</div>` + logDiv.innerHTML;
-            console.log(message);
-        }
+        // ========== INITIALIZATION ==========
+        window.onload = () => {
+            // Set up button handlers
+            document.getElementById('playBtn').onclick = playNote;
+            document.getElementById('copyLogBtn').onclick = copyLog;
 
-        // Initialize - load MP3
-        loadMP3();
+            // Load MP3
+            loadMP3();
 
-        document.getElementById('playBtn').onclick = playNote;
-        document.getElementById('copyLogBtn').onclick = copyLog;
-
-        log('🎵 Single MP3 Note Test with Feedback ready');
-        log('🎯 First note: G4 at 302ms offset');
+            log('🎵 Single MP3 Note Test with Feedback ready');
+            log('🎯 First note: G4 at 302ms offset');
+        };
     </script>
 </body>
 </html>
