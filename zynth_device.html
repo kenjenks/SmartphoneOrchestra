@@ -262,62 +262,98 @@
             document.getElementById('energyValue').innerText = energy.toFixed(3);
             document.getElementById('energyMeter').style.width = (energy * 100) + '%';
 
-            // Store in history
-            energyHistory.push({ time: now, energy });
-            if (energyHistory.length > 100) energyHistory.shift();
+            // RAISED THRESHOLD - was 0.02, now 0.05
+            const ENERGY_THRESHOLD = 0.05;
+
+            // MINIMUM TIME BETWEEN NOTES - 2 seconds
+            const MIN_TIME_BETWEEN_NOTES = 2000;
+
+            // MAX NOTE DURATION - 2 seconds (in case it gets stuck)
+            const MAX_NOTE_DURATION = 2000;
 
             // Simple state machine for note detection
             if (!isNoteActive && energy > ENERGY_THRESHOLD) {
-                // Note started
-                isNoteActive = true;
-                noteStartTime = now;
-                document.getElementById('timingDisplay').innerText = '🔴 NOTE ACTIVE';
-                log(`🔊 NOTE ONSET at ${new Date(noteStartTime).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
+                // Check if enough time has passed since last note
+                const timeSinceLastNote = now - (detectedNotes.length > 0 ? detectedNotes[detectedNotes.length - 1].start : 0);
 
-            } else if (isNoteActive && energy < ENERGY_THRESHOLD) {
-                // Check if it's really the end (not just a dip)
-                const timeSinceStart = now - noteStartTime;
-
-                // Look ahead to see if energy comes back
-                let futureEnergy = 0;
-                const checkSamples = 5;
-                for (let i = 0; i < checkSamples; i++) {
-                    // This is simplified - in reality you'd check future frames
-                    futureEnergy += energy;
+                if (timeSinceLastNote > MIN_TIME_BETWEEN_NOTES) {
+                    // Note started
+                    isNoteActive = true;
+                    noteStartTime = now;
+                    document.getElementById('timingDisplay').innerText = '🔴 NOTE ACTIVE';
+                    log(`🔊 NOTE ONSET at ${new Date(noteStartTime).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')} (energy: ${energy.toFixed(3)})`);
+                } else {
+                    log(`⚠️ Ignoring detection - too soon after last note (${timeSinceLastNote}ms)`);
                 }
 
-                if (timeSinceStart > MIN_NOTE_DURATION) {
-                    // Note ended
+            } else if (isNoteActive) {
+                // Check if note has been active too long (stuck detection)
+                const noteDuration = now - noteStartTime;
+
+                if (noteDuration > MAX_NOTE_DURATION) {
+                    // Force end the note
                     isNoteActive = false;
-                    const noteDuration = now - noteStartTime;
+                    document.getElementById('timingDisplay').innerText = `⚠️ TIMEOUT ${noteDuration}ms`;
+                    log(`⚠️ Note timeout after ${noteDuration}ms`);
 
                     detectedNotes.push({
                         start: noteStartTime,
                         end: now,
-                        duration: noteDuration
+                        duration: noteDuration,
+                        forced: true
                     });
 
                     noteCount++;
-
-                    document.getElementById('timingDisplay').innerText = `✅ ${noteDuration}ms`;
-                    document.getElementById('lastOnset').innerText = new Date(noteStartTime).toLocaleTimeString() +
-                        `.${String(noteStartTime % 1000).padStart(3, '0')}`;
-                    document.getElementById('lastOffset').innerText = new Date(now).toLocaleTimeString() +
-                        `.${String(now % 1000).padStart(3, '0')}`;
-                    document.getElementById('lastDuration').innerText = noteDuration + ' ms';
                     document.getElementById('noteCount').innerText = noteCount;
 
-                    log(`✅ NOTE ENDED - duration: ${noteDuration}ms`);
+                } else if (energy < ENERGY_THRESHOLD) {
+                    // Check if it's really the end (look at recent history)
+                    let recentLowEnergy = true;
+                    const historyToCheck = 5; // Check last 5 samples
 
-                    // Report to Firebase
-                    db.ref('timing_tests').push({
-                        start: noteStartTime,
-                        end: now,
-                        duration: noteDuration,
-                        timestamp: now
-                    });
+                    for (let i = Math.max(0, energyHistory.length - historyToCheck); i < energyHistory.length; i++) {
+                        if (energyHistory[i] && energyHistory[i].energy > ENERGY_THRESHOLD) {
+                            recentLowEnergy = false;
+                            break;
+                        }
+                    }
+
+                    if (recentLowEnergy && noteDuration > MIN_NOTE_DURATION) {
+                        // Note ended
+                        isNoteActive = false;
+
+                        detectedNotes.push({
+                            start: noteStartTime,
+                            end: now,
+                            duration: noteDuration
+                        });
+
+                        noteCount++;
+
+                        document.getElementById('timingDisplay').innerText = `✅ ${noteDuration}ms`;
+                        document.getElementById('lastOnset').innerText = new Date(noteStartTime).toLocaleTimeString() +
+                            `.${String(noteStartTime % 1000).padStart(3, '0')}`;
+                        document.getElementById('lastOffset').innerText = new Date(now).toLocaleTimeString() +
+                            `.${String(now % 1000).padStart(3, '0')}`;
+                        document.getElementById('lastDuration').innerText = noteDuration + ' ms';
+                        document.getElementById('noteCount').innerText = noteCount;
+
+                        log(`✅ NOTE ENDED - duration: ${noteDuration}ms`);
+
+                        // Report to Firebase
+                        db.ref('timing_tests').push({
+                            start: noteStartTime,
+                            end: now,
+                            duration: noteDuration,
+                            timestamp: now
+                        });
+                    }
                 }
             }
+
+            // Store in history (keep last 50 samples)
+            energyHistory.push({ time: now, energy });
+            if (energyHistory.length > 50) energyHistory.shift();
 
             requestAnimationFrame(detectNote);
         }
