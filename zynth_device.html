@@ -79,6 +79,10 @@
             margin: 10px 0;
             width: 100%;
         }
+        button.danger {
+            background: #600;
+            color: #fff;
+        }
         .log {
             background: #000;
             padding: 10px;
@@ -108,7 +112,7 @@
         </div>
 
         <button id="enableBtn">🎤 Enable Mic</button>
-        <button id="disableBtn" style="background:#600;">⏹️ Disable</button>
+        <button id="disableBtn" class="danger">⏹️ Disable</button>
 
         <div class="timing-display" id="timingDisplay">
             ---
@@ -122,6 +126,11 @@
             <div class="meter-bar">
                 <div class="meter-fill" id="energyMeter"></div>
             </div>
+        </div>
+
+        <div class="status-row">
+            <span class="label">Dominant frequency:</span>
+            <span class="value" id="dominantFreq">--- Hz</span>
         </div>
 
         <canvas id="visualizer"></canvas>
@@ -167,11 +176,11 @@
         // Timing detection state
         let isNoteActive = false;
         let noteStartTime = 0;
-        let lastEnergy = 0;
         let energyHistory = [];
-        const ENERGY_THRESHOLD = 0.02;
+        const ENERGY_THRESHOLD = 0.08;  // Raised threshold
         const MIN_NOTE_DURATION = 100; // ms
-        const SILENCE_TIMEOUT = 200; // ms
+        const MIN_TIME_BETWEEN_NOTES = 2000; // 2 seconds between notes
+        const MAX_NOTE_DURATION = 2000; // Max note length
         const TARGET_FREQ = 440; // A4
 
         // Statistics
@@ -242,118 +251,155 @@
             const dataArray = new Uint8Array(bufferLength);
             analyser.getByteFrequencyData(dataArray);
 
-            // Calculate energy at target frequency (440Hz)
             const nyquist = audioCtx.sampleRate / 2;
-            const binIndex = Math.floor(TARGET_FREQ / nyquist * bufferLength);
 
-            // Look at bin and neighbors
-            let energy = 0;
-            let binCount = 0;
-            for (let i = -2; i <= 2; i++) {
-                const idx = binIndex + i;
-                if (idx >= 0 && idx < bufferLength) {
-                    energy += dataArray[idx] / 255;
-                    binCount++;
+            // Define flute frequency range (A3 to C6)
+            const FLUTE_RANGE = {
+                min: 220,  // A3
+                max: 1046  // C6
+            };
+
+            // Only scan bins within flute frequency range for dominant frequency
+            const minBin = Math.floor(FLUTE_RANGE.min / nyquist * bufferLength);
+            const maxBin = Math.ceil(FLUTE_RANGE.max / nyquist * bufferLength);
+
+            // Find the actual dominant frequency WITHIN FLUTE RANGE
+            let maxVal = 0;
+            let maxIdx = minBin;
+            for (let i = minBin; i < maxBin && i < bufferLength; i++) {
+                if (dataArray[i] > maxVal) {
+                    maxVal = dataArray[i];
+                    maxIdx = i;
                 }
             }
-            energy /= binCount;
+            const dominantFreq = (maxIdx / bufferLength) * nyquist;
+            document.getElementById('dominantFreq').innerText = Math.round(dominantFreq) + ' Hz';
 
-            // Update meter
-            document.getElementById('energyValue').innerText = energy.toFixed(3);
-            document.getElementById('energyMeter').style.width = (energy * 100) + '%';
+            // Calculate energy at target frequency (440Hz) - WITHIN FLUTE RANGE
+            const binIndex = Math.floor(TARGET_FREQ / nyquist * bufferLength);
 
-            // RAISED THRESHOLD - was 0.02, now 0.05
-            const ENERGY_THRESHOLD = 0.05;
+            // Make sure binIndex is within flute range
+            if (binIndex >= minBin && binIndex <= maxBin) {
+                // Only look at ±1 bin
+                let energy = 0;
+                let binCount = 0;
+                for (let i = -1; i <= 1; i++) {
+                    const idx = binIndex + i;
+                    if (idx >= minBin && idx <= maxBin && idx >= 0 && idx < bufferLength) {
+                        energy += dataArray[idx] / 255;
+                        binCount++;
+                    }
+                }
+                energy = binCount > 0 ? energy / binCount : 0;
 
-            // MINIMUM TIME BETWEEN NOTES - 2 seconds
-            const MIN_TIME_BETWEEN_NOTES = 2000;
+                // Update meter
+                document.getElementById('energyValue').innerText = energy.toFixed(3);
+                document.getElementById('energyMeter').style.width = (energy * 100) + '%';
 
-            // MAX NOTE DURATION - 2 seconds (in case it gets stuck)
-            const MAX_NOTE_DURATION = 2000;
-
-            // Simple state machine for note detection
-            if (!isNoteActive && energy > ENERGY_THRESHOLD) {
-                // Check if enough time has passed since last note
-                const timeSinceLastNote = now - (detectedNotes.length > 0 ? detectedNotes[detectedNotes.length - 1].start : 0);
-
-                if (timeSinceLastNote > MIN_TIME_BETWEEN_NOTES) {
-                    // Note started
-                    isNoteActive = true;
-                    noteStartTime = now;
-                    document.getElementById('timingDisplay').innerText = '🔴 NOTE ACTIVE';
-                    log(`🔊 NOTE ONSET at ${new Date(noteStartTime).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')} (energy: ${energy.toFixed(3)})`);
-                } else {
-                    log(`⚠️ Ignoring detection - too soon after last note (${timeSinceLastNote}ms)`);
+                // Log if we see significant energy at frequencies outside flute range
+                if (maxVal/255 > 0.1) {
+                    // Check if the max was outside flute range
+                    let outsideRangeEnergy = 0;
+                    for (let i = 0; i < minBin; i++) {
+                        outsideRangeEnergy = Math.max(outsideRangeEnergy, dataArray[i] / 255);
+                    }
+                    for (let i = maxBin; i < bufferLength; i++) {
+                        outsideRangeEnergy = Math.max(outsideRangeEnergy, dataArray[i] / 255);
+                    }
+                    if (outsideRangeEnergy > energy * 1.5) {
+                        console.log(`⚠️ Strong signal outside flute range: ${(outsideRangeEnergy).toFixed(3)}`);
+                    }
                 }
 
-            } else if (isNoteActive) {
-                // Check if note has been active too long (stuck detection)
-                const noteDuration = now - noteStartTime;
+                // Simple state machine for note detection
+                if (!isNoteActive && energy > ENERGY_THRESHOLD) {
+                    // Check if enough time has passed since last note
+                    const timeSinceLastNote = now - (detectedNotes.length > 0 ? detectedNotes[detectedNotes.length - 1].start : 0);
 
-                if (noteDuration > MAX_NOTE_DURATION) {
-                    // Force end the note
-                    isNoteActive = false;
-                    document.getElementById('timingDisplay').innerText = `⚠️ TIMEOUT ${noteDuration}ms`;
-                    log(`⚠️ Note timeout after ${noteDuration}ms`);
-
-                    detectedNotes.push({
-                        start: noteStartTime,
-                        end: now,
-                        duration: noteDuration,
-                        forced: true
-                    });
-
-                    noteCount++;
-                    document.getElementById('noteCount').innerText = noteCount;
-
-                } else if (energy < ENERGY_THRESHOLD) {
-                    // Check if it's really the end (look at recent history)
-                    let recentLowEnergy = true;
-                    const historyToCheck = 5; // Check last 5 samples
-
-                    for (let i = Math.max(0, energyHistory.length - historyToCheck); i < energyHistory.length; i++) {
-                        if (energyHistory[i] && energyHistory[i].energy > ENERGY_THRESHOLD) {
-                            recentLowEnergy = false;
-                            break;
+                    if (timeSinceLastNote > MIN_TIME_BETWEEN_NOTES) {
+                        // Also check that the dominant frequency is close to 440Hz
+                        if (Math.abs(dominantFreq - TARGET_FREQ) < 50) {
+                            // Note started
+                            isNoteActive = true;
+                            noteStartTime = now;
+                            document.getElementById('timingDisplay').innerText = '🔴 NOTE ACTIVE';
+                            log(`🔊 NOTE ONSET at ${new Date(noteStartTime).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')} (energy: ${energy.toFixed(3)}, freq: ${Math.round(dominantFreq)}Hz)`);
+                        } else {
+                            log(`⚠️ Ignoring detection - wrong frequency (${Math.round(dominantFreq)}Hz)`);
                         }
+                    } else {
+                        log(`⚠️ Ignoring detection - too soon after last note (${timeSinceLastNote}ms)`);
                     }
 
-                    if (recentLowEnergy && noteDuration > MIN_NOTE_DURATION) {
-                        // Note ended
+                } else if (isNoteActive) {
+                    // Check if note has been active too long (stuck detection)
+                    const noteDuration = now - noteStartTime;
+
+                    if (noteDuration > MAX_NOTE_DURATION) {
+                        // Force end the note
                         isNoteActive = false;
+                        document.getElementById('timingDisplay').innerText = `⚠️ TIMEOUT ${noteDuration}ms`;
+                        log(`⚠️ Note timeout after ${noteDuration}ms`);
 
                         detectedNotes.push({
                             start: noteStartTime,
                             end: now,
-                            duration: noteDuration
+                            duration: noteDuration,
+                            forced: true
                         });
 
                         noteCount++;
-
-                        document.getElementById('timingDisplay').innerText = `✅ ${noteDuration}ms`;
-                        document.getElementById('lastOnset').innerText = new Date(noteStartTime).toLocaleTimeString() +
-                            `.${String(noteStartTime % 1000).padStart(3, '0')}`;
-                        document.getElementById('lastOffset').innerText = new Date(now).toLocaleTimeString() +
-                            `.${String(now % 1000).padStart(3, '0')}`;
-                        document.getElementById('lastDuration').innerText = noteDuration + ' ms';
                         document.getElementById('noteCount').innerText = noteCount;
 
-                        log(`✅ NOTE ENDED - duration: ${noteDuration}ms`);
+                    } else if (energy < ENERGY_THRESHOLD) {
+                        // Check if it's really the end (look at recent history)
+                        let recentLowEnergy = true;
+                        const historyToCheck = 5; // Check last 5 samples
 
-                        // Report to Firebase
-                        db.ref('timing_tests').push({
-                            start: noteStartTime,
-                            end: now,
-                            duration: noteDuration,
-                            timestamp: now
-                        });
+                        for (let i = Math.max(0, energyHistory.length - historyToCheck); i < energyHistory.length; i++) {
+                            if (energyHistory[i] && energyHistory[i].energy > ENERGY_THRESHOLD) {
+                                recentLowEnergy = false;
+                                break;
+                            }
+                        }
+
+                        if (recentLowEnergy && noteDuration > MIN_NOTE_DURATION) {
+                            // Note ended
+                            isNoteActive = false;
+
+                            detectedNotes.push({
+                                start: noteStartTime,
+                                end: now,
+                                duration: noteDuration
+                            });
+
+                            noteCount++;
+
+                            document.getElementById('timingDisplay').innerText = `✅ ${noteDuration}ms`;
+                            document.getElementById('lastOnset').innerText = new Date(noteStartTime).toLocaleTimeString() +
+                                `.${String(noteStartTime % 1000).padStart(3, '0')}`;
+                            document.getElementById('lastOffset').innerText = new Date(now).toLocaleTimeString() +
+                                `.${String(now % 1000).padStart(3, '0')}`;
+                            document.getElementById('lastDuration').innerText = noteDuration + ' ms';
+                            document.getElementById('noteCount').innerText = noteCount;
+
+                            log(`✅ NOTE ENDED - duration: ${noteDuration}ms`);
+
+                            // Report to Firebase
+                            db.ref('timing_tests').push({
+                                start: noteStartTime,
+                                end: now,
+                                duration: noteDuration,
+                                timestamp: now
+                            });
+                        }
                     }
                 }
-            }
 
-            // Store in history (keep last 50 samples)
-            energyHistory.push({ time: now, energy });
-            if (energyHistory.length > 50) energyHistory.shift();
+                // Store in history (keep last 50 samples)
+                energyHistory.push({ time: now, energy });
+                if (energyHistory.length > 50) energyHistory.shift();
+            }
 
             requestAnimationFrame(detectNote);
         }
