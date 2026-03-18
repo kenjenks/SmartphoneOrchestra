@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zynth Device - Note Tracking Detector</title>
+    <title>Zynth Device - Note Timing Tester</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <style>
@@ -17,14 +17,21 @@
         }
         h1 {
             color: #00ccff;
-            border-bottom: 1px solid #333;
-            padding-bottom: 10px;
         }
         .panel {
             background: #252525;
-            border: 1px solid #333;
             border-radius: 8px;
             padding: 20px;
+            margin: 20px 0;
+        }
+        .timing-display {
+            font-family: monospace;
+            font-size: 2rem;
+            text-align: center;
+            color: #00ccff;
+            background: #000;
+            padding: 20px;
+            border-radius: 8px;
             margin: 20px 0;
         }
         .status-row {
@@ -34,7 +41,6 @@
             padding: 10px;
             background: #000;
             border-radius: 8px;
-            font-family: monospace;
         }
         .label {
             color: #888;
@@ -43,129 +49,24 @@
             color: #00ccff;
             font-weight: bold;
         }
-        .detection-panel {
-            background: #0a0a0a;
-            border: 2px solid #00ccff;
-            border-radius: 12px;
-            padding: 20px;
-            margin: 15px 0;
-        }
-        .note-indicator {
-            width: 100%;
-            height: 40px;
-            background: #000;
-            border-radius: 20px;
-            margin: 15px 0;
-            position: relative;
-            overflow: hidden;
-        }
-        .note-active {
-            position: absolute;
-            height: 100%;
-            background: #00ccff;
-            width: 0%;
-            transition: width 0.1s;
-        }
-        .note-frequency {
-            position: absolute;
-            width: 100%;
-            text-align: center;
-            line-height: 40px;
-            color: #fff;
-            font-weight: bold;
-            text-shadow: 0 0 5px #000;
-        }
-        .pattern-visualization {
-            display: flex;
-            gap: 15px;
-            margin: 20px 0;
-            justify-content: center;
-        }
-        .pattern-dot {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            background: #333;
-            transition: all 0.2s;
-        }
-        .pattern-dot.detected {
-            background: #00ccff;
-            box-shadow: 0 0 30px #00ccff;
-            animation: pulse 0.3s ease;
-        }
-        .pattern-dot.expected {
-            border: 2px solid #ffaa00;
-        }
-        @keyframes pulse {
-            0% { transform: scale(1); }
-            50% { transform: scale(1.3); }
-            100% { transform: scale(1); }
-        }
-        .timeline {
-            background: #000;
-            border-radius: 8px;
-            padding: 20px;
-            margin: 15px 0;
-            position: relative;
-            height: 80px;
-        }
-        .timeline-marker {
-            position: absolute;
-            width: 6px;
-            transform: translateX(-50%);
-        }
-        .timeline-marker.expected {
-            background: #666;
-            height: 20px;
-            bottom: 30px;
-        }
-        .timeline-marker.detected {
-            background: #00ccff;
-            height: 40px;
-            bottom: 10px;
-            z-index: 2;
-            box-shadow: 0 0 10px #00ccff;
-        }
-        .stats-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr 1fr 1fr;
-            gap: 10px;
-            margin: 15px 0;
-        }
-        .stat-box {
-            background: #1a1a1a;
-            padding: 10px;
-            border-radius: 4px;
-            text-align: center;
-        }
-        .stat-label {
-            color: #888;
-            font-size: 0.7rem;
-        }
-        .stat-number {
-            color: #ffaa00;
-            font-size: 1.2rem;
-            font-weight: bold;
-        }
         .energy-meter {
             background: #000;
-            border-radius: 8px;
             padding: 15px;
+            border-radius: 8px;
             margin: 15px 0;
-            border-left: 4px solid #00ccff;
         }
         .meter-bar {
             width: 100%;
-            height: 10px;
+            height: 20px;
             background: #333;
-            border-radius: 5px;
+            border-radius: 10px;
             overflow: hidden;
         }
         .meter-fill {
             height: 100%;
             background: #00ccff;
             width: 0%;
-            transition: width 0.1s;
+            transition: width 0.05s;
         }
         button {
             background: #00ccff;
@@ -173,149 +74,89 @@
             border: none;
             padding: 15px 30px;
             font-size: 1.2rem;
-            font-weight: bold;
             border-radius: 50px;
             cursor: pointer;
-            margin: 10px;
+            margin: 10px 0;
             width: 100%;
-        }
-        button:hover {
-            background: #33ddff;
-        }
-        button.secondary {
-            background: #442288;
-            color: #fff;
-        }
-        .visualizer {
-            width: 100%;
-            height: 80px;
-            background: #000;
-            border-radius: 8px;
-            margin: 15px 0;
-            border: 1px solid #333;
         }
         .log {
-            font-family: monospace;
-            font-size: 11px;
             background: #000;
             padding: 10px;
             border-radius: 4px;
             height: 200px;
             overflow-y: auto;
+            font-family: monospace;
+            font-size: 11px;
             color: #888;
-            margin-top: 20px;
         }
-        .success-badge {
-            background: #00cc00;
-            color: #000;
-            padding: 4px 12px;
-            border-radius: 20px;
-            font-weight: bold;
-            display: inline-block;
-        }
-        .raw-energy {
-            font-size: 1.5rem;
-            font-weight: bold;
-            color: #00ccff;
-            text-align: center;
-            margin: 10px 0;
+        canvas {
+            width: 100%;
+            height: 100px;
+            background: #000;
+            border-radius: 8px;
+            margin: 15px 0;
         }
     </style>
 </head>
 <body>
-    <h1>🎵 Zynth Device - Note Tracking Detector</h1>
+    <h1>⏱️ Zynth Device - Note Timing Tester</h1>
 
     <div class="panel">
         <div class="status-row">
             <span class="label">Status:</span>
-            <span class="value" id="status-value">Ready</span>
+            <span class="value" id="status">Ready</span>
         </div>
 
-        <button id="enableMicBtn" class="secondary">🎤 Enable Detection</button>
-        <button id="disableMicBtn" style="background:#600;">⏹️ Disable</button>
+        <button id="enableBtn">🎤 Enable Mic</button>
+        <button id="disableBtn" style="background:#600;">⏹️ Disable</button>
 
-        <div class="detection-panel">
-            <div style="display: flex; justify-content: space-between; margin-bottom: 15px;">
-                <span style="color: #00ccff;">🎵 Note Tracking</span>
-                <span id="detectionStatus" class="status-badge">Waiting for sound</span>
+        <div class="timing-display" id="timingDisplay">
+            ---
+        </div>
+
+        <div class="energy-meter">
+            <div style="display: flex; justify-content: space-between;">
+                <span>Energy at 440Hz</span>
+                <span id="energyValue">0.00</span>
             </div>
-
-            <div class="note-indicator">
-                <div class="note-active" id="noteActiveBar"></div>
-                <div class="note-frequency" id="noteFrequency">--- Hz</div>
-            </div>
-
-            <div class="raw-energy" id="rawEnergy">0.00</div>
-
-            <div class="pattern-visualization" id="patternDots">
-                <!-- Generated by JavaScript -->
-            </div>
-
-            <div class="timeline" id="timeline">
-                <!-- Timeline markers will be added here -->
-            </div>
-
-            <div class="stats-grid">
-                <div class="stat-box">
-                    <div class="stat-label">Energy</div>
-                    <div class="stat-number" id="energyValue">0.00</div>
-                </div>
-                <div class="stat-box">
-                    <div class="stat-label">Freq</div>
-                    <div class="stat-number" id="peakFreq">---</div>
-                </div>
-                <div class="stat-box">
-                    <div class="stat-label">Warbles</div>
-                    <div class="stat-number" id="warbleCount">0/3</div>
-                </div>
-                <div class="stat-box">
-                    <div class="stat-label">Patterns</div>
-                    <div class="stat-number" id="patternCount">0</div>
-                </div>
-            </div>
-
-            <div class="energy-meter">
-                <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
-                    <span>Signal Energy</span>
-                    <span id="energyLevel">0.00</span>
-                </div>
-                <div class="meter-bar">
-                    <div class="meter-fill" id="energyMeter"></div>
-                </div>
+            <div class="meter-bar">
+                <div class="meter-fill" id="energyMeter"></div>
             </div>
         </div>
+
+        <canvas id="visualizer"></canvas>
 
         <div class="status-row">
-            <span class="label">Last valid pattern:</span>
-            <span class="value" id="lastPattern">---</span>
+            <span class="label">Last onset:</span>
+            <span class="value" id="lastOnset">---</span>
         </div>
         <div class="status-row">
-            <span class="label">Pattern intervals:</span>
-            <span class="value" id="lastIntervals">---</span>
+            <span class="label">Last offset:</span>
+            <span class="value" id="lastOffset">---</span>
         </div>
-
-        <canvas id="visualizer" class="visualizer"></canvas>
+        <div class="status-row">
+            <span class="label">Duration:</span>
+            <span class="value" id="lastDuration">---</span>
+        </div>
+        <div class="status-row">
+            <span class="label">Detected notes:</span>
+            <span class="value" id="noteCount">0</span>
+        </div>
 
         <div class="log" id="log"></div>
     </div>
 
     <script>
-        // ============================================
-        // Firebase Configuration
-        // ============================================
         const firebaseConfig = {
             apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
             authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
             databaseURL: "https://smartphoneorchestra-dwt-default-rtdb.firebaseio.com/",
             projectId: "smartphoneorchestra-dwt"
         };
-
         firebase.initializeApp(firebaseConfig);
         const db = firebase.database();
 
-        // ============================================
-        // Global State
-        // ============================================
+        // Audio state
         let audioCtx = null;
         let analyser = null;
         let mediaStream = null;
@@ -323,123 +164,27 @@
         let animationFrame = null;
         let serverOffset = 0;
 
-        // Detection parameters
+        // Timing detection state
+        let isNoteActive = false;
+        let noteStartTime = 0;
+        let lastEnergy = 0;
+        let energyHistory = [];
         const ENERGY_THRESHOLD = 0.02;
-        const NOTE_ENERGY_THRESHOLD = 0.05;  // Energy level to consider a note present
-        const PATTERN_TOLERANCE_MS = 200;
-        const NOTE_TIMEOUT_MS = 5000;
-        const PATTERN_COOLDOWN_MS = 2000;
-        const MIN_NOTE_INTERVAL_MS = 1500;
+        const MIN_NOTE_DURATION = 100; // ms
+        const SILENCE_TIMEOUT = 200; // ms
+        const TARGET_FREQ = 440; // A4
 
+        // Statistics
+        let detectedNotes = [];
+        let noteCount = 0;
+
+        // FFT setup
         const FFT_SIZE = 2048;
 
-        // Flute frequency range (A3 to C6)
-        const FLUTE_RANGE = {
-            min: 220,  // A3
-            max: 1046  // C6
-        };
+        db.ref(".info/serverTimeOffset").on("value", snap => {
+            serverOffset = snap.val() || 0;
+        });
 
-        // Note tracking state
-        let noteTracker = {
-            isActive: false,
-            startTime: 0,
-            baseFrequency: 0,
-            energyHistory: [],
-            warbleTimes: [],
-            silenceStart: null,
-            lastWarbleTime: -1000
-        };
-
-        // Pattern detection state
-        let patternState = {
-            expectedTimes: [300, 600, 900], // Default 101 at 300ms spacing
-            validPatternCount: 0
-        };
-
-        // Cooldown state
-        let cooldownUntil = 0;
-
-        // Current expected values from conductor
-        let currentExpectedFreq = 440;
-
-        // ============================================
-        // UI Setup
-        // ============================================
-        function updatePatternDots(count, detected = 0) {
-            const container = document.getElementById('patternDots');
-            container.innerHTML = '';
-
-            for (let i = 0; i < count; i++) {
-                const dot = document.createElement('div');
-                dot.className = `pattern-dot ${i < detected ? 'detected' : ''}`;
-                container.appendChild(dot);
-            }
-        }
-
-        function updateTimeline(expectedTimes, detectedTimes) {
-            const timeline = document.getElementById('timeline');
-            timeline.innerHTML = '';
-
-            const width = timeline.clientWidth - 40;
-            const maxTime = 3000;
-
-            // Draw expected positions
-            if (expectedTimes && expectedTimes.length) {
-                expectedTimes.forEach(time => {
-                    if (time >= 0 && time <= maxTime) {
-                        const left = (time / maxTime) * width + 20;
-                        const marker = document.createElement('div');
-                        marker.className = 'timeline-marker expected';
-                        marker.style.left = left + 'px';
-                        timeline.appendChild(marker);
-                    }
-                });
-            }
-
-            // Draw detected positions
-            if (detectedTimes && detectedTimes.length) {
-                detectedTimes.forEach(time => {
-                    if (time >= 0 && time <= maxTime) {
-                        const left = (time / maxTime) * width + 20;
-                        const marker = document.createElement('div');
-                        marker.className = 'timeline-marker detected';
-                        marker.style.left = left + 'px';
-                        timeline.appendChild(marker);
-                    }
-                });
-            }
-        }
-
-        // ============================================
-        // Listen for conductor's notes
-        // ============================================
-        function listenForConductor() {
-            db.ref('zynth/loud_pattern').on('value', snap => {
-                const note = snap.val();
-                if (note) {
-                    currentExpectedFreq = note.frequency;
-
-                    if (note.warbleTimes) {
-                        patternState.expectedTimes = note.warbleTimes;
-                    }
-
-                    const timeStr = new Date(note.timestamp).toLocaleTimeString();
-                    log(`📡 Conductor: ${note.frequency}Hz, pattern ${note.pattern} at ${timeStr}`);
-
-                    const warbleCount = note.pattern.split('').filter(b => b === '1').length;
-                    updatePatternDots(warbleCount, 0);
-
-                    if (note.warbleTimes) {
-                        log(`   Expecting warbles at: ${note.warbleTimes.join(', ')}ms`);
-                        updateTimeline(note.warbleTimes, []);
-                    }
-                }
-            });
-        }
-
-        // ============================================
-        // Enable microphone
-        // ============================================
         async function enableMicrophone() {
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({
@@ -451,21 +196,21 @@
                     }
                 });
 
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                audioCtx = new AudioContext();
                 const source = audioCtx.createMediaStreamSource(stream);
                 analyser = audioCtx.createAnalyser();
                 analyser.fftSize = FFT_SIZE;
-                analyser.smoothingTimeConstant = 0.2;
+                analyser.smoothingTimeConstant = 0.1; // Fast response
                 source.connect(analyser);
 
                 if (mediaStream) mediaStream.getTracks().forEach(t => t.stop());
                 mediaStream = stream;
 
                 isListening = true;
-                document.getElementById('status-value').innerText = 'Listening';
-                log("✅ Detection active - tracking notes");
+                document.getElementById('status').innerText = 'Listening';
+                log('✅ Mic enabled - listening for A4 (440Hz)');
 
-                detectPattern();
+                detectNote();
                 drawVisualizer();
 
             } catch (err) {
@@ -480,253 +225,103 @@
             }
             isListening = false;
             analyser = null;
-            document.getElementById('status-value').innerText = 'Ready';
-            log("⏹️ Stopped");
+            document.getElementById('status').innerText = 'Ready';
+            log('⏹️ Stopped');
         }
 
-        // ============================================
-        // Pattern Detection with Note Tracking
-        // ============================================
-        function detectPattern() {
+        function detectNote() {
             if (!isListening || !analyser) {
-                requestAnimationFrame(detectPattern);
+                requestAnimationFrame(detectNote);
                 return;
             }
 
-            const now = Date.now();
-
-            // Check cooldown period after successful pattern
-            if (now < cooldownUntil) {
-                requestAnimationFrame(detectPattern);
-                return;
-            }
+            const now = Date.now() + serverOffset;
 
             // Get frequency data
             const bufferLength = analyser.frequencyBinCount;
             const dataArray = new Uint8Array(bufferLength);
             analyser.getByteFrequencyData(dataArray);
 
+            // Calculate energy at target frequency (440Hz)
             const nyquist = audioCtx.sampleRate / 2;
+            const binIndex = Math.floor(TARGET_FREQ / nyquist * bufferLength);
 
-            // Only scan bins within flute frequency range
-            const minBin = Math.floor(FLUTE_RANGE.min / nyquist * bufferLength);
-            const maxBin = Math.ceil(FLUTE_RANGE.max / nyquist * bufferLength);
-
-            // Find dominant frequency and calculate average energy
-            let maxEnergy = 0;
-            let maxEnergyFreq = 0;
-            let maxEnergyIdx = 0;
-            let totalEnergyInRange = 0;
+            // Look at bin and neighbors
+            let energy = 0;
             let binCount = 0;
+            for (let i = -2; i <= 2; i++) {
+                const idx = binIndex + i;
+                if (idx >= 0 && idx < bufferLength) {
+                    energy += dataArray[idx] / 255;
+                    binCount++;
+                }
+            }
+            energy /= binCount;
 
-            for (let i = minBin; i < maxBin && i < bufferLength; i++) {
-                const energy = dataArray[i] / 255;
-                totalEnergyInRange += energy;
-                binCount++;
+            // Update meter
+            document.getElementById('energyValue').innerText = energy.toFixed(3);
+            document.getElementById('energyMeter').style.width = (energy * 100) + '%';
 
-                if (energy > maxEnergy) {
-                    maxEnergy = energy;
-                    maxEnergyIdx = i;
+            // Store in history
+            energyHistory.push({ time: now, energy });
+            if (energyHistory.length > 100) energyHistory.shift();
+
+            // Simple state machine for note detection
+            if (!isNoteActive && energy > ENERGY_THRESHOLD) {
+                // Note started
+                isNoteActive = true;
+                noteStartTime = now;
+                document.getElementById('timingDisplay').innerText = '🔴 NOTE ACTIVE';
+                log(`🔊 NOTE ONSET at ${new Date(noteStartTime).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
+
+            } else if (isNoteActive && energy < ENERGY_THRESHOLD) {
+                // Check if it's really the end (not just a dip)
+                const timeSinceStart = now - noteStartTime;
+
+                // Look ahead to see if energy comes back
+                let futureEnergy = 0;
+                const checkSamples = 5;
+                for (let i = 0; i < checkSamples; i++) {
+                    // This is simplified - in reality you'd check future frames
+                    futureEnergy += energy;
+                }
+
+                if (timeSinceStart > MIN_NOTE_DURATION) {
+                    // Note ended
+                    isNoteActive = false;
+                    const noteDuration = now - noteStartTime;
+
+                    detectedNotes.push({
+                        start: noteStartTime,
+                        end: now,
+                        duration: noteDuration
+                    });
+
+                    noteCount++;
+
+                    document.getElementById('timingDisplay').innerText = `✅ ${noteDuration}ms`;
+                    document.getElementById('lastOnset').innerText = new Date(noteStartTime).toLocaleTimeString() +
+                        `.${String(noteStartTime % 1000).padStart(3, '0')}`;
+                    document.getElementById('lastOffset').innerText = new Date(now).toLocaleTimeString() +
+                        `.${String(now % 1000).padStart(3, '0')}`;
+                    document.getElementById('lastDuration').innerText = noteDuration + ' ms';
+                    document.getElementById('noteCount').innerText = noteCount;
+
+                    log(`✅ NOTE ENDED - duration: ${noteDuration}ms`);
+
+                    // Report to Firebase
+                    db.ref('timing_tests').push({
+                        start: noteStartTime,
+                        end: now,
+                        duration: noteDuration,
+                        timestamp: now
+                    });
                 }
             }
 
-            maxEnergyFreq = (maxEnergyIdx / bufferLength) * nyquist;
-            const avgEnergy = totalEnergyInRange / binCount;
-
-            // Update displays
-            document.getElementById('rawEnergy').innerText = avgEnergy.toFixed(3);
-            document.getElementById('energyValue').innerText = maxEnergy.toFixed(3);
-            document.getElementById('energyLevel').innerText = maxEnergy.toFixed(3);
-            document.getElementById('energyMeter').style.width = (maxEnergy * 100) + '%';
-            document.getElementById('peakFreq').innerText = Math.round(maxEnergyFreq);
-
-            // Update note indicator
-            if (noteTracker.isActive) {
-                const timeInNote = now - noteTracker.startTime;
-                const progress = Math.min(100, (timeInNote / 3000) * 100);
-                document.getElementById('noteActiveBar').style.width = progress + '%';
-                document.getElementById('noteFrequency').innerHTML =
-                    `${Math.round(maxEnergyFreq)} Hz (base: ${Math.round(noteTracker.baseFrequency)} Hz)`;
-            } else {
-                document.getElementById('noteActiveBar').style.width = '0%';
-                document.getElementById('noteFrequency').innerHTML = '--- Hz';
-            }
-
-            // ============================================
-            // NOTE TRACKING LOGIC
-            // ============================================
-
-            const hasSignificantEnergy = avgEnergy > NOTE_ENERGY_THRESHOLD;
-
-            if (!noteTracker.isActive && hasSignificantEnergy) {
-                // Potential note start - verify frequency is in expected range
-                if (Math.abs(maxEnergyFreq - currentExpectedFreq) < 100) {
-                    noteTracker.isActive = true;
-                    noteTracker.startTime = now;
-                    noteTracker.baseFrequency = maxEnergyFreq;
-                    noteTracker.energyHistory = [{ time: 0, energy: maxEnergy, freq: maxEnergyFreq }];
-                    noteTracker.warbleTimes = [];
-                    noteTracker.lastWarbleTime = -1000;
-
-                    log(`🎵 NOTE STARTED - ${Math.round(maxEnergyFreq)}Hz`);
-                    document.getElementById('detectionStatus').innerText = 'NOTE ACTIVE';
-                }
-
-            } else if (noteTracker.isActive) {
-                // We're in a note - track energy and look for warbles
-                const timeInNote = now - noteTracker.startTime;
-
-                // Store energy history (keep last 2 seconds)
-                noteTracker.energyHistory.push({
-                    time: timeInNote,
-                    energy: maxEnergy,
-                    freq: maxEnergyFreq
-                });
-
-                // Trim history
-                while (noteTracker.energyHistory.length > 0 &&
-                       noteTracker.energyHistory[0].time < timeInNote - 2000) {
-                    noteTracker.energyHistory.shift();
-                }
-
-                // Look for warbles (frequency modulation)
-                if (hasSignificantEnergy) {
-                    const freqDiff = Math.abs(maxEnergyFreq - noteTracker.baseFrequency);
-
-                    // A warble is a frequency change of 15-100Hz from the base
-                    if (freqDiff > 15 && freqDiff < 100 &&
-                        timeInNote - noteTracker.lastWarbleTime > 80) {
-
-                        noteTracker.warbleTimes.push(timeInNote);
-                        noteTracker.lastWarbleTime = timeInNote;
-
-                        // Update visualization
-                        updatePatternDots(
-                            patternState.expectedTimes.length,
-                            noteTracker.warbleTimes.length
-                        );
-
-                        updateTimeline(patternState.expectedTimes, noteTracker.warbleTimes);
-
-                        log(`   🔴 WARBLE ${noteTracker.warbleTimes.length} at +${Math.round(timeInNote)}ms (Δfreq: ${Math.round(freqDiff)}Hz)`);
-
-                        document.getElementById('warbleCount').innerText =
-                            `${noteTracker.warbleTimes.length}/${patternState.expectedTimes.length}`;
-
-                        // Check if we have all expected warbles
-                        if (noteTracker.warbleTimes.length === patternState.expectedTimes.length) {
-                            validatePattern();
-                        }
-                    }
-                }
-
-                // Check if note has ended (sustained silence)
-                if (!hasSignificantEnergy) {
-                    if (noteTracker.silenceStart === null) {
-                        noteTracker.silenceStart = now;
-                    } else if (now - noteTracker.silenceStart > 300) {
-                        // Note has ended
-                        const noteDuration = now - noteTracker.startTime;
-
-                        log(`🎵 NOTE ENDED - duration: ${noteDuration}ms, warbles: ${noteTracker.warbleTimes.length}`);
-
-                        // Reset note tracker
-                        noteTracker.isActive = false;
-                        noteTracker.silenceStart = null;
-
-                        // Update UI
-                        document.getElementById('detectionStatus').innerText = 'NOTE ENDED';
-                        setTimeout(() => {
-                            if (!noteTracker.isActive) {
-                                document.getElementById('detectionStatus').innerText = 'Waiting for sound';
-                                updatePatternDots(patternState.expectedTimes.length, 0);
-                                document.getElementById('warbleCount').innerText =
-                                    `0/${patternState.expectedTimes.length}`;
-                            }
-                        }, 1000);
-                    }
-                } else {
-                    // Have energy - reset silence detector
-                    noteTracker.silenceStart = null;
-                }
-            }
-
-            requestAnimationFrame(detectPattern);
+            requestAnimationFrame(detectNote);
         }
 
-        // ============================================
-        // Validate detected pattern
-        // ============================================
-        function validatePattern() {
-            if (!noteTracker.isActive) return;
-
-            const detected = noteTracker.warbleTimes;
-            const expected = patternState.expectedTimes;
-
-            if (detected.length !== expected.length) {
-                log(`❌ Length mismatch: got ${detected.length}, expected ${expected.length}`);
-                return;
-            }
-
-            // Calculate intervals
-            let detectedIntervals = [];
-            let expectedIntervals = [];
-
-            for (let i = 1; i < detected.length; i++) {
-                detectedIntervals.push(detected[i] - detected[i-1]);
-                expectedIntervals.push(expected[i] - expected[i-1]);
-            }
-
-            // Compare intervals with tolerance
-            let patternValid = true;
-            let maxDeviation = 0;
-            let deviations = [];
-
-            for (let i = 0; i < detectedIntervals.length; i++) {
-                const deviation = Math.abs(detectedIntervals[i] - expectedIntervals[i]);
-                deviations.push(deviation);
-                maxDeviation = Math.max(maxDeviation, deviation);
-
-                if (deviation > PATTERN_TOLERANCE_MS) {
-                    patternValid = false;
-                }
-            }
-
-            if (patternValid) {
-                // SUCCESS!
-                cooldownUntil = Date.now() + PATTERN_COOLDOWN_MS;
-                patternState.validPatternCount++;
-
-                document.getElementById('patternCount').innerText = patternState.validPatternCount;
-                document.getElementById('lastPattern').innerText = detected.map(t => `${Math.round(t)}`).join(' → ');
-                document.getElementById('lastIntervals').innerText = detectedIntervals.map(i => `${Math.round(i)}`).join(' → ');
-                document.getElementById('detectionStatus').innerHTML = '<span class="success-badge">✓ PATTERN MATCHED!</span>';
-
-                log(`🎯✅✅✅ VALID PATTERN! Intervals: ${detectedIntervals.map(i => Math.round(i)).join('-')}ms`);
-                log(`   Deviations: ${deviations.map(d => Math.round(d)).join('-')}ms (max: ${Math.round(maxDeviation)}ms)`);
-
-                // Flash all dots
-                const dots = document.querySelectorAll('.pattern-dot');
-                dots.forEach(dot => {
-                    dot.classList.add('detected');
-                    setTimeout(() => dot.classList.remove('detected'), 500);
-                });
-
-                // Reset note tracker for next note
-                noteTracker.isActive = false;
-                noteTracker.warbleTimes = [];
-
-            } else {
-                log(`❌ Pattern rejected - intervals off by up to ${Math.round(maxDeviation)}ms`);
-                log(`   Expected: ${expectedIntervals.map(i => Math.round(i)).join('-')}ms`);
-                log(`   Got: ${detectedIntervals.map(i => Math.round(i)).join('-')}ms`);
-                document.getElementById('detectionStatus').innerText = 'Pattern rejected';
-            }
-        }
-
-        // ============================================
-        // Visualizer
-        // ============================================
         function drawVisualizer() {
             if (!analyser || !isListening) {
                 requestAnimationFrame(drawVisualizer);
@@ -744,30 +339,30 @@
             ctx.fillStyle = '#000';
             ctx.fillRect(0, 0, width, height);
 
+            // Draw spectrum around 440Hz
             ctx.fillStyle = '#00ccff';
-
-            // Draw only flute range
             const nyquist = audioCtx.sampleRate / 2;
-            const minBin = Math.floor(FLUTE_RANGE.min / nyquist * analyser.frequencyBinCount);
-            const maxBin = Math.ceil(FLUTE_RANGE.max / nyquist * analyser.frequencyBinCount);
-            const binCount = maxBin - minBin;
+            const startBin = Math.floor(300 / nyquist * analyser.frequencyBinCount);
+            const endBin = Math.floor(600 / nyquist * analyser.frequencyBinCount);
 
-            for (let i = 0; i < 50; i++) {
-                const binIndex = minBin + Math.floor((i / 50) * binCount);
-                if (binIndex < dataArray.length) {
-                    const x = i * 8;
-                    const value = dataArray[binIndex] / 255;
-                    const barHeight = value * height;
-                    ctx.fillRect(x, height - barHeight, 6, barHeight);
-                }
+            for (let i = startBin; i < endBin; i++) {
+                if (i >= dataArray.length) break;
+                const x = (i - startBin) * (width / (endBin - startBin));
+                const barHeight = (dataArray[i] / 255) * height;
+                ctx.fillRect(x, height - barHeight, 4, barHeight);
+            }
+
+            // Highlight target frequency
+            const targetBin = Math.floor(TARGET_FREQ / nyquist * analyser.frequencyBinCount);
+            if (targetBin >= startBin && targetBin < endBin) {
+                const x = (targetBin - startBin) * (width / (endBin - startBin));
+                ctx.fillStyle = '#ff3366';
+                ctx.fillRect(x, 0, 4, height);
             }
 
             requestAnimationFrame(drawVisualizer);
         }
 
-        // ============================================
-        // Logging
-        // ============================================
         function log(message) {
             const logDiv = document.getElementById('log');
             const timestamp = new Date().toLocaleTimeString();
@@ -775,22 +370,13 @@
             console.log(message);
         }
 
-        // ============================================
-        // Initialize
-        // ============================================
+        document.getElementById('enableBtn').onclick = enableMicrophone;
+        document.getElementById('disableBtn').onclick = disableMicrophone;
+
         window.onload = () => {
-            document.getElementById('enableMicBtn').onclick = enableMicrophone;
-            document.getElementById('disableMicBtn').onclick = disableMicrophone;
-
-            // Initialize pattern display
-            updatePatternDots(3, 0);
-
-            log("🎵 Zynth Device - Note Tracking Detector");
-            log("   • Tracks continuous notes from start to end");
-            log("   • Detects warbles as frequency modulations");
-            log("   • Looking for 3-warble patterns");
-
-            listenForConductor();
+            log('⏱️ Note Timing Tester ready');
+            log('🎯 Listening for A4 (440Hz) notes');
+            log('⚡ Will measure onset, offset, and duration');
         };
     </script>
 </body>
