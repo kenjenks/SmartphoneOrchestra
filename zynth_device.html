@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zynth Device - Note Timing Tester</title>
+    <title>Zynth Device - Two Note Tester</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <style>
@@ -24,9 +24,40 @@
             padding: 20px;
             margin: 20px 0;
         }
+        .note-indicator {
+            display: flex;
+            gap: 20px;
+            margin: 20px 0;
+            justify-content: center;
+        }
+        .note-dot {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            background: #333;
+            transition: all 0.1s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 1.2rem;
+        }
+        .note-dot.active {
+            background: #00ccff;
+            color: #000;
+            box-shadow: 0 0 30px #00ccff;
+        }
+        .note-dot.playing {
+            animation: pulse 0.5s infinite;
+        }
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+            100% { transform: scale(1); }
+        }
         .timing-display {
             font-family: monospace;
-            font-size: 2rem;
+            font-size: 1.5rem;
             text-align: center;
             color: #00ccff;
             background: #000;
@@ -81,10 +112,6 @@
         }
         button.danger {
             background: #600;
-            color: #fff;
-        }
-        button.secondary {
-            background: #442288;
             color: #fff;
         }
         .button-row {
@@ -144,7 +171,7 @@
     </style>
 </head>
 <body>
-    <h1>⏱️ Zynth Device - Note Timing Tester</h1>
+    <h1>⏱️ Zynth Device - Two Note Tester</h1>
 
     <div class="panel">
         <div class="status-row">
@@ -157,8 +184,13 @@
             <button id="disableBtn" class="danger">⏹️ Disable</button>
         </div>
 
+        <div class="note-indicator">
+            <div class="note-dot" id="note0Dot">G4</div>
+            <div class="note-dot" id="note1Dot">A4</div>
+        </div>
+
         <div class="timing-display" id="timingDisplay">
-            ---
+            Waiting for notes...
         </div>
 
         <div class="energy-meter">
@@ -172,28 +204,28 @@
         </div>
 
         <div class="status-row">
-            <span class="label">Dominant frequency (flute range):</span>
-            <span class="value" id="dominantFreq">--- Hz</span>
+            <span class="label">Current frequency:</span>
+            <span class="value" id="currentFreq">--- Hz</span>
         </div>
 
-        <canvas id="visualizer"></canvas>
-
         <div class="status-row">
-            <span class="label">Last onset:</span>
+            <span class="label">Last note:</span>
+            <span class="value" id="lastNote">---</span>
+        </div>
+        <div class="status-row">
+            <span class="label">Onset time:</span>
             <span class="value" id="lastOnset">---</span>
-        </div>
-        <div class="status-row">
-            <span class="label">Last offset:</span>
-            <span class="value" id="lastOffset">---</span>
         </div>
         <div class="status-row">
             <span class="label">Duration:</span>
             <span class="value" id="lastDuration">---</span>
         </div>
         <div class="status-row">
-            <span class="label">Detected notes:</span>
-            <span class="value" id="noteCount">0</span>
+            <span class="label">Notes detected:</span>
+            <span class="value" id="noteCount">0/2</span>
         </div>
+
+        <canvas id="visualizer"></canvas>
 
         <div class="log-container">
             <div class="log-header">
@@ -222,16 +254,22 @@
         let animationFrame = null;
         let serverOffset = 0;
 
+        // Note definitions
+        const notes = [
+            { name: 'G4', freq: 392, duration: 371.5, dot: document.getElementById('note0Dot') },
+            { name: 'A4', freq: 440, duration: 278.6, dot: document.getElementById('note1Dot') }
+        ];
+
         // Timing detection state
         let isNoteActive = false;
         let noteStartTime = 0;
+        let currentNoteIndex = -1;
         let energyHistory = [];
-        const ENERGY_THRESHOLD = 0.15;  // Raised threshold to ignore ambient noise
-        const MIN_NOTE_DURATION = 100; // ms
-        const MIN_TIME_BETWEEN_NOTES = 2000; // 2 seconds between notes
-        const MAX_NOTE_DURATION = 2000; // Max note length
-        const TARGET_FREQ = 440; // A4
-        const FREQ_TOLERANCE = 10; // Only accept frequencies within 10Hz of 440Hz
+        const ENERGY_THRESHOLD = 0.15;
+        const MIN_NOTE_DURATION = 100;
+        const MIN_TIME_BETWEEN_NOTES = 2000;
+        const MAX_NOTE_DURATION = 2000;
+        const FREQ_TOLERANCE = 15; // Hz tolerance for each note
 
         // Statistics
         let detectedNotes = [];
@@ -265,7 +303,7 @@
                 const source = audioCtx.createMediaStreamSource(stream);
                 analyser = audioCtx.createAnalyser();
                 analyser.fftSize = FFT_SIZE;
-                analyser.smoothingTimeConstant = 0.1; // Fast response
+                analyser.smoothingTimeConstant = 0.1;
                 source.connect(analyser);
 
                 if (mediaStream) mediaStream.getTracks().forEach(t => t.stop());
@@ -273,7 +311,13 @@
 
                 isListening = true;
                 document.getElementById('status').innerText = 'Listening';
-                log('✅ Mic enabled - listening for A4 (440Hz)');
+                log('✅ Mic enabled - listening for G4 (392Hz) and A4 (440Hz)');
+
+                // Reset UI
+                notes.forEach(note => note.dot.classList.remove('active', 'playing'));
+                detectedNotes = [];
+                noteCount = 0;
+                document.getElementById('noteCount').innerText = '0/2';
 
                 detectNote();
                 drawVisualizer();
@@ -296,8 +340,6 @@
 
         function copyLog() {
             const logDiv = document.getElementById('log');
-
-            // Create a range and select the log contents
             const range = document.createRange();
             range.selectNodeContents(logDiv);
             const selection = window.getSelection();
@@ -305,15 +347,22 @@
             selection.addRange(range);
 
             try {
-                // Copy to clipboard
                 document.execCommand('copy');
                 log('📋 Log copied to clipboard');
             } catch (err) {
                 console.error('Copy failed:', err);
             }
 
-            // Deselect
             selection.removeAllRanges();
+        }
+
+        function getNoteIndexFromFreq(freq) {
+            for (let i = 0; i < notes.length; i++) {
+                if (Math.abs(freq - notes[i].freq) < FREQ_TOLERANCE) {
+                    return i;
+                }
+            }
+            return -1;
         }
 
         function detectNote() {
@@ -331,11 +380,11 @@
 
             const nyquist = audioCtx.sampleRate / 2;
 
-            // Only scan bins within flute frequency range for dominant frequency
+            // Only scan bins within flute frequency range
             const minBin = Math.floor(FLUTE_RANGE.min / nyquist * bufferLength);
             const maxBin = Math.ceil(FLUTE_RANGE.max / nyquist * bufferLength);
 
-            // Find the actual dominant frequency WITHIN FLUTE RANGE
+            // Find dominant frequency within flute range
             let maxVal = 0;
             let maxIdx = minBin;
             for (let i = minBin; i < maxBin && i < bufferLength; i++) {
@@ -345,119 +394,157 @@
                 }
             }
             const dominantFreq = (maxIdx / bufferLength) * nyquist;
-            document.getElementById('dominantFreq').innerText = Math.round(dominantFreq) + ' Hz';
+            document.getElementById('currentFreq').innerText = Math.round(dominantFreq) + ' Hz';
 
-            // Calculate energy at target frequency (440Hz) - WITHIN FLUTE RANGE
-            const binIndex = Math.floor(TARGET_FREQ / nyquist * bufferLength);
+            // Calculate energy at both target frequencies
+            const binIndex392 = Math.floor(392 / nyquist * bufferLength);
+            const binIndex440 = Math.floor(440 / nyquist * bufferLength);
 
-            // Make sure binIndex is within flute range
-            if (binIndex >= minBin && binIndex <= maxBin) {
-                // Only look at ±1 bin
-                let energy = 0;
-                let binCount = 0;
+            // Get energy at 440Hz (primary for display)
+            let energy440 = 0;
+            let binCount = 0;
+            if (binIndex440 >= minBin && binIndex440 <= maxBin) {
                 for (let i = -1; i <= 1; i++) {
-                    const idx = binIndex + i;
+                    const idx = binIndex440 + i;
                     if (idx >= minBin && idx <= maxBin && idx >= 0 && idx < bufferLength) {
-                        energy += dataArray[idx] / 255;
+                        energy440 += dataArray[idx] / 255;
                         binCount++;
                     }
                 }
-                energy = binCount > 0 ? energy / binCount : 0;
+                energy440 = binCount > 0 ? energy440 / binCount : 0;
+            }
 
-                // Update meter
-                document.getElementById('energyValue').innerText = energy.toFixed(3);
-                document.getElementById('energyMeter').style.width = (energy * 100) + '%';
+            // Get energy at 392Hz for note detection
+            let energy392 = 0;
+            binCount = 0;
+            if (binIndex392 >= minBin && binIndex392 <= maxBin) {
+                for (let i = -1; i <= 1; i++) {
+                    const idx = binIndex392 + i;
+                    if (idx >= minBin && idx <= maxBin && idx >= 0 && idx < bufferLength) {
+                        energy392 += dataArray[idx] / 255;
+                        binCount++;
+                    }
+                }
+                energy392 = binCount > 0 ? energy392 / binCount : 0;
+            }
 
-                // Simple state machine for note detection
-                if (!isNoteActive && energy > ENERGY_THRESHOLD) {
-                    // Check if enough time has passed since last note
-                    const timeSinceLastNote = now - (detectedNotes.length > 0 ? detectedNotes[detectedNotes.length - 1].start : 0);
+            // Update meter with 440Hz energy
+            document.getElementById('energyValue').innerText = energy440.toFixed(3);
+            document.getElementById('energyMeter').style.width = (energy440 * 100) + '%';
+
+            // Simple state machine for note detection
+            if (!isNoteActive) {
+                // Look for either note
+                let detectedFreq = -1;
+                let energy = 0;
+
+                if (energy392 > ENERGY_THRESHOLD && Math.abs(dominantFreq - 392) < FREQ_TOLERANCE) {
+                    detectedFreq = 392;
+                    energy = energy392;
+                } else if (energy440 > ENERGY_THRESHOLD && Math.abs(dominantFreq - 440) < FREQ_TOLERANCE) {
+                    detectedFreq = 440;
+                    energy = energy440;
+                }
+
+                if (detectedFreq > 0) {
+                    const timeSinceLastNote = now - (detectedNotes.length > 0 ? detectedNotes[detectedNotes.length - 1].onset : 0);
 
                     if (timeSinceLastNote > MIN_TIME_BETWEEN_NOTES) {
-                        // TIGHTENED frequency check - only accept within 10Hz of 440
-                        if (Math.abs(dominantFreq - TARGET_FREQ) < FREQ_TOLERANCE) {
-                            // Note started
-                            isNoteActive = true;
-                            noteStartTime = now;
-                            document.getElementById('timingDisplay').innerText = '🔴 NOTE ACTIVE';
-                            log(`🔊 NOTE ONSET at ${new Date(noteStartTime).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')} (energy: ${energy.toFixed(3)}, freq: ${Math.round(dominantFreq)}Hz)`);
-                        }
-                        // Removed the "wrong frequency" log - we don't need to see these
+                        const noteIndex = getNoteIndexFromFreq(detectedFreq);
+
+                        isNoteActive = true;
+                        noteStartTime = now;
+                        currentNoteIndex = noteIndex;
+
+                        // Update UI
+                        notes[noteIndex].dot.classList.add('active', 'playing');
+                        document.getElementById('timingDisplay').innerText = `🔴 ${notes[noteIndex].name}`;
+
+                        log(`🔊 NOTE ${noteIndex} ONSET: ${notes[noteIndex].name} at ${new Date(noteStartTime).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')} (freq: ${Math.round(dominantFreq)}Hz)`);
                     }
-                    // Removed the "too soon" log
+                }
+            } else {
+                // Currently in a note - check if it's still playing
+                const currentFreq = notes[currentNoteIndex].freq;
+                const binIndex = Math.floor(currentFreq / nyquist * bufferLength);
 
-                } else if (isNoteActive) {
-                    // Check if note has been active too long (stuck detection)
-                    const noteDuration = now - noteStartTime;
+                let energy = 0;
+                let binCount = 0;
+                if (binIndex >= minBin && binIndex <= maxBin) {
+                    for (let i = -1; i <= 1; i++) {
+                        const idx = binIndex + i;
+                        if (idx >= minBin && idx <= maxBin && idx >= 0 && idx < bufferLength) {
+                            energy += dataArray[idx] / 255;
+                            binCount++;
+                        }
+                    }
+                    energy = binCount > 0 ? energy / binCount : 0;
+                }
 
-                    if (noteDuration > MAX_NOTE_DURATION) {
-                        // Force end the note
+                const noteDuration = now - noteStartTime;
+
+                if (noteDuration > MAX_NOTE_DURATION) {
+                    // Force end
+                    isNoteActive = false;
+                    notes[currentNoteIndex].dot.classList.remove('active', 'playing');
+                    document.getElementById('timingDisplay').innerText = `⚠️ TIMEOUT ${noteDuration}ms`;
+                    log(`⚠️ Note ${currentNoteIndex} timeout after ${noteDuration}ms`);
+
+                    detectedNotes.push({
+                        index: currentNoteIndex,
+                        onset: noteStartTime,
+                        offset: now,
+                        duration: noteDuration,
+                        forced: true
+                    });
+
+                    noteCount++;
+                    document.getElementById('noteCount').innerText = `${noteCount}/2`;
+                    currentNoteIndex = -1;
+
+                } else if (energy < ENERGY_THRESHOLD) {
+                    // Check history to confirm end
+                    let recentLowEnergy = true;
+                    const historyToCheck = 5;
+
+                    for (let i = Math.max(0, energyHistory.length - historyToCheck); i < energyHistory.length; i++) {
+                        if (energyHistory[i] && energyHistory[i].energy > ENERGY_THRESHOLD) {
+                            recentLowEnergy = false;
+                            break;
+                        }
+                    }
+
+                    if (recentLowEnergy && noteDuration > MIN_NOTE_DURATION) {
+                        // Note ended
                         isNoteActive = false;
-                        document.getElementById('timingDisplay').innerText = `⚠️ TIMEOUT ${noteDuration}ms`;
-                        log(`⚠️ Note timeout after ${noteDuration}ms`);
+                        notes[currentNoteIndex].dot.classList.remove('active', 'playing');
 
                         detectedNotes.push({
-                            start: noteStartTime,
-                            end: now,
-                            duration: noteDuration,
-                            forced: true
+                            index: currentNoteIndex,
+                            onset: noteStartTime,
+                            offset: now,
+                            duration: noteDuration
                         });
 
                         noteCount++;
-                        document.getElementById('noteCount').innerText = noteCount;
 
+                        document.getElementById('timingDisplay').innerText = `✅ ${notes[currentNoteIndex].name} ${Math.round(noteDuration)}ms`;
+                        document.getElementById('lastNote').innerText = notes[currentNoteIndex].name;
+                        document.getElementById('lastOnset').innerText = new Date(noteStartTime).toLocaleTimeString() +
+                            `.${String(noteStartTime % 1000).padStart(3, '0')}`;
+                        document.getElementById('lastDuration').innerText = Math.round(noteDuration) + ' ms';
+                        document.getElementById('noteCount').innerText = `${noteCount}/2`;
+
+                        log(`✅ NOTE ${currentNoteIndex} ENDED: ${notes[currentNoteIndex].name} - duration: ${Math.round(noteDuration)}ms`);
+
+                        currentNoteIndex = -1;
                     }
-                    // ONLY end the note if 440Hz energy drops below threshold
-                    else if (energy < ENERGY_THRESHOLD) {
-                        // Check if it's really the end (look at recent history of 440Hz energy)
-                        let recentLowEnergy = true;
-                        const historyToCheck = 5; // Check last 5 samples
-
-                        for (let i = Math.max(0, energyHistory.length - historyToCheck); i < energyHistory.length; i++) {
-                            if (energyHistory[i] && energyHistory[i].energy > ENERGY_THRESHOLD) {
-                                recentLowEnergy = false;
-                                break;
-                            }
-                        }
-
-                        if (recentLowEnergy && noteDuration > MIN_NOTE_DURATION) {
-                            // Note ended
-                            isNoteActive = false;
-
-                            detectedNotes.push({
-                                start: noteStartTime,
-                                end: now,
-                                duration: noteDuration
-                            });
-
-                            noteCount++;
-
-                            document.getElementById('timingDisplay').innerText = `✅ ${noteDuration}ms`;
-                            document.getElementById('lastOnset').innerText = new Date(noteStartTime).toLocaleTimeString() +
-                                `.${String(noteStartTime % 1000).padStart(3, '0')}`;
-                            document.getElementById('lastOffset').innerText = new Date(now).toLocaleTimeString() +
-                                `.${String(now % 1000).padStart(3, '0')}`;
-                            document.getElementById('lastDuration').innerText = noteDuration + ' ms';
-                            document.getElementById('noteCount').innerText = noteCount;
-
-                            log(`✅ NOTE ENDED - duration: ${noteDuration}ms`);
-
-                            // Report to Firebase
-                            db.ref('timing_tests').push({
-                                start: noteStartTime,
-                                end: now,
-                                duration: noteDuration,
-                                timestamp: now
-                            });
-                        }
-                    }
-                    // If we get here, note is still active - do nothing
                 }
-
-                // Store in history (keep last 50 samples)
-                energyHistory.push({ time: now, energy });
-                if (energyHistory.length > 50) energyHistory.shift();
             }
+
+            // Store energy history (using 440Hz energy as reference)
+            energyHistory.push({ time: now, energy: energy440 });
+            if (energyHistory.length > 50) energyHistory.shift();
 
             requestAnimationFrame(detectNote);
         }
@@ -479,7 +566,7 @@
             ctx.fillStyle = '#000';
             ctx.fillRect(0, 0, width, height);
 
-            // Draw spectrum around 440Hz
+            // Draw spectrum
             ctx.fillStyle = '#00ccff';
             const nyquist = audioCtx.sampleRate / 2;
             const startBin = Math.floor(300 / nyquist * analyser.frequencyBinCount);
@@ -492,13 +579,15 @@
                 ctx.fillRect(x, height - barHeight, 4, barHeight);
             }
 
-            // Highlight target frequency
-            const targetBin = Math.floor(TARGET_FREQ / nyquist * analyser.frequencyBinCount);
-            if (targetBin >= startBin && targetBin < endBin) {
-                const x = (targetBin - startBin) * (width / (endBin - startBin));
-                ctx.fillStyle = '#ff3366';
-                ctx.fillRect(x, 0, 4, height);
-            }
+            // Mark target frequencies
+            const targetBins = [392, 440].map(f => Math.floor(f / nyquist * analyser.frequencyBinCount));
+            targetBins.forEach(bin => {
+                if (bin >= startBin && bin < endBin) {
+                    const x = (bin - startBin) * (width / (endBin - startBin));
+                    ctx.fillStyle = '#ff3366';
+                    ctx.fillRect(x, 0, 4, height);
+                }
+            });
 
             requestAnimationFrame(drawVisualizer);
         }
@@ -515,9 +604,8 @@
         document.getElementById('copyLogBtn').onclick = copyLog;
 
         window.onload = () => {
-            log('⏱️ Note Timing Tester ready');
-            log('🎯 Listening for A4 (440Hz) notes');
-            log('⚡ Will measure onset, offset, and duration');
+            log('⏱️ Two Note Tester ready');
+            log('🎯 Listening for G4 (392Hz) and A4 (440Hz)');
         };
     </script>
 </body>
