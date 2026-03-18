@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zynth Conductor - Two Note Test with GO Signal</title>
+    <title>Zynth Conductor - 30 Second Test with Simulated Delays</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <style>
@@ -12,7 +12,7 @@
             color: #eee;
             font-family: 'Segoe UI', sans-serif;
             padding: 20px;
-            max-width: 600px;
+            max-width: 800px;
             margin: 0 auto;
         }
         h1 {
@@ -24,45 +24,61 @@
             padding: 20px;
             margin: 20px 0;
         }
-        .note-grid {
+        .stats-grid {
             display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 20px;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
             margin: 20px 0;
         }
-        .note-card {
+        .stat-card {
             background: #1a1a1a;
-            border: 2px solid #333;
-            border-radius: 8px;
             padding: 15px;
+            border-radius: 8px;
             text-align: center;
         }
-        .note-card.active {
-            border-color: #00ccff;
-            box-shadow: 0 0 20px #00ccff;
-        }
-        .note-pitch {
-            font-size: 2rem;
-            font-weight: bold;
-            color: #00ccff;
-        }
-        .note-details {
+        .stat-label {
             color: #888;
-            font-size: 0.9rem;
-            margin-top: 10px;
+            font-size: 0.8rem;
         }
-        .status {
-            background: #000;
-            padding: 15px;
-            border-radius: 8px;
-            font-family: monospace;
-            margin: 20px 0;
-            border-left: 4px solid #00ccff;
+        .stat-value {
+            color: #00ccff;
+            font-size: 1.5rem;
+            font-weight: bold;
         }
-        .button-row {
-            display: flex;
-            gap: 10px;
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background: #333;
+            border-radius: 10px;
+            overflow: hidden;
             margin: 20px 0;
+        }
+        .progress-fill {
+            height: 100%;
+            background: #00ccff;
+            width: 0%;
+            transition: width 0.1s;
+        }
+        .note-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.8rem;
+        }
+        .note-table th {
+            background: #1a1a1a;
+            color: #00ccff;
+            padding: 8px;
+            text-align: left;
+        }
+        .note-table td {
+            padding: 8px;
+            border-bottom: 1px solid #333;
+        }
+        .note-table tr.simulated {
+            color: #ffaa00;
+        }
+        .note-table tr.measured {
+            color: #00ccff;
         }
         button {
             background: #00ccff;
@@ -72,14 +88,13 @@
             font-size: 1.2rem;
             border-radius: 50px;
             cursor: pointer;
-            flex: 1;
+            margin: 10px 5px;
         }
         button.danger {
             background: #600;
             color: #fff;
         }
         .log-container {
-            position: relative;
             margin-top: 20px;
         }
         .log-header {
@@ -94,13 +109,7 @@
             border: 1px solid #555;
             padding: 5px 15px;
             border-radius: 15px;
-            font-size: 0.8rem;
             cursor: pointer;
-            width: auto;
-            margin: 0;
-        }
-        .copy-btn:hover {
-            background: #444;
         }
         .log {
             background: #000;
@@ -111,11 +120,6 @@
             font-family: monospace;
             font-size: 11px;
             color: #888;
-            user-select: text;
-            -webkit-user-select: text;
-            cursor: text;
-            white-space: pre-wrap;
-            word-wrap: break-word;
         }
         .firebase-status {
             display: inline-block;
@@ -124,17 +128,12 @@
             border-radius: 50%;
             margin-right: 8px;
         }
-        .connected {
-            background: #00ff00;
-            box-shadow: 0 0 10px #00ff00;
-        }
-        .disconnected {
-            background: #ff0000;
-        }
+        .connected { background: #00ff00; }
+        .disconnected { background: #ff0000; }
     </style>
 </head>
 <body>
-    <h1>🎵 Zynth Conductor - Two Note Test with GO Signal</h1>
+    <h1>🎵 Zynth Conductor - 30 Second Test with Simulated Delays</h1>
 
     <div class="panel">
         <div style="display: flex; align-items: center; margin-bottom: 15px;">
@@ -142,31 +141,51 @@
             <span id="connectionText">Connecting to Firebase...</span>
         </div>
 
-        <div class="note-grid">
-            <div class="note-card" id="note0Card">
-                <div class="note-pitch">G4</div>
-                <div class="note-details">392 Hz · 371.5 ms</div>
-                <div class="note-details">Offset: 301.9 ms</div>
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">Notes in sequence</div>
+                <div class="stat-value" id="totalNotes">0</div>
             </div>
-            <div class="note-card" id="note1Card">
-                <div class="note-pitch">A4</div>
-                <div class="note-details">440 Hz · 278.6 ms</div>
-                <div class="note-details">Offset: 696.6 ms</div>
+            <div class="stat-card">
+                <div class="stat-label">Duration</div>
+                <div class="stat-value" id="totalDuration">0s</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Avg Simulated Delay</div>
+                <div class="stat-value" id="avgDelay">0ms</div>
             </div>
         </div>
 
-        <div class="button-row">
-            <button id="playBtn">🔊 PLAY TWO NOTES</button>
+        <div class="progress-bar">
+            <div class="progress-fill" id="progressFill"></div>
+        </div>
+
+        <div>
+            <button id="playBtn">▶️ PLAY 30 SECOND SEQUENCE</button>
             <button id="stopBtn" class="danger">⏹️ STOP</button>
         </div>
 
-        <div class="status" id="status">
-            ⏸️ Ready
+        <div style="margin-top: 20px;">
+            <h3>Note Schedule (first 10 shown)</h3>
+            <table class="note-table" id="noteTable">
+                <thead>
+                    <tr>
+                        <th>Note</th>
+                        <th>Pitch</th>
+                        <th>Offset (ms)</th>
+                        <th>Duration (ms)</th>
+                        <th>Simulated Delay (ms)</th>
+                    </tr>
+                </thead>
+                <tbody id="noteTableBody">
+                    <!-- Filled by JavaScript -->
+                </tbody>
+            </table>
         </div>
 
         <div class="log-container">
             <div class="log-header">
-                <span style="color: #888;">Event Log</span>
+                <span>Event Log</span>
                 <button class="copy-btn" id="copyLogBtn">📋 COPY LOG</button>
             </div>
             <div class="log" id="log"></div>
@@ -186,12 +205,86 @@
         let audioCtx = null;
         let serverOffset = 0;
         let isPlaying = false;
+        let currentTimeout = null;
+        let scheduledNotes = [];
 
-        // First two notes from tuning_mode.json
-        const notes = [
+        // First 30 seconds of notes from tuning_mode.json (up to ~30,000ms)
+        // Based on the tuning_mode.json data you shared
+        const allNotes = [
             { pitch: 'G4', freq: 392, duration: 371.5, offset: 301.9 },
-            { pitch: 'A4', freq: 440, duration: 278.6, offset: 696.6 }
-        ];
+            { pitch: 'A4', freq: 440, duration: 278.6, offset: 696.6 },
+            { pitch: 'B4', freq: 494, duration: 278.6, offset: 952.0 },
+            { pitch: 'D5', freq: 587, duration: 278.6, offset: 1230.7 },
+            { pitch: 'C5', freq: 523, duration: 278.6, offset: 1532.5 },
+            { pitch: 'C5', freq: 523, duration: 278.6, offset: 1834.4 },
+            { pitch: 'E5', freq: 659, duration: 278.6, offset: 2113.0 },
+            { pitch: 'D5', freq: 587, duration: 278.6, offset: 2391.7 },
+            { pitch: 'D5', freq: 587, duration: 278.6, offset: 2670.3 },
+            { pitch: 'G5', freq: 784, duration: 278.6, offset: 2948.9 },
+            { pitch: 'Gb5', freq: 740, duration: 278.6, offset: 3297.2 },
+            { pitch: 'G5', freq: 784, duration: 278.6, offset: 3552.7 },
+            { pitch: 'D5', freq: 587, duration: 278.6, offset: 3831.3 },
+            { pitch: 'B4', freq: 494, duration: 278.6, offset: 4109.9 },
+            { pitch: 'G4', freq: 392, duration: 278.6, offset: 4411.8 },
+            { pitch: 'A4', freq: 440, duration: 278.6, offset: 4690.4 },
+            { pitch: 'B4', freq: 494, duration: 278.6, offset: 4945.9 },
+            { pitch: 'C5', freq: 523, duration: 278.6, offset: 5294.1 },
+            { pitch: 'D5', freq: 587, duration: 278.6, offset: 5526.3 },
+            { pitch: 'E5', freq: 659, duration: 278.6, offset: 5805.0 },
+            { pitch: 'D5', freq: 587, duration: 278.6, offset: 6106.8 },
+            { pitch: 'C5', freq: 523, duration: 278.6, offset: 6385.5 },
+            { pitch: 'B4', freq: 494, duration: 278.6, offset: 6710.6 },
+            { pitch: 'A4', freq: 440, duration: 278.6, offset: 6966.0 },
+            { pitch: 'B4', freq: 494, duration: 278.6, offset: 7244.6 },
+            { pitch: 'G4', freq: 392, duration: 278.6, offset: 7546.5 },
+            { pitch: 'Gb4', freq: 370, duration: 278.6, offset: 7871.6 },
+            { pitch: 'G4', freq: 392, duration: 278.6, offset: 8150.2 },
+            { pitch: 'A4', freq: 440, duration: 278.6, offset: 8382.4 },
+            { pitch: 'D4', freq: 294, duration: 278.6, offset: 8707.5 },
+            { pitch: 'Gb4', freq: 370, duration: 278.6, offset: 8962.9 },
+            { pitch: 'A4', freq: 440, duration: 278.6, offset: 9264.8 },
+            { pitch: 'C5', freq: 523, duration: 278.6, offset: 9543.4 },
+            { pitch: 'B4', freq: 494, duration: 278.6, offset: 9868.5 },
+            { pitch: 'A4', freq: 440, duration: 278.6, offset: 10100.7 },
+            { pitch: 'B4', freq: 494, duration: 278.6, offset: 10379.3 },
+            { pitch: 'G4', freq: 392, duration: 278.6, offset: 10681.2 },
+            { pitch: 'A4', freq: 440, duration: 278.6, offset: 10983.0 },
+            { pitch: 'B4', freq: 494, duration: 278.6, offset: 11238.5 },
+            { pitch: 'D5', freq: 587, duration: 278.6, offset: 11540.3 },
+            { pitch: 'C5', freq: 523, duration: 278.6, offset: 11819.0 },
+            { pitch: 'C5', freq: 523, duration: 278.6, offset: 12097.6 },
+            { pitch: 'E5', freq: 659, duration: 278.6, offset: 12376.2 },
+            { pitch: 'D5', freq: 587, duration: 278.6, offset: 12678.1 },
+            { pitch: 'D5', freq: 587, duration: 278.6, offset: 12956.7 },
+            { pitch: 'G5', freq: 784, duration: 278.6, offset: 13235.4 },
+            { pitch: 'Gb5', freq: 740, duration: 278.6, offset: 13583.7 },
+            { pitch: 'G5', freq: 784, duration: 278.6, offset: 13839.1 },
+            { pitch: 'D5', freq: 587, duration: 278.6, offset: 14117.7 },
+            { pitch: 'B4', freq: 494, duration: 278.6, offset: 14396.4 },
+            { pitch: 'G4', freq: 392, duration: 278.6, offset: 14698.2 },
+            { pitch: 'A4', freq: 440, duration: 278.6, offset: 14976.9 },
+            { pitch: 'B4', freq: 494, duration: 278.6, offset: 15232.3 },
+            { pitch: 'E4', freq: 330, duration: 185.8, offset: 15580.6 },
+            { pitch: 'D5', freq: 587, duration: 278.6, offset: 15836.0 },
+            { pitch: 'C5', freq: 523, duration: 278.6, offset: 16114.6 },
+            { pitch: 'B4', freq: 494, duration: 278.6, offset: 16416.5 },
+            { pitch: 'A4', freq: 440, duration: 278.6, offset: 16671.9 },
+            { pitch: 'G4', freq: 392, duration: 278.6, offset: 16973.8 },
+            { pitch: 'D4', freq: 294, duration: 278.6, offset: 17252.4 },
+            { pitch: 'G4', freq: 392, duration: 278.6, offset: 17531.1 },
+            { pitch: 'Gb4', freq: 370, duration: 278.6, offset: 17856.1 },
+            { pitch: 'G4', freq: 392, duration: 139.3, offset: 18204.4 },
+            { pitch: 'B4', freq: 494, duration: 278.6, offset: 18367.0 },
+            { pitch: 'D5', freq: 587, duration: 278.6, offset: 18668.8 },
+            { pitch: 'G5', freq: 784, duration: 278.6, offset: 18947.5 },
+            { pitch: 'D5', freq: 587, duration: 278.6, offset: 19272.6 },
+            { pitch: 'B4', freq: 494, duration: 278.6, offset: 19528.0 },
+            { pitch: 'G4', freq: 392, duration: 278.6, offset: 19829.8 },
+            { pitch: 'B4', freq: 494, duration: 278.6, offset: 20085.3 },
+            { pitch: 'D5', freq: 587, duration: 278.6, offset: 20387.1 },
+            { pitch: 'B4', freq: 494, duration: 1671.8, offset: 20689.0 },
+            { pitch: 'C5', freq: 523, duration: 835.9, offset: 22407.3 }
+        ].filter(note => note.offset < 30000); // First 30 seconds
 
         // Clock sync
         db.ref(".info/serverTimeOffset").on("value", snap => {
@@ -211,7 +304,37 @@
             }
         });
 
-        async function playNote(freq, durationMs, noteIndex, scheduledTime) {
+        // Generate random simulated delays for each note (0-200ms)
+        function generateSimulatedDelays() {
+            return allNotes.map(() => Math.floor(Math.random() * 200));
+        }
+
+        // Update the note table
+        function updateNoteTable(simulatedDelays) {
+            const tbody = document.getElementById('noteTableBody');
+            tbody.innerHTML = '';
+
+            const avgDelay = simulatedDelays.reduce((a, b) => a + b, 0) / simulatedDelays.length;
+            document.getElementById('avgDelay').innerText = Math.round(avgDelay) + 'ms';
+
+            for (let i = 0; i < Math.min(10, allNotes.length); i++) {
+                const note = allNotes[i];
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${i}</td>
+                    <td>${note.pitch}</td>
+                    <td>${note.offset}</td>
+                    <td>${note.duration}</td>
+                    <td style="color: #ffaa00;">${simulatedDelays[i]} ms</td>
+                `;
+                tbody.appendChild(row);
+            }
+
+            document.getElementById('totalNotes').innerText = allNotes.length;
+            document.getElementById('totalDuration').innerText = '30s';
+        }
+
+        async function playNote(note, simulatedDelay, noteIndex, scheduledTime) {
             return new Promise(async (resolve) => {
                 if (!audioCtx) {
                     audioCtx = new AudioContext();
@@ -227,7 +350,7 @@
                     }
 
                     const sampleRate = audioCtx.sampleRate;
-                    const samples = Math.floor(sampleRate * (durationMs / 1000));
+                    const samples = Math.floor(sampleRate * (note.duration / 1000));
 
                     // Generate sine wave with envelope
                     const buffer = audioCtx.createBuffer(1, samples, sampleRate);
@@ -235,85 +358,93 @@
 
                     for (let i = 0; i < samples; i++) {
                         const t = i / samples;
-                        // Simple envelope to make onset/offset clear
                         let envelope = 1;
-                        if (t < 0.01) envelope = t / 0.01; // 10ms attack
-                        if (t > 0.99) envelope = (1 - t) / 0.01; // 10ms release
+                        if (t < 0.01) envelope = t / 0.01;
+                        if (t > 0.99) envelope = (1 - t) / 0.01;
 
-                        data[i] = Math.sin(2 * Math.PI * freq * i / sampleRate) * envelope * 0.5;
+                        data[i] = Math.sin(2 * Math.PI * note.freq * i / sampleRate) * envelope * 0.5;
                     }
 
                     const source = audioCtx.createBufferSource();
                     source.buffer = buffer;
                     source.connect(audioCtx.destination);
 
-                    const actualStartTime = Date.now() + serverOffset;
-                    source.start();
+                    // Apply simulated delay
+                    const actualStartTime = Date.now() + serverOffset + simulatedDelay;
 
-                    // Highlight active note
-                    document.querySelectorAll('.note-card').forEach(card => card.classList.remove('active'));
-                    document.getElementById(`note${noteIndex}Card`).classList.add('active');
+                    setTimeout(() => {
+                        source.start();
 
-                    log(`🔊 Note ${noteIndex}: ${notes[noteIndex].pitch} at ${new Date(actualStartTime).toLocaleTimeString()}.${String(actualStartTime % 1000).padStart(3, '0')} (scheduled: ${new Date(scheduledTime).toLocaleTimeString()}.${String(scheduledTime % 1000).padStart(3, '0')})`);
+                        const logTime = Date.now() + serverOffset;
+                        log(`🔊 Note ${noteIndex}: ${note.pitch} at ${new Date(logTime).toLocaleTimeString()}.${String(logTime % 1000).padStart(3, '0')} (simulated delay: ${simulatedDelay}ms)`);
 
-                    source.onended = () => {
-                        document.getElementById(`note${noteIndex}Card`).classList.remove('active');
-                        log(`✅ Note ${noteIndex} ended after ${Date.now() + serverOffset - actualStartTime}ms`);
-                        resolve();
-                    };
+                        source.onended = () => {
+                            log(`✅ Note ${noteIndex} ended`);
+                            resolve();
+                        };
+                    }, simulatedDelay);
+
                 }, delayMs);
             });
         }
 
-        async function playTwoNotes() {
+        async function playSequence() {
             if (isPlaying) {
                 log('⚠️ Already playing');
                 return;
             }
 
             isPlaying = true;
-            document.getElementById('status').innerHTML = '🔴 Playing...';
+
+            // Generate random simulated delays for this run
+            const simulatedDelays = generateSimulatedDelays();
+            updateNoteTable(simulatedDelays);
 
             // Calculate scheduled start times with 1 second buffer
             const now = Date.now() + serverOffset;
-            const bufferMs = 1000; // 1 second buffer like conductor.html
+            const bufferMs = 1000;
             const startTime = now + bufferMs;
-
-            // Note 0 at startTime + 301.9ms offset
-            const note0Time = startTime + notes[0].offset;
-            // Note 1 at startTime + 696.6ms offset
-            const note1Time = startTime + notes[1].offset;
 
             log('🎬 Sending GO signal with 1s buffer');
             log(`📅 Sequence starting at ${new Date(startTime).toLocaleTimeString()}.${String(startTime % 1000).padStart(3, '0')}`);
 
+            // Prepare notes for Firebase
+            const notesForFirebase = allNotes.map((note, index) => ({
+                index: index,
+                pitch: note.pitch,
+                freq: note.freq,
+                offset: note.offset,
+                duration: note.duration,
+                simulatedDelay: simulatedDelays[index]
+            }));
+
             // Send GO signal to Firebase
-            await db.ref('zynth/test_sequence').set({
+            await db.ref('zynth/30sec_test').set({
                 status: 'ACTIVE',
                 startTime: startTime,
                 bufferMs: bufferMs,
-                notes: [
-                    { pitch: notes[0].pitch, freq: notes[0].freq, offset: notes[0].offset, duration: notes[0].duration },
-                    { pitch: notes[1].pitch, freq: notes[1].freq, offset: notes[1].offset, duration: notes[1].duration }
-                ],
+                notes: notesForFirebase,
                 timestamp: now
             });
 
-            log(`📅 Note 0 (G4) scheduled at ${new Date(note0Time).toLocaleTimeString()}.${String(note0Time % 1000).padStart(3, '0')}`);
-            log(`📅 Note 1 (A4) scheduled at ${new Date(note1Time).toLocaleTimeString()}.${String(note1Time % 1000).padStart(3, '0')}`);
+            // Play each note with its simulated delay
+            for (let i = 0; i < allNotes.length; i++) {
+                const note = allNotes[i];
+                const noteTime = startTime + note.offset;
 
-            // Play first note (G4)
-            await playNote(notes[0].freq, notes[0].duration, 0, note0Time);
+                // Update progress
+                const progress = ((i + 1) / allNotes.length) * 100;
+                document.getElementById('progressFill').style.width = progress + '%';
 
-            // Play second note (A4)
-            await playNote(notes[1].freq, notes[1].duration, 1, note1Time);
+                await playNote(note, simulatedDelays[i], i, noteTime);
+            }
 
-            log('✅ Two-note sequence complete');
+            log('✅ 30-second sequence complete');
 
             // Clear the test sequence
-            await db.ref('zynth/test_sequence').remove();
+            await db.ref('zynth/30sec_test').remove();
 
-            document.getElementById('status').innerHTML = '⏸️ Ready';
+            document.getElementById('progressFill').style.width = '0%';
             isPlaying = false;
         }
 
@@ -322,9 +453,8 @@
                 audioCtx.close();
                 audioCtx = null;
             }
-            db.ref('zynth/test_sequence').remove();
-            document.querySelectorAll('.note-card').forEach(card => card.classList.remove('active'));
-            document.getElementById('status').innerHTML = '⏸️ Stopped';
+            db.ref('zynth/30sec_test').remove();
+            document.getElementById('progressFill').style.width = '0%';
             isPlaying = false;
             log('⏹️ Sequence stopped');
         }
@@ -354,12 +484,16 @@
             console.log(message);
         }
 
-        document.getElementById('playBtn').onclick = playTwoNotes;
+        // Initialize with random delays for display
+        const initialDelays = generateSimulatedDelays();
+        updateNoteTable(initialDelays);
+
+        document.getElementById('playBtn').onclick = playSequence;
         document.getElementById('stopBtn').onclick = stopSequence;
         document.getElementById('copyLogBtn').onclick = copyLog;
 
-        log('🎵 Conductor ready - click PLAY TWO NOTES to test with GO signal');
-        log('⏱️ Using 1 second buffer like conductor.html');
+        log('🎵 Conductor ready - 30 second test with simulated delays');
+        log(`📊 Playing ${allNotes.length} notes over 30 seconds`);
     </script>
 </body>
 </html>

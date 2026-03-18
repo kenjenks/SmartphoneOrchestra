@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zynth Device - Two Note Tester with GO Signal</title>
+    <title>Zynth Device - 30 Second Test with Delay Measurement</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <style>
@@ -12,7 +12,7 @@
             color: #eee;
             font-family: 'Segoe UI', sans-serif;
             padding: 20px;
-            max-width: 600px;
+            max-width: 800px;
             margin: 0 auto;
         }
         h1 {
@@ -24,80 +24,98 @@
             padding: 20px;
             margin: 20px 0;
         }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+            margin: 20px 0;
+        }
+        .stat-card {
+            background: #1a1a1a;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .stat-label {
+            color: #888;
+            font-size: 0.7rem;
+        }
+        .stat-value {
+            color: #00ccff;
+            font-size: 1.2rem;
+            font-weight: bold;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background: #333;
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 20px 0;
+        }
+        .progress-fill {
+            height: 100%;
+            background: #00ccff;
+            width: 0%;
+            transition: width 0.1s;
+        }
+        .comparison-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.8rem;
+            margin: 20px 0;
+        }
+        .comparison-table th {
+            background: #1a1a1a;
+            color: #00ccff;
+            padding: 8px;
+            text-align: left;
+        }
+        .comparison-table td {
+            padding: 8px;
+            border-bottom: 1px solid #333;
+        }
+        .comparison-table .match {
+            color: #00ff00;
+        }
+        .comparison-table .mismatch {
+            color: #ff6600;
+        }
         .note-indicator {
             display: flex;
-            gap: 20px;
+            flex-wrap: wrap;
+            gap: 5px;
             margin: 20px 0;
             justify-content: center;
         }
         .note-dot {
-            width: 60px;
-            height: 60px;
+            width: 30px;
+            height: 30px;
             border-radius: 50%;
             background: #333;
-            transition: all 0.1s;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-weight: bold;
-            font-size: 1.2rem;
+            font-size: 0.7rem;
+            transition: all 0.1s;
         }
         .note-dot.active {
             background: #00ccff;
             color: #000;
-            box-shadow: 0 0 30px #00ccff;
+            box-shadow: 0 0 20px #00ccff;
         }
         .note-dot.playing {
             animation: pulse 0.5s infinite;
         }
         @keyframes pulse {
             0% { transform: scale(1); }
-            50% { transform: scale(1.1); }
+            50% { transform: scale(1.2); }
             100% { transform: scale(1); }
         }
-        .timing-display {
-            font-family: monospace;
-            font-size: 1.5rem;
-            text-align: center;
-            color: #00ccff;
-            background: #000;
-            padding: 20px;
-            border-radius: 8px;
-            margin: 20px 0;
-        }
-        .status-row {
+        .button-row {
             display: flex;
-            justify-content: space-between;
-            margin: 10px 0;
-            padding: 10px;
-            background: #000;
-            border-radius: 8px;
-        }
-        .label {
-            color: #888;
-        }
-        .value {
-            color: #00ccff;
-            font-weight: bold;
-        }
-        .energy-meter {
-            background: #000;
-            padding: 15px;
-            border-radius: 8px;
-            margin: 15px 0;
-        }
-        .meter-bar {
-            width: 100%;
-            height: 20px;
-            background: #333;
-            border-radius: 10px;
-            overflow: hidden;
-        }
-        .meter-fill {
-            height: 100%;
-            background: #00ccff;
-            width: 0%;
-            transition: width 0.05s;
+            gap: 10px;
+            margin: 20px 0;
         }
         button {
             background: #00ccff;
@@ -107,23 +125,13 @@
             font-size: 1.2rem;
             border-radius: 50px;
             cursor: pointer;
-            margin: 10px 0;
-            width: 100%;
+            flex: 1;
         }
         button.danger {
             background: #600;
             color: #fff;
         }
-        .button-row {
-            display: flex;
-            gap: 10px;
-            margin: 10px 0;
-        }
-        .button-row button {
-            margin: 0;
-        }
         .log-container {
-            position: relative;
             margin-top: 20px;
         }
         .log-header {
@@ -138,13 +146,7 @@
             border: 1px solid #555;
             padding: 5px 15px;
             border-radius: 15px;
-            font-size: 0.8rem;
             cursor: pointer;
-            width: auto;
-            margin: 0;
-        }
-        .copy-btn:hover {
-            background: #444;
         }
         .log {
             background: #000;
@@ -155,11 +157,6 @@
             font-family: monospace;
             font-size: 11px;
             color: #888;
-            user-select: text;
-            -webkit-user-select: text;
-            cursor: text;
-            white-space: pre-wrap;
-            word-wrap: break-word;
         }
         .firebase-status {
             display: inline-block;
@@ -168,24 +165,12 @@
             border-radius: 50%;
             margin-right: 8px;
         }
-        .connected {
-            background: #00ff00;
-            box-shadow: 0 0 10px #00ff00;
-        }
-        .disconnected {
-            background: #ff0000;
-        }
-        canvas {
-            width: 100%;
-            height: 100px;
-            background: #000;
-            border-radius: 8px;
-            margin: 15px 0;
-        }
+        .connected { background: #00ff00; }
+        .disconnected { background: #ff0000; }
     </style>
 </head>
 <body>
-    <h1>⏱️ Zynth Device - Two Note Tester with GO Signal</h1>
+    <h1>⏱️ Zynth Device - 30 Second Test with Delay Measurement</h1>
 
     <div class="panel">
         <div style="display: flex; align-items: center; margin-bottom: 15px;">
@@ -193,9 +178,27 @@
             <span id="connectionText">Connecting to Firebase...</span>
         </div>
 
-        <div class="status-row">
-            <span class="label">Status:</span>
-            <span class="value" id="status">Ready</span>
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">Status</div>
+                <div class="stat-value" id="status">Ready</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Notes Detected</div>
+                <div class="stat-value" id="detectedCount">0/0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Avg Delay</div>
+                <div class="stat-value" id="avgDelay">0ms</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Accuracy</div>
+                <div class="stat-value" id="accuracy">0%</div>
+            </div>
+        </div>
+
+        <div class="progress-bar">
+            <div class="progress-fill" id="progressFill"></div>
         </div>
 
         <div class="button-row">
@@ -203,60 +206,27 @@
             <button id="disableBtn" class="danger">⏹️ Disable</button>
         </div>
 
-        <div class="note-indicator">
-            <div class="note-dot" id="note0Dot">G4</div>
-            <div class="note-dot" id="note1Dot">A4</div>
-        </div>
+        <div class="note-indicator" id="noteIndicator"></div>
 
-        <div class="timing-display" id="timingDisplay">
-            Waiting for GO signal...
-        </div>
-
-        <div class="energy-meter">
-            <div style="display: flex; justify-content: space-between;">
-                <span>Energy at 440Hz</span>
-                <span id="energyValue">0.00</span>
-            </div>
-            <div class="meter-bar">
-                <div class="meter-fill" id="energyMeter"></div>
-            </div>
-        </div>
-
-        <div class="status-row">
-            <span class="label">Current frequency:</span>
-            <span class="value" id="currentFreq">--- Hz</span>
-        </div>
-
-        <div class="status-row">
-            <span class="label">Sequence start:</span>
-            <span class="value" id="seqStart">---</span>
-        </div>
-        <div class="status-row">
-            <span class="label">Last note:</span>
-            <span class="value" id="lastNote">---</span>
-        </div>
-        <div class="status-row">
-            <span class="label">Onset time:</span>
-            <span class="value" id="lastOnset">---</span>
-        </div>
-        <div class="status-row">
-            <span class="label">Delay from scheduled:</span>
-            <span class="value" id="lastDelay">---</span>
-        </div>
-        <div class="status-row">
-            <span class="label">Duration:</span>
-            <span class="value" id="lastDuration">---</span>
-        </div>
-        <div class="status-row">
-            <span class="label">Notes detected:</span>
-            <span class="value" id="noteCount">0/2</span>
-        </div>
-
-        <canvas id="visualizer"></canvas>
+        <h3>Delay Comparison</h3>
+        <table class="comparison-table" id="comparisonTable">
+            <thead>
+                <tr>
+                    <th>Note</th>
+                    <th>Pitch</th>
+                    <th>Simulated Delay</th>
+                    <th>Measured Delay</th>
+                    <th>Difference</th>
+                </tr>
+            </thead>
+            <tbody id="comparisonBody">
+                <!-- Filled by JavaScript -->
+            </tbody>
+        </table>
 
         <div class="log-container">
             <div class="log-header">
-                <span style="color: #888;">Event Log</span>
+                <span>Event Log</span>
                 <button class="copy-btn" id="copyLogBtn">📋 COPY LOG</button>
             </div>
             <div class="log" id="log"></div>
@@ -281,33 +251,31 @@
         let animationFrame = null;
         let serverOffset = 0;
 
-        // Note definitions
-        const notes = [
-            { name: 'G4', freq: 392, duration: 371.5, dot: document.getElementById('note0Dot') },
-            { name: 'A4', freq: 440, duration: 278.6, dot: document.getElementById('note1Dot') }
-        ];
-
         // Test sequence state
         let sequenceActive = false;
         let sequenceStartTime = 0;
         let expectedNotes = [];
         let detectedNotes = [];
         let expectedNoteIndex = 0;
-        const DETECTION_WINDOW_MS = 500; // Only accept notes within 500ms of expected time
-
-        // Timing detection state
         let isNoteActive = false;
         let noteStartTime = 0;
         let currentNoteIndex = -1;
-        let energyHistory = [];
+
+        // Detection parameters
         const ENERGY_THRESHOLD = 0.15;
         const MIN_NOTE_DURATION = 100;
         const MAX_NOTE_DURATION = 2000;
+        const DETECTION_WINDOW_MS = 500;
         const FREQ_TOLERANCE = 15;
 
         // FFT setup
         const FFT_SIZE = 2048;
         const FLUTE_RANGE = { min: 220, max: 1046 };
+
+        // Statistics
+        let energyHistory = [];
+        let delays = [];
+        let comparisonData = [];
 
         // Connection status
         db.ref('.info/connected').on('value', snap => {
@@ -327,7 +295,7 @@
         });
 
         // Listen for test sequence from conductor
-        db.ref('zynth/test_sequence').on('value', snap => {
+        db.ref('zynth/30sec_test').on('value', snap => {
             const sequence = snap.val();
             if (sequence && sequence.status === 'ACTIVE') {
                 // New sequence starting
@@ -335,28 +303,48 @@
                 sequenceStartTime = sequence.startTime;
                 expectedNotes = sequence.notes;
                 expectedNoteIndex = 0;
-                detectedNotes = [];
+                detectedNotes = new Array(expectedNotes.length).fill(null);
+                comparisonData = [];
+                delays = [];
+
+                // Create note indicators
+                createNoteIndicators();
 
                 const startTimeStr = new Date(sequenceStartTime).toLocaleTimeString() +
                     `.${String(sequenceStartTime % 1000).padStart(3, '0')}`;
-                document.getElementById('seqStart').innerText = startTimeStr;
-                document.getElementById('timingDisplay').innerText = '⏳ Waiting for first note';
-                document.getElementById('noteCount').innerText = '0/2';
+                document.getElementById('detectedCount').innerText = `0/${expectedNotes.length}`;
 
-                log(`🎬 GO signal received - sequence starting at ${startTimeStr} (buffer: ${sequence.bufferMs}ms)`);
-
-                // Clear any active note indicators
-                notes.forEach(note => note.dot.classList.remove('active', 'playing'));
+                log(`🎬 GO signal received - sequence starting at ${startTimeStr}`);
+                log(`📊 Expecting ${expectedNotes.length} notes over 30 seconds`);
 
             } else if (!sequence) {
                 // Sequence ended
                 sequenceActive = false;
                 expectedNoteIndex = 0;
-                document.getElementById('seqStart').innerText = '---';
-                document.getElementById('timingDisplay').innerText = 'Waiting for GO signal...';
                 log('⏹️ Sequence ended');
             }
         });
+
+        function createNoteIndicators() {
+            const container = document.getElementById('noteIndicator');
+            container.innerHTML = '';
+            for (let i = 0; i < expectedNotes.length; i++) {
+                const dot = document.createElement('div');
+                dot.className = 'note-dot';
+                dot.id = `note-${i}`;
+                dot.innerText = i;
+                container.appendChild(dot);
+            }
+        }
+
+        function updateNoteIndicator(index, state) {
+            const dot = document.getElementById(`note-${index}`);
+            if (dot) {
+                dot.classList.remove('active', 'playing');
+                if (state === 'active') dot.classList.add('active');
+                if (state === 'playing') dot.classList.add('playing');
+            }
+        }
 
         async function enableMicrophone() {
             try {
@@ -381,7 +369,7 @@
 
                 isListening = true;
                 document.getElementById('status').innerText = 'Listening';
-                log('✅ Mic enabled - waiting for GO signal');
+                log('✅ Mic enabled - waiting for 30-second test');
 
                 detectNote();
                 drawVisualizer();
@@ -402,31 +390,35 @@
             log('⏹️ Stopped');
         }
 
-        function copyLog() {
-            const logDiv = document.getElementById('log');
-            const range = document.createRange();
-            range.selectNodeContents(logDiv);
-            const selection = window.getSelection();
-            selection.removeAllRanges();
-            selection.addRange(range);
+        function updateComparisonTable() {
+            const tbody = document.getElementById('comparisonBody');
+            tbody.innerHTML = '';
 
-            try {
-                document.execCommand('copy');
-                log('📋 Log copied to clipboard');
-            } catch (err) {
-                console.error('Copy failed:', err);
+            let totalDiff = 0;
+            let matchCount = 0;
+
+            comparisonData.forEach(item => {
+                const diff = Math.abs(item.measured - item.simulated);
+                totalDiff += diff;
+                if (diff < 20) matchCount++; // Within 20ms is a match
+
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${item.index}</td>
+                    <td>${item.pitch}</td>
+                    <td>${item.simulated} ms</td>
+                    <td>${item.measured !== null ? item.measured + ' ms' : '---'}</td>
+                    <td class="${diff < 20 ? 'match' : 'mismatch'}">${item.measured !== null ? diff + ' ms' : '---'}</td>
+                `;
+                tbody.appendChild(row);
+            });
+
+            if (comparisonData.length > 0) {
+                const avgDelay = delays.reduce((a, b) => a + b, 0) / delays.length;
+                const accuracy = (matchCount / comparisonData.length) * 100;
+                document.getElementById('avgDelay').innerText = Math.round(avgDelay) + 'ms';
+                document.getElementById('accuracy').innerText = Math.round(accuracy) + '%';
             }
-
-            selection.removeAllRanges();
-        }
-
-        function getNoteIndexFromFreq(freq) {
-            for (let i = 0; i < notes.length; i++) {
-                if (Math.abs(freq - notes[i].freq) < FREQ_TOLERANCE) {
-                    return i;
-                }
-            }
-            return -1;
         }
 
         function detectNote() {
@@ -458,38 +450,20 @@
                 }
             }
             const dominantFreq = (maxIdx / bufferLength) * nyquist;
-            document.getElementById('currentFreq').innerText = Math.round(dominantFreq) + ' Hz';
 
-            // Calculate energy at both target frequencies
-            const binIndex392 = Math.floor(392 / nyquist * bufferLength);
-            const binIndex440 = Math.floor(440 / nyquist * bufferLength);
-
-            // Get energy at 440Hz (primary for display)
-            let energy440 = 0;
-            let binCount = 0;
-            if (binIndex440 >= minBin && binIndex440 <= maxBin) {
-                for (let i = -1; i <= 1; i++) {
-                    const idx = binIndex440 + i;
-                    if (idx >= minBin && idx <= maxBin && idx >= 0 && idx < bufferLength) {
-                        energy440 += dataArray[idx] / 255;
-                        binCount++;
-                    }
-                }
-                energy440 = binCount > 0 ? energy440 / binCount : 0;
+            // Update progress if sequence active
+            if (sequenceActive && expectedNotes.length > 0) {
+                const progress = (expectedNoteIndex / expectedNotes.length) * 100;
+                document.getElementById('progressFill').style.width = progress + '%';
             }
-
-            // Update meter
-            document.getElementById('energyValue').innerText = energy440.toFixed(3);
-            document.getElementById('energyMeter').style.width = (energy440 * 100) + '%';
 
             // Only detect notes if sequence is active
             if (sequenceActive && expectedNoteIndex < expectedNotes.length) {
                 const expectedNote = expectedNotes[expectedNoteIndex];
                 const expectedTime = sequenceStartTime + expectedNote.offset;
-                const timeWindow = DETECTION_WINDOW_MS;
 
                 // Only look for notes within the expected time window
-                if (Math.abs(now - expectedTime) < timeWindow) {
+                if (Math.abs(now - expectedTime) < DETECTION_WINDOW_MS) {
 
                     if (!isNoteActive) {
                         // Look for the expected note
@@ -515,25 +489,31 @@
                             noteStartTime = now;
                             currentNoteIndex = expectedNoteIndex;
 
-                            // Calculate delay
-                            const delay = now - expectedTime;
+                            // Calculate measured delay
+                            const measuredDelay = now - expectedTime;
+                            delays.push(measuredDelay);
+
+                            // Store for comparison
+                            comparisonData.push({
+                                index: expectedNoteIndex,
+                                pitch: expectedNote.pitch,
+                                simulated: expectedNote.simulatedDelay,
+                                measured: measuredDelay
+                            });
 
                             // Update UI
-                            notes[expectedNoteIndex].dot.classList.add('active', 'playing');
-                            document.getElementById('timingDisplay').innerText = `🔴 ${notes[expectedNoteIndex].name}`;
-                            document.getElementById('lastNote').innerText = notes[expectedNoteIndex].name;
-                            document.getElementById('lastOnset').innerText = new Date(now).toLocaleTimeString() +
-                                `.${String(now % 1000).padStart(3, '0')}`;
-                            document.getElementById('lastDelay').innerText = (delay > 0 ? '+' : '') + delay + ' ms';
+                            updateNoteIndicator(expectedNoteIndex, 'playing');
+                            document.getElementById('detectedCount').innerText = `${expectedNoteIndex + 1}/${expectedNotes.length}`;
+                            updateComparisonTable();
 
-                            log(`🔊 NOTE ${expectedNoteIndex} ONSET: ${notes[expectedNoteIndex].name} at ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')} (delay: ${delay}ms)`);
+                            log(`🔊 NOTE ${expectedNoteIndex} (${expectedNote.pitch}) - Simulated: ${expectedNote.simulatedDelay}ms, Measured: ${measuredDelay}ms, Diff: ${Math.abs(measuredDelay - expectedNote.simulatedDelay)}ms`);
                         }
                     }
                 }
             }
 
             // Handle active note ending
-            if (isNoteActive) {
+            if (isNoteActive && currentNoteIndex >= 0) {
                 const expectedNote = expectedNotes[currentNoteIndex];
                 const targetFreq = expectedNote.freq;
                 const binIndex = Math.floor(targetFreq / nyquist * bufferLength);
@@ -553,66 +533,28 @@
 
                 const noteDuration = now - noteStartTime;
 
-                if (noteDuration > MAX_NOTE_DURATION) {
-                    // Force end
+                if (noteDuration > MAX_NOTE_DURATION || energy < ENERGY_THRESHOLD) {
+                    // Note ended
                     isNoteActive = false;
-                    notes[currentNoteIndex].dot.classList.remove('active', 'playing');
-                    document.getElementById('timingDisplay').innerText = `⚠️ TIMEOUT ${noteDuration}ms`;
-                    log(`⚠️ Note ${currentNoteIndex} timeout after ${noteDuration}ms`);
-
-                    detectedNotes[currentNoteIndex] = {
-                        onset: noteStartTime,
-                        offset: now,
-                        duration: noteDuration,
-                        forced: true
-                    };
-
+                    updateNoteIndicator(currentNoteIndex, 'active');
                     expectedNoteIndex++;
-                    document.getElementById('noteCount').innerText = `${expectedNoteIndex}/${expectedNotes.length}`;
                     currentNoteIndex = -1;
 
-                } else if (energy < ENERGY_THRESHOLD) {
-                    // Check history to confirm end
-                    let recentLowEnergy = true;
-                    const historyToCheck = 5;
+                    log(`✅ Note ${expectedNoteIndex - 1} ended`);
 
-                    for (let i = Math.max(0, energyHistory.length - historyToCheck); i < energyHistory.length; i++) {
-                        if (energyHistory[i] && energyHistory[i].energy > ENERGY_THRESHOLD) {
-                            recentLowEnergy = false;
-                            break;
-                        }
-                    }
-
-                    if (recentLowEnergy && noteDuration > MIN_NOTE_DURATION) {
-                        // Note ended
-                        isNoteActive = false;
-                        notes[currentNoteIndex].dot.classList.remove('active', 'playing');
-
-                        detectedNotes[currentNoteIndex] = {
-                            onset: noteStartTime,
-                            offset: now,
-                            duration: noteDuration
-                        };
-
-                        document.getElementById('timingDisplay').innerText = `✅ ${notes[currentNoteIndex].name} ${Math.round(noteDuration)}ms`;
-                        document.getElementById('lastDuration').innerText = Math.round(noteDuration) + ' ms';
-
-                        log(`✅ NOTE ${currentNoteIndex} ENDED: ${notes[currentNoteIndex].name} - duration: ${Math.round(noteDuration)}ms`);
-
-                        expectedNoteIndex++;
-                        document.getElementById('noteCount').innerText = `${expectedNoteIndex}/${expectedNotes.length}`;
-                        currentNoteIndex = -1;
-
-                        // Check if sequence complete
-                        if (expectedNoteIndex >= expectedNotes.length) {
-                            log('🎯 Sequence complete - all notes detected');
-                        }
+                    // Check if sequence complete
+                    if (expectedNoteIndex >= expectedNotes.length) {
+                        log('🎯 Sequence complete - all notes detected');
+                        log('📊 Final delay comparison:');
+                        comparisonData.forEach(item => {
+                            log(`   Note ${item.index}: Sim=${item.simulated}ms, Meas=${item.measured}ms, Diff=${Math.abs(item.measured - item.simulated)}ms`);
+                        });
                     }
                 }
             }
 
             // Store energy history
-            energyHistory.push({ time: now, energy: energy440 });
+            energyHistory.push({ time: now, energy: maxVal / 255 });
             if (energyHistory.length > 50) energyHistory.shift();
 
             requestAnimationFrame(detectNote);
@@ -625,6 +567,8 @@
             }
 
             const canvas = document.getElementById('visualizer');
+            if (!canvas) return;
+
             const ctx = canvas.getContext('2d');
             const width = canvas.width;
             const height = canvas.height;
@@ -648,17 +592,25 @@
                 ctx.fillRect(x, height - barHeight, 4, barHeight);
             }
 
-            // Mark target frequencies
-            const targetBins = [392, 440].map(f => Math.floor(f / nyquist * analyser.frequencyBinCount));
-            targetBins.forEach(bin => {
-                if (bin >= startBin && bin < endBin) {
-                    const x = (bin - startBin) * (width / (endBin - startBin));
-                    ctx.fillStyle = '#ff3366';
-                    ctx.fillRect(x, 0, 4, height);
-                }
-            });
-
             requestAnimationFrame(drawVisualizer);
+        }
+
+        function copyLog() {
+            const logDiv = document.getElementById('log');
+            const range = document.createRange();
+            range.selectNodeContents(logDiv);
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(range);
+
+            try {
+                document.execCommand('copy');
+                log('📋 Log copied to clipboard');
+            } catch (err) {
+                console.error('Copy failed:', err);
+            }
+
+            selection.removeAllRanges();
         }
 
         function log(message) {
@@ -673,8 +625,8 @@
         document.getElementById('copyLogBtn').onclick = copyLog;
 
         window.onload = () => {
-            log('⏱️ Two Note Tester with GO Signal ready');
-            log('🎯 Will only detect notes within 500ms of expected time');
+            log('⏱️ 30 Second Test with Delay Measurement ready');
+            log('🎯 Will compare simulated vs measured delays');
         };
     </script>
 </body>
