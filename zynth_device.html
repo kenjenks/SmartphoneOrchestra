@@ -200,7 +200,7 @@
         let animationFrame = null;
         let serverOffset = 0;
 
-        // Test sequence state - LISTENING FOR THE CORRECT PATH
+        // Test sequence state
         let sequenceActive = false;
         let sequenceStartTime = 0;
         let expectedNote = null;
@@ -220,11 +220,16 @@
         const FFT_SIZE = 2048;
         const FLUTE_RANGE = { min: 220, max: 1046 };
 
-        // Connection status
+        // Connection status with logging
         db.ref('.info/connected').on('value', snap => {
+            const connected = snap.val();
             const statusEl = document.getElementById('firebaseStatus');
             const textEl = document.getElementById('connectionText');
-            if (snap.val()) {
+
+            console.log('🔥 Firebase connection:', connected);
+            log(`🔌 Firebase ${connected ? 'connected' : 'disconnected'}`);
+
+            if (connected) {
                 statusEl.className = 'firebase-status connected';
                 textEl.innerText = 'Firebase Connected';
             } else {
@@ -235,11 +240,15 @@
 
         db.ref(".info/serverTimeOffset").on("value", snap => {
             serverOffset = snap.val() || 0;
+            console.log('⏱️ Server offset:', serverOffset);
         });
 
-        // Listen for test sequence from conductor - CORRECT PATH
+        // Listen for test sequence from conductor with debugging
         db.ref('zynth/single_note_test').on('value', snap => {
             const sequence = snap.val();
+            console.log('🔥 Firebase triggered!', sequence);
+            log('🔥 Firebase update received');
+
             if (sequence && sequence.status === 'ACTIVE') {
                 // New sequence starting
                 sequenceActive = true;
