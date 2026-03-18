@@ -83,6 +83,42 @@
             background: #600;
             color: #fff;
         }
+        button.secondary {
+            background: #442288;
+            color: #fff;
+        }
+        .button-row {
+            display: flex;
+            gap: 10px;
+            margin: 10px 0;
+        }
+        .button-row button {
+            margin: 0;
+        }
+        .log-container {
+            position: relative;
+            margin-top: 20px;
+        }
+        .log-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 5px;
+        }
+        .copy-btn {
+            background: #333;
+            color: #fff;
+            border: 1px solid #555;
+            padding: 5px 15px;
+            border-radius: 15px;
+            font-size: 0.8rem;
+            cursor: pointer;
+            width: auto;
+            margin: 0;
+        }
+        .copy-btn:hover {
+            background: #444;
+        }
         .log {
             background: #000;
             padding: 10px;
@@ -92,6 +128,11 @@
             font-family: monospace;
             font-size: 11px;
             color: #888;
+            user-select: text;
+            -webkit-user-select: text;
+            cursor: text;
+            white-space: pre-wrap;
+            word-wrap: break-word;
         }
         canvas {
             width: 100%;
@@ -111,8 +152,10 @@
             <span class="value" id="status">Ready</span>
         </div>
 
-        <button id="enableBtn">🎤 Enable Mic</button>
-        <button id="disableBtn" class="danger">⏹️ Disable</button>
+        <div class="button-row">
+            <button id="enableBtn">🎤 Enable Mic</button>
+            <button id="disableBtn" class="danger">⏹️ Disable</button>
+        </div>
 
         <div class="timing-display" id="timingDisplay">
             ---
@@ -129,7 +172,7 @@
         </div>
 
         <div class="status-row">
-            <span class="label">Dominant frequency:</span>
+            <span class="label">Dominant frequency (flute range):</span>
             <span class="value" id="dominantFreq">--- Hz</span>
         </div>
 
@@ -152,7 +195,13 @@
             <span class="value" id="noteCount">0</span>
         </div>
 
-        <div class="log" id="log"></div>
+        <div class="log-container">
+            <div class="log-header">
+                <span style="color: #888;">Event Log</span>
+                <button class="copy-btn" id="copyLogBtn">📋 COPY LOG</button>
+            </div>
+            <div class="log" id="log"></div>
+        </div>
     </div>
 
     <script>
@@ -245,6 +294,28 @@
             log('⏹️ Stopped');
         }
 
+        function copyLog() {
+            const logDiv = document.getElementById('log');
+
+            // Create a range and select the log contents
+            const range = document.createRange();
+            range.selectNodeContents(logDiv);
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(range);
+
+            try {
+                // Copy to clipboard
+                document.execCommand('copy');
+                log('📋 Log copied to clipboard');
+            } catch (err) {
+                console.error('Copy failed:', err);
+            }
+
+            // Deselect
+            selection.removeAllRanges();
+        }
+
         function detectNote() {
             if (!isListening || !analyser) {
                 requestAnimationFrame(detectNote);
@@ -297,21 +368,6 @@
                 document.getElementById('energyValue').innerText = energy.toFixed(3);
                 document.getElementById('energyMeter').style.width = (energy * 100) + '%';
 
-                // Log if we see significant energy at frequencies outside flute range
-                if (maxVal/255 > 0.1) {
-                    // Check if the max was outside flute range
-                    let outsideRangeEnergy = 0;
-                    for (let i = 0; i < minBin; i++) {
-                        outsideRangeEnergy = Math.max(outsideRangeEnergy, dataArray[i] / 255);
-                    }
-                    for (let i = maxBin; i < bufferLength; i++) {
-                        outsideRangeEnergy = Math.max(outsideRangeEnergy, dataArray[i] / 255);
-                    }
-                    if (outsideRangeEnergy > energy * 1.5) {
-                        console.log(`⚠️ Strong signal outside flute range: ${(outsideRangeEnergy).toFixed(3)}`);
-                    }
-                }
-
                 // Simple state machine for note detection
                 if (!isNoteActive && energy > ENERGY_THRESHOLD) {
                     // Check if enough time has passed since last note
@@ -325,12 +381,10 @@
                             noteStartTime = now;
                             document.getElementById('timingDisplay').innerText = '🔴 NOTE ACTIVE';
                             log(`🔊 NOTE ONSET at ${new Date(noteStartTime).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')} (energy: ${energy.toFixed(3)}, freq: ${Math.round(dominantFreq)}Hz)`);
-                        } else {
-                            log(`⚠️ Ignoring detection - wrong frequency (${Math.round(dominantFreq)}Hz)`);
                         }
-                    } else {
-                        log(`⚠️ Ignoring detection - too soon after last note (${timeSinceLastNote}ms)`);
+                        // Removed the "wrong frequency" log - we don't need to see these
                     }
+                    // Removed the "too soon" log
 
                 } else if (isNoteActive) {
                     // Check if note has been active too long (stuck detection)
@@ -352,8 +406,10 @@
                         noteCount++;
                         document.getElementById('noteCount').innerText = noteCount;
 
-                    } else if (energy < ENERGY_THRESHOLD) {
-                        // Check if it's really the end (look at recent history)
+                    }
+                    // ONLY end the note if 440Hz energy drops below threshold
+                    else if (energy < ENERGY_THRESHOLD) {
+                        // Check if it's really the end (look at recent history of 440Hz energy)
                         let recentLowEnergy = true;
                         const historyToCheck = 5; // Check last 5 samples
 
@@ -395,6 +451,7 @@
                             });
                         }
                     }
+                    // If we get here, note is still active - do nothing
                 }
 
                 // Store in history (keep last 50 samples)
@@ -455,6 +512,7 @@
 
         document.getElementById('enableBtn').onclick = enableMicrophone;
         document.getElementById('disableBtn').onclick = disableMicrophone;
+        document.getElementById('copyLogBtn').onclick = copyLog;
 
         window.onload = () => {
             log('⏱️ Note Timing Tester ready');
