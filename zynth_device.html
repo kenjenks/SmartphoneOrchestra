@@ -187,6 +187,7 @@
     </div>
 
     <script>
+        // ========== FIREBASE CONFIG ==========
         const firebaseConfig = {
             apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
             authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
@@ -196,23 +197,7 @@
         firebase.initializeApp(firebaseConfig);
         const db = firebase.database();
 
-        setTimeout(() => {
-            db.ref('zynth/test').set({
-                message: 'Hello from device',
-                timestamp: Date.now() + serverOffset
-            });
-            log('📤 Sent test message to Firebase');
-        }, 2000);
-
-        // And listen for the test
-        db.ref('zynth/test').on('value', snap => {
-            const test = snap.val();
-            if (test) {
-                log(`📥 Received test: ${test.message}`);
-            }
-        });
-
-        // Audio state
+        // ========== GLOBAL VARIABLES ==========
         let audioCtx = null;
         let analyser = null;
         let mediaStream = null;
@@ -222,7 +207,7 @@
 
         // Test sequence state
         let sequenceActive = false;
-        let scheduledWallTime = 0;  // When the sequence starts
+        let scheduledWallTime = 0;
         let expectedNote = null;
         let detectedCount = 0;
 
@@ -232,43 +217,71 @@
         let lastEnergy = 0;
         let lastNoteTime = 0;
         let energyHistory = [];
-        const ENERGY_THRESHOLD = 0.03;  // Raised to avoid false positives
-        const MIN_CHANGE = 0.02;         // Raised to require sharper onset
-        const MIN_TIME_BETWEEN_NOTES = 2000; // 2 seconds between notes
+        const ENERGY_THRESHOLD = 0.03;
+        const MIN_CHANGE = 0.02;
+        const MIN_TIME_BETWEEN_NOTES = 2000;
 
         // FFT setup
         const FFT_SIZE = 2048;
         const FLUTE_RANGE = { min: 220, max: 1046 };
 
+        // ========== HELPER FUNCTIONS ==========
+        function log(message) {
+            const logDiv = document.getElementById('log');
+            if (!logDiv) return;
+            const timestamp = new Date().toLocaleTimeString();
+            logDiv.innerHTML = `<div>[${timestamp}] ${message}</div>` + logDiv.innerHTML;
+            console.log(message);
+        }
+
+        function copyLog() {
+            const logDiv = document.getElementById('log');
+            const range = document.createRange();
+            range.selectNodeContents(logDiv);
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(range);
+
+            try {
+                document.execCommand('copy');
+                log('📋 Log copied to clipboard');
+            } catch (err) {
+                console.error('Copy failed:', err);
+            }
+
+            selection.removeAllRanges();
+        }
+
+        // ========== FIREBASE LISTENERS ==========
         // Connection status
         db.ref('.info/connected').on('value', snap => {
             const connected = snap.val();
             const statusEl = document.getElementById('firebaseStatus');
             const textEl = document.getElementById('connectionText');
 
-            console.log('🔥 Firebase connection:', connected);
-
             if (connected) {
                 statusEl.className = 'firebase-status connected';
                 textEl.innerText = 'Firebase Connected';
-                log(`Firebase Connected`);
+                log('🔌 Firebase connected');
             } else {
                 statusEl.className = 'firebase-status disconnected';
                 textEl.innerText = 'Firebase Disconnected';
-                log(`Firebase Not Yet Connected`);
+                log('🔌 Firebase disconnected');
             }
         });
 
+        // Server time offset
         db.ref(".info/serverTimeOffset").on("value", snap => {
             serverOffset = snap.val() || 0;
+            log(`⏱️ Server offset: ${serverOffset}ms`);
         });
 
         // Listen for test sequence from conductor
         db.ref('zynth/single_note_test').on('value', snap => {
             const sequence = snap.val();
+            log(`🔥 Firebase update received: ${sequence ? 'ACTIVE' : 'CLEARED'}`);
 
             if (sequence && sequence.status === 'ACTIVE') {
-                // New sequence starting
                 sequenceActive = true;
                 scheduledWallTime = sequence.scheduledWallTime;
                 expectedNote = sequence.note;
@@ -282,13 +295,13 @@
                 log(`🎯 Expected play time: ${new Date(expectedNote.expectedPlayTime).toLocaleTimeString()}.${String(expectedNote.expectedPlayTime % 1000).padStart(3, '0')}`);
 
             } else if (!sequence) {
-                // Sequence ended
                 sequenceActive = false;
                 expectedNote = null;
                 log('⏹️ Sequence ended');
             }
         });
 
+        // ========== MICROPHONE FUNCTIONS ==========
         async function enableMicrophone() {
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({
@@ -332,24 +345,7 @@
             log('⏹️ Stopped');
         }
 
-        function copyLog() {
-            const logDiv = document.getElementById('log');
-            const range = document.createRange();
-            range.selectNodeContents(logDiv);
-            const selection = window.getSelection();
-            selection.removeAllRanges();
-            selection.addRange(range);
-
-            try {
-                document.execCommand('copy');
-                log('📋 Log copied to clipboard');
-            } catch (err) {
-                console.error('Copy failed:', err);
-            }
-
-            selection.removeAllRanges();
-        }
-
+        // ========== NOTE DETECTION ==========
         function detectNote() {
             if (!isListening || !analyser) {
                 requestAnimationFrame(detectNote);
@@ -437,13 +433,15 @@
             requestAnimationFrame(detectNote);
         }
 
-        document.getElementById('enableBtn').onclick = enableMicrophone;
-        document.getElementById('disableBtn').onclick = disableMicrophone;
-        document.getElementById('copyLogBtn').onclick = copyLog;
-
+        // ========== INITIALIZATION ==========
         window.onload = () => {
             log('⏱️ Single Note Detector with Feedback ready');
             log(`⚡ Threshold: ${ENERGY_THRESHOLD}, min change: ${MIN_CHANGE}`);
+
+            // Set up button handlers
+            document.getElementById('enableBtn').onclick = enableMicrophone;
+            document.getElementById('disableBtn').onclick = disableMicrophone;
+            document.getElementById('copyLogBtn').onclick = copyLog;
         };
     </script>
 </body>
