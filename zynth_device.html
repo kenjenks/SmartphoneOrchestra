@@ -200,7 +200,7 @@
         let animationFrame = null;
         let serverOffset = 0;
 
-        // Test sequence state
+        // Test sequence state - LISTENING FOR THE CORRECT PATH
         let sequenceActive = false;
         let sequenceStartTime = 0;
         let expectedNote = null;
@@ -210,10 +210,11 @@
         let isNoteActive = false;
         let noteStartTime = 0;
         let lastEnergy = 0;
+        let lastNoteTime = 0;
         let energyHistory = [];
-        const ENERGY_THRESHOLD = 0.01;  // Very low threshold
-        const MIN_CHANGE = 0.005;        // Very small change to catch onsets
-        const MIN_TIME_BETWEEN_NOTES = 1000; // 1 second between notes
+        const ENERGY_THRESHOLD = 0.01;
+        const MIN_CHANGE = 0.005;
+        const MIN_TIME_BETWEEN_NOTES = 1000;
 
         // FFT setup
         const FFT_SIZE = 2048;
@@ -236,7 +237,7 @@
             serverOffset = snap.val() || 0;
         });
 
-        // Listen for test sequence from conductor
+        // Listen for test sequence from conductor - CORRECT PATH
         db.ref('zynth/single_note_test').on('value', snap => {
             const sequence = snap.val();
             if (sequence && sequence.status === 'ACTIVE') {
@@ -360,10 +361,10 @@
 
             // Look for onset during active sequence
             if (sequenceActive && expectedNote && !isNoteActive) {
-                // Only look for onsets around the expected time (±1 second)
+                // Only look for onsets around the expected time (±2 seconds)
                 const expectedTime = sequenceStartTime + expectedNote.offset + expectedNote.jitter;
 
-                if (Math.abs(now - expectedTime) < 2000) { // 2 second window
+                if (Math.abs(now - expectedTime) < 2000) {
                     if (avgEnergy > ENERGY_THRESHOLD && energyChange > MIN_CHANGE) {
                         // Check if enough time has passed since last note
                         if (now - lastNoteTime > MIN_TIME_BETWEEN_NOTES) {
