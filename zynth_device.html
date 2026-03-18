@@ -295,7 +295,7 @@
         });
 
         // Listen for test sequence from conductor
-        db.ref('zynth/30sec_test').on('value', snap => {
+        db.ref('zynth/mp3_test').on('value', snap => {  // ← Changed from 'zynth/30sec_test'
             const sequence = snap.val();
             if (sequence && sequence.status === 'ACTIVE') {
                 // New sequence starting
@@ -304,18 +304,17 @@
                 expectedNotes = sequence.notes;
                 expectedNoteIndex = 0;
                 detectedNotes = new Array(expectedNotes.length).fill(null);
-                comparisonData = [];
-                delays = [];
+                jitterMeasurements = [];
+                totalAbsJitter = 0;
+                maxMeasuredJitter = 0;
 
-                // Create note indicators
-                createNoteIndicators();
+                document.getElementById('maxJitter').innerText = `±${sequence.maxJitter}ms`;
+                document.getElementById('detectedCount').innerText = `0/${expectedNotes.length}`;
 
                 const startTimeStr = new Date(sequenceStartTime).toLocaleTimeString() +
                     `.${String(sequenceStartTime % 1000).padStart(3, '0')}`;
-                document.getElementById('detectedCount').innerText = `0/${expectedNotes.length}`;
-
                 log(`🎬 GO signal received - sequence starting at ${startTimeStr}`);
-                log(`📊 Expecting ${expectedNotes.length} notes over 30 seconds`);
+                log(`📊 Expecting ${expectedNotes.length} notes with ±${sequence.maxJitter}ms jitter from MP3`);
 
             } else if (!sequence) {
                 // Sequence ended
