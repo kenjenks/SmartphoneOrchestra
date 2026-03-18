@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zynth Device - MP3 Detector</title>
+    <title>Zynth Device - MP3 Detector with Onset Detection</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <style>
@@ -58,6 +58,25 @@
             background: #00ccff;
             width: 0%;
             transition: width 0.1s;
+        }
+        .energy-meter {
+            background: #1a1a1a;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        .meter-bar {
+            width: 100%;
+            height: 20px;
+            background: #333;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        .meter-fill {
+            height: 100%;
+            background: #ffaa00;
+            width: 0%;
+            transition: width 0.05s;
         }
         .button-row {
             display: flex;
@@ -114,10 +133,17 @@
         }
         .connected { background: #00ff00; }
         .disconnected { background: #ff0000; }
+        canvas {
+            width: 100%;
+            height: 100px;
+            background: #000;
+            border-radius: 8px;
+            margin: 15px 0;
+        }
     </style>
 </head>
 <body>
-    <h1>⏱️ Zynth Device - MP3 Detector</h1>
+    <h1>⏱️ Zynth Device - MP3 Detector with Onset Detection</h1>
 
     <div class="panel">
         <div style="display: flex; align-items: center; margin-bottom: 15px;">
@@ -132,21 +158,37 @@
             </div>
             <div class="stat-card">
                 <div class="stat-label">Detected</div>
-                <div class="stat-value" id="detectedCount">0</div>
+                <div class="stat-value" id="detectedCount">0/0</div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Energy</div>
-                <div class="stat-value" id="energyLevel">0.00</div>
+                <div class="stat-label">Current Note</div>
+                <div class="stat-value" id="currentNote">---</div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">State</div>
-                <div class="stat-value" id="noteState">---</div>
+                <div class="stat-label">Delay (ms)</div>
+                <div class="stat-value" id="lastDelay">---</div>
+            </div>
+        </div>
+
+        <div class="energy-meter">
+            <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                <span>Flute Range Energy</span>
+                <span id="energyValue">0.00</span>
+            </div>
+            <div class="meter-bar">
+                <div class="meter-fill" id="energyMeter"></div>
+            </div>
+            <div style="display: flex; justify-content: space-between; margin-top: 5px;">
+                <span>Change: <span id="energyChange">0.00</span></span>
+                <span>Threshold: <span id="threshold">0.02</span></span>
             </div>
         </div>
 
         <div class="progress-bar">
             <div class="progress-fill" id="progressFill"></div>
         </div>
+
+        <canvas id="visualizer"></canvas>
 
         <div class="button-row">
             <button id="enableBtn">🎤 Enable Mic</button>
@@ -185,22 +227,20 @@
         let sequenceStartTime = 0;
         let expectedNotes = [];
         let expectedNoteIndex = 0;
-        let isNoteActive = false;
         let detectedCount = 0;
 
-        // Detection parameters
-        const ENERGY_THRESHOLD = 0.08;
-        const MIN_NOTE_DURATION = 100;
-        const MAX_NOTE_DURATION = 2000;
-        const DETECTION_WINDOW_MS = 500;
+        // Note tracking state
+        let isNoteActive = false;
+        let noteStartTime = 0;
+        let lastEnergy = 0;
+        let energyHistory = [];
+        let onsetThreshold = 0.02;  // Energy threshold for detection
+        let minTimeBetweenNotes = 200; // ms
+        let lastNoteTime = 0;
 
         // FFT setup
         const FFT_SIZE = 2048;
         const FLUTE_RANGE = { min: 220, max: 1046 };
-
-        // Energy history for onset detection
-        let energyHistory = [];
-        let lastEnergy = 0;
 
         // Connection status
         db.ref('.info/connected').on('value', snap => {
@@ -219,7 +259,7 @@
             serverOffset = snap.val() || 0;
         });
 
-        // Listen for test sequence from conductor - UPDATED PATH
+        // Listen for test sequence from conductor
         db.ref('zynth/mp3_test').on('value', snap => {
             const sequence = snap.val();
             if (sequence && sequence.status === 'ACTIVE') {
@@ -229,8 +269,10 @@
                 expectedNotes = sequence.notes;
                 expectedNoteIndex = 0;
                 detectedCount = 0;
+                isNoteActive = false;
 
-                document.getElementById('detectedCount').innerText = '0';
+                document.getElementById('detectedCount').innerText = `0/${expectedNotes.length}`;
+                document.getElementById('currentNote').innerText = 'Waiting...';
 
                 const startTimeStr = new Date(sequenceStartTime).toLocaleTimeString() +
                     `.${String(sequenceStartTime % 1000).padStart(3, '0')}`;
@@ -241,7 +283,8 @@
                 // Sequence ended
                 sequenceActive = false;
                 expectedNoteIndex = 0;
-                document.getElementById('noteState').innerText = '---';
+                document.getElementById('currentNote').innerText = '---';
+                document.getElementById('detectedCount').innerText = `${detectedCount}/${expectedNotes.length}`;
                 log('⏹️ Sequence ended');
             }
         });
@@ -272,6 +315,7 @@
                 log('✅ Mic enabled - waiting for MP3 test');
 
                 detectNote();
+                drawVisualizer();
 
             } catch (err) {
                 log(`❌ Mic error: ${err.message}`);
@@ -315,9 +359,16 @@
                 totalEnergy += dataArray[i] / 255;
                 binCount++;
             }
-            const avgEnergy = totalEnergy / binCount;
+            const avgEnergy = binCount > 0 ? totalEnergy / binCount : 0;
 
-            document.getElementById('energyLevel').innerText = avgEnergy.toFixed(3);
+            // Calculate energy change (for onset detection)
+            const energyChange = avgEnergy - lastEnergy;
+
+            // Update displays
+            document.getElementById('energyValue').innerText = avgEnergy.toFixed(3);
+            document.getElementById('energyMeter').style.width = (avgEnergy * 100) + '%';
+            document.getElementById('energyChange').innerText = energyChange.toFixed(3);
+            document.getElementById('threshold').innerText = onsetThreshold.toFixed(3);
 
             // Update progress if sequence active
             if (sequenceActive && expectedNotes.length > 0) {
@@ -325,18 +376,19 @@
                 document.getElementById('progressFill').style.width = progress + '%';
             }
 
-            // Simple onset detection - when energy rises significantly
-            if (!isNoteActive && avgEnergy > ENERGY_THRESHOLD) {
-                // Check if this is a new note onset
-                const timeSinceLastNote = now - (detectedCount > 0 ? lastNoteTime : 0);
-
-                if (timeSinceLastNote > MIN_NOTE_DURATION) {
+            // ONSET DETECTION: Look for sharp rise in energy
+            if (!isNoteActive && avgEnergy > onsetThreshold && energyChange > 0.03) {
+                // Check if enough time has passed since last note
+                if (now - lastNoteTime > minTimeBetweenNotes) {
                     // Note started!
                     isNoteActive = true;
-                    const noteStartTime = now;
+                    noteStartTime = now;
                     lastNoteTime = now;
 
-                    document.getElementById('noteState').innerText = 'ACTIVE';
+                    document.getElementById('currentNote').innerText = 'ACTIVE';
+
+                    // Log the detection
+                    log(`🔊 ONSET at ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')} (energy: ${avgEnergy.toFixed(3)}, change: ${energyChange.toFixed(3)})`);
 
                     // If sequence is active, match to expected note
                     if (sequenceActive && expectedNoteIndex < expectedNotes.length) {
@@ -345,33 +397,81 @@
                         const delay = now - expectedTime;
 
                         detectedCount++;
-                        document.getElementById('detectedCount').innerText = detectedCount;
+                        document.getElementById('detectedCount').innerText = `${detectedCount}/${expectedNotes.length}`;
+                        document.getElementById('lastDelay').innerText = delay;
 
-                        log(`🔊 NOTE ${expectedNoteIndex} DETECTED: ${expectedNote.pitch} at ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')} (delay: ${delay}ms)`);
-                    } else {
-                        log(`🔊 NOTE DETECTED at ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
+                        log(`   ✅ Matched to note ${expectedNoteIndex}: ${expectedNote.pitch} (delay: ${delay}ms)`);
                     }
                 }
             }
 
-            // Note ending detection
-            if (isNoteActive && avgEnergy < ENERGY_THRESHOLD * 0.5) {
-                isNoteActive = false;
-                document.getElementById('noteState').innerText = '---';
+            // NOTE ENDING: Energy drops and stays low
+            if (isNoteActive && avgEnergy < onsetThreshold * 0.7) {
+                // Check recent history to confirm it's really the end
+                let lowEnergyCount = 0;
+                const samplesToCheck = Math.min(5, energyHistory.length);
+                for (let i = energyHistory.length - 1; i >= energyHistory.length - samplesToCheck; i--) {
+                    if (i >= 0 && energyHistory[i] < onsetThreshold * 0.7) {
+                        lowEnergyCount++;
+                    }
+                }
 
-                if (sequenceActive) {
-                    expectedNoteIndex++;
-                    log(`✅ Note ended - ${expectedNoteIndex}/${expectedNotes.length}`);
-                } else {
-                    log(`✅ Note ended`);
+                // If most recent samples are low energy, note has ended
+                if (lowEnergyCount >= 3) {
+                    isNoteActive = false;
+                    const noteDuration = now - noteStartTime;
+
+                    document.getElementById('currentNote').innerText = '---';
+                    log(`✅ Note ended - duration: ${noteDuration}ms`);
+
+                    if (sequenceActive) {
+                        expectedNoteIndex++;
+                    }
                 }
             }
 
-            // Store energy for history
+            // Update history
+            lastEnergy = avgEnergy;
             energyHistory.push(avgEnergy);
-            if (energyHistory.length > 10) energyHistory.shift();
+            if (energyHistory.length > 50) energyHistory.shift();
 
             requestAnimationFrame(detectNote);
+        }
+
+        function drawVisualizer() {
+            if (!analyser || !isListening) {
+                requestAnimationFrame(drawVisualizer);
+                return;
+            }
+
+            const canvas = document.getElementById('visualizer');
+            const ctx = canvas.getContext('2d');
+            const width = canvas.width;
+            const height = canvas.height;
+
+            const dataArray = new Uint8Array(analyser.frequencyBinCount);
+            analyser.getByteFrequencyData(dataArray);
+
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, width, height);
+
+            // Draw spectrum in flute range
+            ctx.fillStyle = '#00ccff';
+            const nyquist = audioCtx.sampleRate / 2;
+            const startBin = Math.floor(220 / nyquist * analyser.frequencyBinCount);
+            const endBin = Math.floor(1046 / nyquist * analyser.frequencyBinCount);
+            const binRange = endBin - startBin;
+
+            for (let i = 0; i < 50; i++) {
+                const binIndex = startBin + Math.floor((i / 50) * binRange);
+                if (binIndex < dataArray.length) {
+                    const x = i * (width / 50);
+                    const barHeight = (dataArray[binIndex] / 255) * height;
+                    ctx.fillRect(x, height - barHeight, width / 50 - 2, barHeight);
+                }
+            }
+
+            requestAnimationFrame(drawVisualizer);
         }
 
         function copyLog() {
@@ -404,8 +504,9 @@
         document.getElementById('copyLogBtn').onclick = copyLog;
 
         window.onload = () => {
-            log('⏱️ MP3 Detector ready');
-            log('🎯 Listening for MP3 test on zynth/mp3_test');
+            log('⏱️ MP3 Detector with Onset Detection ready');
+            log('🎯 Looking for sharp energy rises in flute range (220-1046Hz)');
+            log(`⚡ Threshold: ${onsetThreshold}, min change: 0.03`);
         };
     </script>
 </body>
