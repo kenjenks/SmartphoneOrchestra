@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zynth Conductor - 30 Second Test with Random Jitter</title>
+    <title>Zynth Conductor - MP3 Jitter Test</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <style>
@@ -108,9 +108,6 @@
         .note-table .late {
             color: #66ff66;
         }
-        .note-table .overlap {
-            background: #442200;
-        }
         button {
             background: #00ccff;
             color: #000;
@@ -161,10 +158,15 @@
         }
         .connected { background: #00ff00; }
         .disconnected { background: #ff0000; }
+        .audio-status {
+            font-family: monospace;
+            color: #ffaa00;
+            margin: 10px 0;
+        }
     </style>
 </head>
 <body>
-    <h1>🎵 Zynth Conductor - 30 Second Test with Random Jitter</h1>
+    <h1>🎵 Zynth Conductor - MP3 Jitter Test</h1>
 
     <div class="panel">
         <div style="display: flex; align-items: center; margin-bottom: 15px;">
@@ -191,6 +193,10 @@
             </div>
         </div>
 
+        <div class="audio-status" id="audioStatus">
+            ⏳ Loading MP3 file...
+        </div>
+
         <div class="jitter-control">
             <h3>🎲 Random Jitter Settings</h3>
             <div class="slider-group">
@@ -201,8 +207,8 @@
                 <input type="range" id="jitterSlider" min="0" max="500" value="200" step="10">
             </div>
             <p style="color: #888; font-size: 0.9rem;">
-                Each note will start at its scheduled time ± random jitter.<br>
-                Notes may overlap if jitter is large enough!
+                Using actual MP3 file from tuning_mode.json<br>
+                Each note will start at its scheduled time ± random jitter.
             </p>
         </div>
 
@@ -211,7 +217,7 @@
         </div>
 
         <div>
-            <button id="playBtn">▶️ PLAY WITH JITTER</button>
+            <button id="playBtn">▶️ PLAY MP3 WITH JITTER</button>
             <button id="stopBtn" class="danger">⏹️ STOP</button>
         </div>
 
@@ -222,10 +228,9 @@
                     <tr>
                         <th>Note</th>
                         <th>Pitch</th>
-                        <th>Scheduled (ms)</th>
+                        <th>MP3 Time (ms)</th>
                         <th>Jitter (ms)</th>
                         <th>Actual (ms)</th>
-                        <th>Duration</th>
                     </tr>
                 </thead>
                 <tbody id="noteTableBody">
@@ -253,87 +258,91 @@
         firebase.initializeApp(firebaseConfig);
         const db = firebase.database();
 
+        // Audio state
         let audioCtx = null;
+        let audioBuffer = null;
         let serverOffset = 0;
         let isPlaying = false;
-        let scheduledNotes = [];
-        let overlapCount = 0;
+        let activeSources = [];
+
+        // MP3 URL from tuning_mode.json
+        const MP3_URL = "https://static.wixstatic.com/mp3/9178d1_f151780a64db4af297d38519c1b2b825.mp3";
 
         // First 30 seconds of notes from tuning_mode.json
         const allNotes = [
-            { pitch: 'G4', freq: 392, duration: 371.5, offset: 301.9 },
-            { pitch: 'A4', freq: 440, duration: 278.6, offset: 696.6 },
-            { pitch: 'B4', freq: 494, duration: 278.6, offset: 952.0 },
-            { pitch: 'D5', freq: 587, duration: 278.6, offset: 1230.7 },
-            { pitch: 'C5', freq: 523, duration: 278.6, offset: 1532.5 },
-            { pitch: 'C5', freq: 523, duration: 278.6, offset: 1834.4 },
-            { pitch: 'E5', freq: 659, duration: 278.6, offset: 2113.0 },
-            { pitch: 'D5', freq: 587, duration: 278.6, offset: 2391.7 },
-            { pitch: 'D5', freq: 587, duration: 278.6, offset: 2670.3 },
-            { pitch: 'G5', freq: 784, duration: 278.6, offset: 2948.9 },
-            { pitch: 'Gb5', freq: 740, duration: 278.6, offset: 3297.2 },
-            { pitch: 'G5', freq: 784, duration: 278.6, offset: 3552.7 },
-            { pitch: 'D5', freq: 587, duration: 278.6, offset: 3831.3 },
-            { pitch: 'B4', freq: 494, duration: 278.6, offset: 4109.9 },
-            { pitch: 'G4', freq: 392, duration: 278.6, offset: 4411.8 },
-            { pitch: 'A4', freq: 440, duration: 278.6, offset: 4690.4 },
-            { pitch: 'B4', freq: 494, duration: 278.6, offset: 4945.9 },
-            { pitch: 'C5', freq: 523, duration: 278.6, offset: 5294.1 },
-            { pitch: 'D5', freq: 587, duration: 278.6, offset: 5526.3 },
-            { pitch: 'E5', freq: 659, duration: 278.6, offset: 5805.0 },
-            { pitch: 'D5', freq: 587, duration: 278.6, offset: 6106.8 },
-            { pitch: 'C5', freq: 523, duration: 278.6, offset: 6385.5 },
-            { pitch: 'B4', freq: 494, duration: 278.6, offset: 6710.6 },
-            { pitch: 'A4', freq: 440, duration: 278.6, offset: 6966.0 },
-            { pitch: 'B4', freq: 494, duration: 278.6, offset: 7244.6 },
-            { pitch: 'G4', freq: 392, duration: 278.6, offset: 7546.5 },
-            { pitch: 'Gb4', freq: 370, duration: 278.6, offset: 7871.6 },
-            { pitch: 'G4', freq: 392, duration: 278.6, offset: 8150.2 },
-            { pitch: 'A4', freq: 440, duration: 278.6, offset: 8382.4 },
-            { pitch: 'D4', freq: 294, duration: 278.6, offset: 8707.5 },
-            { pitch: 'Gb4', freq: 370, duration: 278.6, offset: 8962.9 },
-            { pitch: 'A4', freq: 440, duration: 278.6, offset: 9264.8 },
-            { pitch: 'C5', freq: 523, duration: 278.6, offset: 9543.4 },
-            { pitch: 'B4', freq: 494, duration: 278.6, offset: 9868.5 },
-            { pitch: 'A4', freq: 440, duration: 278.6, offset: 10100.7 },
-            { pitch: 'B4', freq: 494, duration: 278.6, offset: 10379.3 },
-            { pitch: 'G4', freq: 392, duration: 278.6, offset: 10681.2 },
-            { pitch: 'A4', freq: 440, duration: 278.6, offset: 10983.0 },
-            { pitch: 'B4', freq: 494, duration: 278.6, offset: 11238.5 },
-            { pitch: 'D5', freq: 587, duration: 278.6, offset: 11540.3 },
-            { pitch: 'C5', freq: 523, duration: 278.6, offset: 11819.0 },
-            { pitch: 'C5', freq: 523, duration: 278.6, offset: 12097.6 },
-            { pitch: 'E5', freq: 659, duration: 278.6, offset: 12376.2 },
-            { pitch: 'D5', freq: 587, duration: 278.6, offset: 12678.1 },
-            { pitch: 'D5', freq: 587, duration: 278.6, offset: 12956.7 },
-            { pitch: 'G5', freq: 784, duration: 278.6, offset: 13235.4 },
-            { pitch: 'Gb5', freq: 740, duration: 278.6, offset: 13583.7 },
-            { pitch: 'G5', freq: 784, duration: 278.6, offset: 13839.1 },
-            { pitch: 'D5', freq: 587, duration: 278.6, offset: 14117.7 },
-            { pitch: 'B4', freq: 494, duration: 278.6, offset: 14396.4 },
-            { pitch: 'G4', freq: 392, duration: 278.6, offset: 14698.2 },
-            { pitch: 'A4', freq: 440, duration: 278.6, offset: 14976.9 },
-            { pitch: 'B4', freq: 494, duration: 278.6, offset: 15232.3 },
-            { pitch: 'E4', freq: 330, duration: 185.8, offset: 15580.6 },
-            { pitch: 'D5', freq: 587, duration: 278.6, offset: 15836.0 },
-            { pitch: 'C5', freq: 523, duration: 278.6, offset: 16114.6 },
-            { pitch: 'B4', freq: 494, duration: 278.6, offset: 16416.5 },
-            { pitch: 'A4', freq: 440, duration: 278.6, offset: 16671.9 },
-            { pitch: 'G4', freq: 392, duration: 278.6, offset: 16973.8 },
-            { pitch: 'D4', freq: 294, duration: 278.6, offset: 17252.4 },
-            { pitch: 'G4', freq: 392, duration: 278.6, offset: 17531.1 },
-            { pitch: 'Gb4', freq: 370, duration: 278.6, offset: 17856.1 },
-            { pitch: 'G4', freq: 392, duration: 139.3, offset: 18204.4 },
-            { pitch: 'B4', freq: 494, duration: 278.6, offset: 18367.0 },
-            { pitch: 'D5', freq: 587, duration: 278.6, offset: 18668.8 },
-            { pitch: 'G5', freq: 784, duration: 278.6, offset: 18947.5 },
-            { pitch: 'D5', freq: 587, duration: 278.6, offset: 19272.6 },
-            { pitch: 'B4', freq: 494, duration: 278.6, offset: 19528.0 },
-            { pitch: 'G4', freq: 392, duration: 278.6, offset: 19829.8 },
-            { pitch: 'B4', freq: 494, duration: 278.6, offset: 20085.3 },
-            { pitch: 'D5', freq: 587, duration: 278.6, offset: 20387.1 },
-            { pitch: 'B4', freq: 494, duration: 1671.8, offset: 20689.0 },
-            { pitch: 'C5', freq: 523, duration: 835.9, offset: 22407.3 }
+            { pitch: 'G4', offset: 301.9, duration: 371.5 },
+            { pitch: 'A4', offset: 696.6, duration: 278.6 },
+            { pitch: 'B4', offset: 952.0, duration: 278.6 },
+            { pitch: 'D5', offset: 1230.7, duration: 278.6 },
+            { pitch: 'C5', offset: 1532.5, duration: 278.6 },
+            { pitch: 'C5', offset: 1834.4, duration: 278.6 },
+            { pitch: 'E5', offset: 2113.0, duration: 278.6 },
+            { pitch: 'D5', offset: 2391.7, duration: 278.6 },
+            { pitch: 'D5', offset: 2670.3, duration: 278.6 },
+            { pitch: 'G5', offset: 2948.9, duration: 278.6 },
+            { pitch: 'Gb5', offset: 3297.2, duration: 278.6 },
+            { pitch: 'G5', offset: 3552.7, duration: 278.6 },
+            { pitch: 'D5', offset: 3831.3, duration: 278.6 },
+            { pitch: 'B4', offset: 4109.9, duration: 278.6 },
+            { pitch: 'G4', offset: 4411.8, duration: 278.6 },
+            { pitch: 'A4', offset: 4690.4, duration: 278.6 },
+            { pitch: 'B4', offset: 4945.9, duration: 278.6 },
+            { pitch: 'C5', offset: 5294.1, duration: 278.6 },
+            { pitch: 'D5', offset: 5526.3, duration: 278.6 },
+            { pitch: 'E5', offset: 5805.0, duration: 278.6 },
+            { pitch: 'D5', offset: 6106.8, duration: 278.6 },
+            { pitch: 'C5', offset: 6385.5, duration: 278.6 },
+            { pitch: 'B4', offset: 6710.6, duration: 278.6 },
+            { pitch: 'A4', offset: 6966.0, duration: 278.6 },
+            { pitch: 'B4', offset: 7244.6, duration: 278.6 },
+            { pitch: 'G4', offset: 7546.5, duration: 278.6 },
+            { pitch: 'Gb4', offset: 7871.6, duration: 278.6 },
+            { pitch: 'G4', offset: 8150.2, duration: 278.6 },
+            { pitch: 'A4', offset: 8382.4, duration: 278.6 },
+            { pitch: 'D4', offset: 8707.5, duration: 278.6 },
+            { pitch: 'Gb4', offset: 8962.9, duration: 278.6 },
+            { pitch: 'A4', offset: 9264.8, duration: 278.6 },
+            { pitch: 'C5', offset: 9543.4, duration: 278.6 },
+            { pitch: 'B4', offset: 9868.5, duration: 278.6 },
+            { pitch: 'A4', offset: 10100.7, duration: 278.6 },
+            { pitch: 'B4', offset: 10379.3, duration: 278.6 },
+            { pitch: 'G4', offset: 10681.2, duration: 278.6 },
+            { pitch: 'A4', offset: 10983.0, duration: 278.6 },
+            { pitch: 'B4', offset: 11238.5, duration: 278.6 },
+            { pitch: 'D5', offset: 11540.3, duration: 278.6 },
+            { pitch: 'C5', offset: 11819.0, duration: 278.6 },
+            { pitch: 'C5', offset: 12097.6, duration: 278.6 },
+            { pitch: 'E5', offset: 12376.2, duration: 278.6 },
+            { pitch: 'D5', offset: 12678.1, duration: 278.6 },
+            { pitch: 'D5', offset: 12956.7, duration: 278.6 },
+            { pitch: 'G5', offset: 13235.4, duration: 278.6 },
+            { pitch: 'Gb5', offset: 13583.7, duration: 278.6 },
+            { pitch: 'G5', offset: 13839.1, duration: 278.6 },
+            { pitch: 'D5', offset: 14117.7, duration: 278.6 },
+            { pitch: 'B4', offset: 14396.4, duration: 278.6 },
+            { pitch: 'G4', offset: 14698.2, duration: 278.6 },
+            { pitch: 'A4', offset: 14976.9, duration: 278.6 },
+            { pitch: 'B4', offset: 15232.3, duration: 278.6 },
+            { pitch: 'E4', offset: 15580.6, duration: 185.8 },
+            { pitch: 'D5', offset: 15836.0, duration: 278.6 },
+            { pitch: 'C5', offset: 16114.6, duration: 278.6 },
+            { pitch: 'B4', offset: 16416.5, duration: 278.6 },
+            { pitch: 'A4', offset: 16671.9, duration: 278.6 },
+            { pitch: 'G4', offset: 16973.8, duration: 278.6 },
+            { pitch: 'D4', offset: 17252.4, duration: 278.6 },
+            { pitch: 'G4', offset: 17531.1, duration: 278.6 },
+            { pitch: 'Gb4', offset: 17856.1, duration: 278.6 },
+            { pitch: 'G4', offset: 18204.4, duration: 139.3 },
+            { pitch: 'B4', offset: 18367.0, duration: 278.6 },
+            { pitch: 'D5', offset: 18668.8, duration: 278.6 },
+            { pitch: 'G5', offset: 18947.5, duration: 278.6 },
+            { pitch: 'D5', offset: 19272.6, duration: 278.6 },
+            { pitch: 'B4', offset: 19528.0, duration: 278.6 },
+            { pitch: 'G4', offset: 19829.8, duration: 278.6 },
+            { pitch: 'B4', offset: 20085.3, duration: 278.6 },
+            { pitch: 'D5', offset: 20387.1, duration: 278.6 },
+            { pitch: 'B4', offset: 20689.0, duration: 1671.8 },
+            { pitch: 'C5', offset: 22407.3, duration: 835.9 }
         ].filter(note => note.offset < 30000);
 
         // Clock sync
@@ -354,6 +363,28 @@
             }
         });
 
+        // Load MP3 file
+        async function loadMP3() {
+            try {
+                document.getElementById('audioStatus').innerHTML = '⏳ Loading MP3 file...';
+
+                const response = await fetch(MP3_URL);
+                const arrayBuffer = await response.arrayBuffer();
+
+                audioCtx = new AudioContext();
+                audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+
+                document.getElementById('audioStatus').innerHTML = '✅ MP3 loaded - ' +
+                    Math.round(audioBuffer.duration) + 's, ' +
+                    audioBuffer.numberOfChannels + ' channels';
+                log('✅ MP3 loaded successfully');
+
+            } catch (err) {
+                document.getElementById('audioStatus').innerHTML = '❌ Failed to load MP3';
+                log(`❌ MP3 load error: ${err.message}`);
+            }
+        }
+
         // Jitter slider
         let maxJitter = 200;
         document.getElementById('jitterSlider').addEventListener('input', (e) => {
@@ -366,7 +397,6 @@
         function generateJitter() {
             const jitters = [];
             for (let i = 0; i < allNotes.length; i++) {
-                // Random jitter between -maxJitter and +maxJitter
                 const jitter = Math.floor(Math.random() * (maxJitter * 2 + 1)) - maxJitter;
                 jitters.push(jitter);
             }
@@ -376,7 +406,6 @@
         // Check for overlaps
         function checkOverlaps(notes, jitters) {
             let overlaps = 0;
-            const scheduledTimes = notes.map((note, i) => note.offset);
             const actualTimes = notes.map((note, i) => note.offset + jitters[i]);
 
             for (let i = 0; i < notes.length - 1; i++) {
@@ -402,24 +431,13 @@
                 const jitter = jitters[i];
                 const actualTime = note.offset + jitter;
 
-                // Check if this note overlaps with next
-                let rowClass = '';
-                if (i < allNotes.length - 1) {
-                    const nextActual = allNotes[i + 1].offset + jitters[i + 1];
-                    if (actualTime + note.duration > nextActual) {
-                        rowClass = 'overlap';
-                    }
-                }
-
                 const row = document.createElement('tr');
-                row.className = rowClass;
                 row.innerHTML = `
                     <td>${i}</td>
                     <td>${note.pitch}</td>
                     <td>${note.offset}</td>
                     <td class="${jitter < 0 ? 'early' : 'late'}">${jitter > 0 ? '+' : ''}${jitter}</td>
                     <td>${Math.round(actualTime)}</td>
-                    <td>${note.duration}ms</td>
                 `;
                 tbody.appendChild(row);
             }
@@ -427,62 +445,14 @@
             document.getElementById('totalNotes').innerText = allNotes.length;
         }
 
-        async function playNote(note, jitter, noteIndex, scheduledTime) {
-            return new Promise(async (resolve) => {
-                if (!audioCtx) {
-                    audioCtx = new AudioContext();
-                }
-
-                // Calculate delay until scheduled time
-                const now = Date.now() + serverOffset;
-                const delayMs = Math.max(0, scheduledTime - now);
-
-                setTimeout(async () => {
-                    if (audioCtx.state === 'suspended') {
-                        await audioCtx.resume();
-                    }
-
-                    const sampleRate = audioCtx.sampleRate;
-                    const samples = Math.floor(sampleRate * (note.duration / 1000));
-
-                    // Generate sine wave with envelope
-                    const buffer = audioCtx.createBuffer(1, samples, sampleRate);
-                    const data = buffer.getChannelData(0);
-
-                    for (let i = 0; i < samples; i++) {
-                        const t = i / samples;
-                        let envelope = 1;
-                        if (t < 0.01) envelope = t / 0.01;
-                        if (t > 0.99) envelope = (1 - t) / 0.01;
-
-                        data[i] = Math.sin(2 * Math.PI * note.freq * i / sampleRate) * envelope * 0.5;
-                    }
-
-                    const source = audioCtx.createBufferSource();
-                    source.buffer = buffer;
-                    source.connect(audioCtx.destination);
-
-                    // Apply jitter
-                    setTimeout(() => {
-                        source.start();
-
-                        const logTime = Date.now() + serverOffset;
-                        const jitterSign = jitter > 0 ? '+' : '';
-                        log(`🔊 Note ${noteIndex}: ${note.pitch} at ${new Date(logTime).toLocaleTimeString()}.${String(logTime % 1000).padStart(3, '0')} (jitter: ${jitterSign}${jitter}ms)`);
-
-                        source.onended = () => {
-                            log(`✅ Note ${noteIndex} ended`);
-                            resolve();
-                        };
-                    }, Math.max(0, jitter)); // Ensure non-negative delay
-
-                }, delayMs);
-            });
-        }
-
         async function playSequence() {
             if (isPlaying) {
                 log('⚠️ Already playing');
+                return;
+            }
+
+            if (!audioBuffer) {
+                log('❌ MP3 not loaded yet');
                 return;
             }
 
@@ -506,69 +476,65 @@
             const notesForFirebase = allNotes.map((note, index) => ({
                 index: index,
                 pitch: note.pitch,
-                freq: note.freq,
-                scheduledOffset: note.offset,
-                actualOffset: note.offset + jitters[index],
+                offset: note.offset,
+                duration: note.duration,
                 jitter: jitters[index],
-                duration: note.duration
+                actualOffset: note.offset + jitters[index]
             }));
 
             // Send GO signal to Firebase
-            await db.ref('zynth/jitter_test').set({
+            await db.ref('zynth/mp3_test').set({
                 status: 'ACTIVE',
                 startTime: startTime,
                 bufferMs: bufferMs,
                 maxJitter: maxJitter,
+                mp3Url: MP3_URL,
                 notes: notesForFirebase,
                 timestamp: now
             });
 
-            // Initialize audio context
-            if (!audioCtx) {
-                audioCtx = new AudioContext();
-            }
+            // Resume audio context if needed
             if (audioCtx.state === 'suspended') {
                 await audioCtx.resume();
             }
 
-            // Schedule ALL notes at once
-            const sampleRate = audioCtx.sampleRate;
-            const activeSources = [];
+            // Schedule ALL notes at once from the MP3
+            activeSources = [];
 
             for (let i = 0; i < allNotes.length; i++) {
                 const note = allNotes[i];
                 const jitter = jitters[i];
-                const noteTime = startTime + note.offset + jitter; // Apply jitter to actual play time
+
+                // Calculate when this note should start (MP3 offset + jitter)
+                const mp3Offset = note.offset / 1000; // Convert to seconds
+                const jitterSeconds = jitter / 1000;
+                const playTime = startTime / 1000 + mp3Offset + jitterSeconds; // In seconds since epoch
 
                 // Calculate delay until this note should play
-                const delayMs = Math.max(0, noteTime - (Date.now() + serverOffset));
+                const nowSeconds = (Date.now() + serverOffset) / 1000;
+                const delaySeconds = Math.max(0, playTime - nowSeconds);
 
                 // Schedule this note
                 setTimeout(() => {
-                    const samples = Math.floor(sampleRate * (note.duration / 1000));
-
-                    // Generate sine wave with envelope
-                    const buffer = audioCtx.createBuffer(1, samples, sampleRate);
-                    const data = buffer.getChannelData(0);
-
-                    for (let j = 0; j < samples; j++) {
-                        const t = j / samples;
-                        let envelope = 1;
-                        if (t < 0.01) envelope = t / 0.01;
-                        if (t > 0.99) envelope = (1 - t) / 0.01;
-
-                        data[j] = Math.sin(2 * Math.PI * note.freq * j / sampleRate) * envelope * 0.5;
-                    }
-
+                    // Create a new source for this note
                     const source = audioCtx.createBufferSource();
-                    source.buffer = buffer;
-                    source.connect(audioCtx.destination);
+                    source.buffer = audioBuffer;
 
-                    source.start();
+                    // Create gain node for envelope (optional - can fade in/out)
+                    const gainNode = audioCtx.createGain();
+                    gainNode.gain.value = 1.0;
+
+                    // Connect: source -> gain -> destination
+                    source.connect(gainNode);
+                    gainNode.connect(audioCtx.destination);
+
+                    // Start from the correct offset in the MP3
+                    source.start(0, mp3Offset, note.duration / 1000);
+
                     activeSources.push(source);
 
                     const logTime = Date.now() + serverOffset;
-                    log(`🔊 Note ${i}: ${note.pitch} at ${new Date(logTime).toLocaleTimeString()}.${String(logTime % 1000).padStart(3, '0')} (jitter: ${jitter > 0 ? '+' : ''}${jitter}ms)`);
+                    log(`🔊 Note ${i}: ${note.pitch} at ${new Date(logTime).toLocaleTimeString()}.${String(logTime % 1000).padStart(3, '0')} (jitter: ${jitter > 0 ? '+' : ''}${jitter}ms, MP3 offset: ${mp3Offset.toFixed(3)}s)`);
 
                     source.onended = () => {
                         log(`✅ Note ${i} ended`);
@@ -577,13 +543,13 @@
                         if (index > -1) activeSources.splice(index, 1);
                     };
 
-                }, delayMs);
+                }, delaySeconds * 1000);
 
-                // Update progress (just for UI, doesn't affect playback)
+                // Update progress (just for UI)
                 setTimeout(() => {
                     const progress = ((i + 1) / allNotes.length) * 100;
                     document.getElementById('progressFill').style.width = progress + '%';
-                }, delayMs);
+                }, delaySeconds * 1000);
             }
 
             // Calculate when the last note should end
@@ -595,18 +561,25 @@
             // Mark sequence complete after last note ends
             setTimeout(() => {
                 log('✅ 30-second sequence complete');
-                db.ref('zynth/jitter_test').remove();
+                db.ref('zynth/mp3_test').remove();
                 document.getElementById('progressFill').style.width = '0%';
                 isPlaying = false;
+                activeSources = [];
             }, Math.max(0, timeUntilEnd + 1000));
         }
 
         function stopSequence() {
-            if (audioCtx) {
-                audioCtx.close();
-                audioCtx = null;
-            }
-            db.ref('zynth/jitter_test').remove();
+            // Stop all active sources
+            activeSources.forEach(source => {
+                try {
+                    source.stop();
+                } catch (e) {
+                    // Ignore errors if already stopped
+                }
+            });
+            activeSources = [];
+
+            db.ref('zynth/mp3_test').remove();
             document.getElementById('progressFill').style.width = '0%';
             isPlaying = false;
             log('⏹️ Sequence stopped');
@@ -637,6 +610,9 @@
             console.log(message);
         }
 
+        // Initialize - load MP3
+        loadMP3();
+
         // Initialize with random jitter for display
         const initialJitters = generateJitter();
         checkOverlaps(allNotes, initialJitters);
@@ -646,8 +622,8 @@
         document.getElementById('stopBtn').onclick = stopSequence;
         document.getElementById('copyLogBtn').onclick = copyLog;
 
-        log('🎵 Conductor ready - 30 second test with random jitter');
-        log(`📊 Playing ${allNotes.length} notes with ±${maxJitter}ms jitter`);
+        log('🎵 MP3 Jitter Test ready');
+        log(`📊 Playing ${allNotes.length} notes from MP3 with ±${maxJitter}ms jitter`);
     </script>
 </body>
 </html>
