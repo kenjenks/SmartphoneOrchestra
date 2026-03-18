@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zynth Conductor - MP3 Jitter Test</title>
+    <title>Zynth Conductor - MP3 Test (No Jitter)</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <style>
@@ -59,28 +59,6 @@
             width: 0%;
             transition: width 0.1s;
         }
-        .jitter-control {
-            background: #1a1a1a;
-            padding: 15px;
-            border-radius: 8px;
-            margin: 20px 0;
-        }
-        .slider-group {
-            margin: 15px 0;
-        }
-        .slider-label {
-            display: flex;
-            justify-content: space-between;
-            color: #888;
-            margin-bottom: 5px;
-        }
-        input[type=range] {
-            width: 100%;
-            height: 5px;
-            background: #333;
-            border-radius: 5px;
-            outline: none;
-        }
         .note-table {
             width: 100%;
             border-collapse: collapse;
@@ -101,12 +79,6 @@
         .note-table td {
             padding: 8px;
             border-bottom: 1px solid #333;
-        }
-        .note-table .early {
-            color: #ff6666;
-        }
-        .note-table .late {
-            color: #66ff66;
         }
         button {
             background: #00ccff;
@@ -166,7 +138,7 @@
     </style>
 </head>
 <body>
-    <h1>🎵 Zynth Conductor - MP3 Jitter Test</h1>
+    <h1>🎵 Zynth Conductor - MP3 Test (No Jitter)</h1>
 
     <div class="panel">
         <div style="display: flex; align-items: center; margin-bottom: 15px;">
@@ -184,8 +156,8 @@
                 <div class="stat-value" id="totalDuration">30s</div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Max Jitter</div>
-                <div class="stat-value" id="maxJitter">±200ms</div>
+                <div class="stat-label">Jitter</div>
+                <div class="stat-value" id="maxJitter">0ms</div>
             </div>
             <div class="stat-card">
                 <div class="stat-label">Overlaps</div>
@@ -197,40 +169,23 @@
             ⏳ Loading MP3 file...
         </div>
 
-        <div class="jitter-control">
-            <h3>🎲 Random Jitter Settings</h3>
-            <div class="slider-group">
-                <div class="slider-label">
-                    <span>Maximum Jitter (±ms)</span>
-                    <span id="jitterValue" class="param-value">200 ms</span>
-                </div>
-                <input type="range" id="jitterSlider" min="0" max="500" value="200" step="10">
-            </div>
-            <p style="color: #888; font-size: 0.9rem;">
-                Using actual MP3 file from tuning_mode.json<br>
-                Each note will start at its scheduled time ± random jitter.
-            </p>
-        </div>
-
         <div class="progress-bar">
             <div class="progress-fill" id="progressFill"></div>
         </div>
 
         <div>
-            <button id="playBtn">▶️ PLAY MP3 WITH JITTER</button>
+            <button id="playBtn">▶️ PLAY MP3 (NO JITTER)</button>
             <button id="stopBtn" class="danger">⏹️ STOP</button>
         </div>
 
         <div style="margin-top: 20px;">
-            <h3>Note Schedule with Jitter (first 20 shown)</h3>
+            <h3>Note Schedule (first 20 shown)</h3>
             <table class="note-table" id="noteTable">
                 <thead>
                     <tr>
                         <th>Note</th>
                         <th>Pitch</th>
                         <th>MP3 Time (ms)</th>
-                        <th>Jitter (ms)</th>
-                        <th>Actual (ms)</th>
                     </tr>
                 </thead>
                 <tbody id="noteTableBody">
@@ -385,25 +340,12 @@
             }
         }
 
-        // Jitter slider
-        let maxJitter = 200;
-        document.getElementById('jitterSlider').addEventListener('input', (e) => {
-            maxJitter = parseInt(e.target.value);
-            document.getElementById('jitterValue').innerText = maxJitter + ' ms';
-            document.getElementById('maxJitter').innerText = '±' + maxJitter + 'ms';
-        });
-
-        // Generate random jitter for each note
+        // Generate zero jitter for all notes
         function generateJitter() {
-            const jitters = [];
-            for (let i = 0; i < allNotes.length; i++) {
-                const jitter = Math.floor(Math.random() * (maxJitter * 2 + 1)) - maxJitter;
-                jitters.push(jitter);
-            }
-            return jitters;
+            return allNotes.map(() => 0);
         }
 
-        // Check for overlaps
+        // Check for overlaps (will be zero with no jitter)
         function checkOverlaps(notes, jitters) {
             let overlaps = 0;
             const actualTimes = notes.map((note, i) => note.offset + jitters[i]);
@@ -428,16 +370,12 @@
 
             for (let i = 0; i < Math.min(20, allNotes.length); i++) {
                 const note = allNotes[i];
-                const jitter = jitters[i];
-                const actualTime = note.offset + jitter;
 
                 const row = document.createElement('tr');
                 row.innerHTML = `
                     <td>${i}</td>
                     <td>${note.pitch}</td>
                     <td>${note.offset}</td>
-                    <td class="${jitter < 0 ? 'early' : 'late'}">${jitter > 0 ? '+' : ''}${jitter}</td>
-                    <td>${Math.round(actualTime)}</td>
                 `;
                 tbody.appendChild(row);
             }
@@ -458,7 +396,7 @@
 
             isPlaying = true;
 
-            // Generate random jitter for this run
+            // Generate zero jitter
             const jitters = generateJitter();
             const overlaps = checkOverlaps(allNotes, jitters);
             updateNoteTable(jitters);
@@ -470,7 +408,7 @@
 
             log('🎬 Sending GO signal with 1s buffer');
             log(`📅 Sequence starting at ${new Date(startTime).toLocaleTimeString()}.${String(startTime % 1000).padStart(3, '0')}`);
-            log(`🎲 Max jitter: ±${maxJitter}ms, ${overlaps} potential overlaps`);
+            log(`🎲 No jitter - notes play at exact MP3 times`);
 
             // Prepare notes for Firebase
             const notesForFirebase = allNotes.map((note, index) => ({
@@ -478,8 +416,7 @@
                 pitch: note.pitch,
                 offset: note.offset,
                 duration: note.duration,
-                jitter: jitters[index],
-                actualOffset: note.offset + jitters[index]
+                jitter: 0
             }));
 
             // Send GO signal to Firebase
@@ -487,7 +424,6 @@
                 status: 'ACTIVE',
                 startTime: startTime,
                 bufferMs: bufferMs,
-                maxJitter: maxJitter,
                 mp3Url: MP3_URL,
                 notes: notesForFirebase,
                 timestamp: now
@@ -503,12 +439,10 @@
 
             for (let i = 0; i < allNotes.length; i++) {
                 const note = allNotes[i];
-                const jitter = jitters[i];
 
-                // Calculate when this note should start (MP3 offset + jitter)
+                // Calculate when this note should start (exact MP3 offset, no jitter)
                 const mp3Offset = note.offset / 1000; // Convert to seconds
-                const jitterSeconds = jitter / 1000;
-                const playTime = startTime / 1000 + mp3Offset + jitterSeconds; // In seconds since epoch
+                const playTime = startTime / 1000 + mp3Offset; // In seconds since epoch
 
                 // Calculate delay until this note should play
                 const nowSeconds = (Date.now() + serverOffset) / 1000;
@@ -520,13 +454,8 @@
                     const source = audioCtx.createBufferSource();
                     source.buffer = audioBuffer;
 
-                    // Create gain node for envelope (optional - can fade in/out)
-                    const gainNode = audioCtx.createGain();
-                    gainNode.gain.value = 1.0;
-
-                    // Connect: source -> gain -> destination
-                    source.connect(gainNode);
-                    gainNode.connect(audioCtx.destination);
+                    // Connect directly to destination
+                    source.connect(audioCtx.destination);
 
                     // Start from the correct offset in the MP3
                     source.start(0, mp3Offset, note.duration / 1000);
@@ -534,7 +463,7 @@
                     activeSources.push(source);
 
                     const logTime = Date.now() + serverOffset;
-                    log(`🔊 Note ${i}: ${note.pitch} at ${new Date(logTime).toLocaleTimeString()}.${String(logTime % 1000).padStart(3, '0')} (jitter: ${jitter > 0 ? '+' : ''}${jitter}ms, MP3 offset: ${mp3Offset.toFixed(3)}s)`);
+                    log(`🔊 Note ${i}: ${note.pitch} at ${new Date(logTime).toLocaleTimeString()}.${String(logTime % 1000).padStart(3, '0')} (MP3 offset: ${mp3Offset.toFixed(3)}s)`);
 
                     source.onended = () => {
                         log(`✅ Note ${i} ended`);
@@ -554,8 +483,7 @@
 
             // Calculate when the last note should end
             const lastNote = allNotes[allNotes.length - 1];
-            const lastJitter = jitters[allNotes.length - 1];
-            const lastNoteEnd = startTime + lastNote.offset + lastJitter + lastNote.duration;
+            const lastNoteEnd = startTime + lastNote.offset + lastNote.duration;
             const timeUntilEnd = lastNoteEnd - (Date.now() + serverOffset);
 
             // Mark sequence complete after last note ends
@@ -613,7 +541,7 @@
         // Initialize - load MP3
         loadMP3();
 
-        // Initialize with random jitter for display
+        // Initialize with zero jitter
         const initialJitters = generateJitter();
         checkOverlaps(allNotes, initialJitters);
         updateNoteTable(initialJitters);
@@ -622,8 +550,8 @@
         document.getElementById('stopBtn').onclick = stopSequence;
         document.getElementById('copyLogBtn').onclick = copyLog;
 
-        log('🎵 MP3 Jitter Test ready');
-        log(`📊 Playing ${allNotes.length} notes from MP3 with ±${maxJitter}ms jitter`);
+        log('🎵 MP3 Test ready - no jitter');
+        log(`📊 Playing ${allNotes.length} notes from MP3 at exact times`);
     </script>
 </body>
 </html>
