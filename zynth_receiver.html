@@ -323,14 +323,14 @@
         // Warble detection parameters (from conductor.html)
         const BASE_FLUTE_FREQ = 440;  // A4 - we're listening for modulation around this
         const WARBLE_ENERGY_THRESHOLD = 0.02;
-        const WARBLE_FREQ_BINS = 5;    // Look at ±5 FFT bins
+        const WARBLE_FREQ_BINS = 3;    // Look at ±3 FFT bins (reduced from 5)
         const WARBLE_MIN_CONFIDENCE = 0.6;
         const WARBLE_LOOKBACK_FRAMES = 15;  // Need 15 frames for modulation analysis
         const WARBLE_COOLDOWN_MS = 200;      // Min time between detections
 
         // Detection thresholds (from bach_analyzer.py)
         const MIN_WARBLE_DEPTH = 15;    // Hz
-        const MAX_WARBLE_DEPTH = 80;    // Hz
+        const MAX_WARBLE_DEPTH = 80;    // Hz (clamped)
         const MIN_VIBRATO_RATE = 1.5;   // Hz
         const MAX_VIBRATO_RATE = 4.5;   // Hz
         const MIN_SIGN_CHANGES = 3;      // Need at least 3 direction changes
@@ -338,6 +338,7 @@
         // Note timing
         const NOTE_DURATION = 300;       // ms per note
         const FRAME_HOP_MS = 23;         // ~23ms per frame (matches bach_analyzer)
+        const NOTE_TIMEOUT_MS = 450;      // Wait 450ms before assuming a 0 (1.5x note duration)
 
         // Decoder state
         const STATE_IDLE = 0;
@@ -352,6 +353,7 @@
         let validFrameCount = 0;
         let currentNoteIndex = 0;
         let detectionConfidence = 0;
+        let lastDetectionTime = 0;
 
         const FFT_SIZE = 4096;
 
@@ -383,6 +385,7 @@
             warbleBuffer = [];
             currentNoteIndex = 0;
             detectionConfidence = 0;
+            lastDetectionTime = 0;
 
             updateBinaryRow([]);
             updateFrameStatus();
@@ -423,11 +426,17 @@
             switch(decoderState) {
                 case STATE_LISTENING:
                     statusListening.className = 'frame-part listening';
+                    decoderStateSpan.innerText = 'Listening';
                     break;
                 case STATE_DETECTING:
+                    statusListening.className = 'frame-part listening';
+                    statusDetected.className = 'frame-part detected';
+                    decoderStateSpan.innerText = 'Detecting';
+                    break;
                 case STATE_COMPLETE:
                     statusListening.className = 'frame-part listening';
                     statusDetected.className = 'frame-part detected';
+                    decoderStateSpan.innerText = 'Complete';
                     break;
             }
         }
@@ -470,6 +479,7 @@
                 resetDecoder();
                 decoderState = STATE_LISTENING;
                 stateStartTime = Date.now();
+                lastDetectionTime = Date.now();
                 detectWarble();
                 drawVisualizer();
 
@@ -567,6 +577,30 @@
             // Update modulation score display
             modulationScoreSpan.innerText = energy.toFixed(3);
 
+            // Check for note timeout (if we're in DETECTING state)
+            if (decoderState === STATE_DETECTING && currentNoteIndex < 16) {
+                const timeSinceLastDetection = now - lastDetectionTime;
+
+                // If we've waited too long for the next note, assume it's a 0
+                if (timeSinceLastDetection > NOTE_TIMEOUT_MS) {
+                    log(`   Bit ${currentNoteIndex + 1}/16: 0 (timeout - no warble)`, 'detection');
+
+                    currentBits[currentNoteIndex] = 0;
+                    updateBinaryRow(currentBits);
+                    bitsReceivedSpan.innerText = `${currentBits.filter(b => b !== undefined).length}/16`;
+
+                    const progress = ((currentNoteIndex + 1) / 16) * 100;
+                    noteProgress.style.width = progress + '%';
+
+                    currentNoteIndex++;
+                    lastDetectionTime = now; // Reset timer
+
+                    if (currentNoteIndex >= 16) {
+                        completeFrame();
+                    }
+                }
+            }
+
             // Only proceed if we have enough energy
             if (energy < WARBLE_ENERGY_THRESHOLD) {
                 requestAnimationFrame(detectWarble);
@@ -581,7 +615,9 @@
                 // Find peak in region around base frequency
                 let maxEnergy = 0;
                 let maxIdx = binIndex;
-                for (let j = -WARBLE_FREQ_BINS * 2; j <= WARBLE_FREQ_BINS * 2; j++) {
+
+                // NARROW SEARCH WINDOW - ±3 bins only
+                for (let j = -3; j <= 3; j++) {
                     const idx = binIndex + j;
                     if (idx >= 0 && idx < frame.data.length && frame.data[idx] > maxEnergy) {
                         maxEnergy = frame.data[idx];
@@ -613,8 +649,9 @@
                 }
             }
 
-            // Calculate frequency range
-            const freqRange = Math.max(...peakFreqs) - Math.min(...peakFreqs);
+            // Calculate frequency range and CLAMP it
+            const rawFreqRange = Math.max(...peakFreqs) - Math.min(...peakFreqs);
+            const freqRange = Math.min(MAX_WARBLE_DEPTH, rawFreqRange); // Clamp to 80Hz max
 
             // Calculate vibrato rate (zero crossings)
             let zeroCrossings = 0;
@@ -625,12 +662,12 @@
             }
             const vibratoRate = (zeroCrossings / 2) / (WARBLE_LOOKBACK_FRAMES * FRAME_HOP_MS / 1000);
 
-            // Update detected parameters
+            // Update detected parameters with clamped depth
             detectedRate.innerText = vibratoRate.toFixed(1);
-            detectedDepth.innerText = Math.round(freqRange);
+            detectedDepth.innerText = Math.round(freqRange); // Now shows max 80Hz
 
             // Warble detection logic:
-            // 1. Frequency range of 15-80Hz (our encoded depth)
+            // 1. Frequency range of 15-80Hz (our encoded depth, now clamped)
             // 2. At least 3 sign changes (up-down-up-down pattern)
             // 3. Vibrato rate between 1.5-4.5 Hz
             let modulationScore = 0;
@@ -662,9 +699,9 @@
             // If modulation score is high enough, this is a warble detection
             if (modulationScore >= WARBLE_MIN_CONFIDENCE) {
                 // Avoid duplicate detections within cooldown period
-                if (now - stateStartTime > WARBLE_COOLDOWN_MS) {
+                if (now - lastDetectionTime > WARBLE_COOLDOWN_MS) {
                     processWarbleDetection(modulationScore, vibratoRate, freqRange);
-                    stateStartTime = now;
+                    lastDetectionTime = now;
                 }
             }
 
@@ -727,17 +764,13 @@
         // Complete a frame (all bits received)
         // ============================================
         function completeFrame() {
-            // For now, we assume missing bits are 0
-            // In a real implementation, we'd have timeouts for each note position
+            // Fill in any missing bits as 0 (shouldn't happen with timeout logic, but just in case)
             for (let i = 0; i < 16; i++) {
                 if (currentBits[i] === undefined) {
                     currentBits[i] = 0;
-                    log(`   Bit ${i + 1}/16: 0 (no warble - assumed)`, 'detection');
+                    log(`   Bit ${i + 1}/16: 0 (filling missing)`, 'detection');
                 }
             }
-
-            // Sort by index
-            currentBits.sort((a, b) => a.index - b.index);
 
             const codeString = currentBits.join('');
             receivedCodeSpan.innerText = codeString;
@@ -755,7 +788,9 @@
                 if (decoderState === STATE_COMPLETE) {
                     resetDecoder();
                     decoderState = STATE_LISTENING;
-                    decoderStateSpan.innerText = 'Listening';
+                    stateStartTime = Date.now();
+                    lastDetectionTime = Date.now();
+                    updateFrameStatus();
                 }
             }, 3000);
         }
