@@ -160,7 +160,7 @@
             </div>
             <div style="display: flex; justify-content: space-between; margin-top: 5px;">
                 <span>Change: <span id="energyChange">0.00</span></span>
-                <span>Threshold: <span id="threshold">0.03</span></span>
+                <span>Threshold: <span id="threshold">0.005</span></span>
             </div>
         </div>
 
@@ -204,6 +204,7 @@
         let isListening = false;
         let animationFrame = null;
         let serverOffset = 0;
+        let lastLogTime = 0;
 
         // Test sequence state
         let sequenceActive = false;
@@ -217,9 +218,12 @@
         let lastEnergy = 0;
         let lastNoteTime = 0;
         let energyHistory = [];
-        const ENERGY_THRESHOLD = 0.03;
-        const MIN_CHANGE = 0.02;
+
+        // Detection parameters - MUCH LOWER THRESHOLDS
+        const ENERGY_THRESHOLD = 0.005;  // Was 0.03 - much lower
+        const MIN_CHANGE = 0.002;         // Was 0.02 - much lower
         const MIN_TIME_BETWEEN_NOTES = 2000;
+        const DETECTION_WINDOW_MS = 2000;  // 2 second window around expected time
 
         // FFT setup
         const FFT_SIZE = 2048;
@@ -378,17 +382,23 @@
             const energyChange = avgEnergy - lastEnergy;
 
             // Update displays
-            document.getElementById('energyValue').innerText = avgEnergy.toFixed(3);
+            document.getElementById('energyValue').innerText = avgEnergy.toFixed(4);
             document.getElementById('energyMeter').style.width = (avgEnergy * 100) + '%';
-            document.getElementById('energyChange').innerText = energyChange.toFixed(3);
+            document.getElementById('energyChange').innerText = energyChange.toFixed(4);
             document.getElementById('threshold').innerText = ENERGY_THRESHOLD.toFixed(3);
 
             // Look for onset during active sequence
             if (sequenceActive && expectedNote && !isNoteActive) {
-                // Only look for onsets around the expected time (±1 second)
                 const expectedTime = expectedNote.expectedPlayTime;
 
-                if (Math.abs(now - expectedTime) < 1000) {
+                // Only look for onsets around the expected time
+                if (Math.abs(now - expectedTime) < DETECTION_WINDOW_MS) {
+                    // Log energy during the window (once per second)
+                    if (Math.floor(now/1000) !== Math.floor(lastLogTime/1000)) {
+                        lastLogTime = now;
+                        log(`📊 Window energy: ${avgEnergy.toFixed(4)}, change: ${energyChange.toFixed(4)}`);
+                    }
+
                     if (avgEnergy > ENERGY_THRESHOLD && energyChange > MIN_CHANGE) {
                         // Check if enough time has passed since last note
                         if (now - lastNoteTime > MIN_TIME_BETWEEN_NOTES) {
@@ -407,7 +417,7 @@
 
                             log(`🔊 NOTE DETECTED at ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
                             log(`   Expected: ${new Date(expectedTime).toLocaleTimeString()}.${String(expectedTime % 1000).padStart(3, '0')}`);
-                            log(`   Delay: ${delay}ms, Energy: ${avgEnergy.toFixed(3)}, Change: ${energyChange.toFixed(3)}`);
+                            log(`   Delay: ${delay}ms, Energy: ${avgEnergy.toFixed(4)}, Change: ${energyChange.toFixed(4)}`);
 
                             // Send feedback to conductor
                             db.ref('zynth/device_feedback').set({
