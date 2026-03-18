@@ -455,7 +455,7 @@
         }
 
         // ============================================
-        // Pattern Detection (VERY sensitive)
+        // Pattern Detection (VERY sensitive with frequency scanning)
         // ============================================
         function detectPattern() {
             if (!isListening || !analyser) {
@@ -470,97 +470,140 @@
             const dataArray = new Uint8Array(bufferLength);
             analyser.getByteFrequencyData(dataArray);
 
-            // Calculate total energy
+            const nyquist = audioCtx.sampleRate / 2;
+
+            // Calculate total energy and find dominant frequency
             let totalEnergy = 0;
+            let maxEnergy = 0;
+            let maxEnergyFreq = 0;
+            let maxEnergyIdx = 0;
+
+            // Scan all frequency bins to find the loudest one
             for (let i = 0; i < bufferLength; i++) {
-                totalEnergy += dataArray[i] / 255;
+                const energy = dataArray[i] / 255;
+                totalEnergy += energy;
+
+                if (energy > maxEnergy) {
+                    maxEnergy = energy;
+                    maxEnergyIdx = i;
+                }
             }
             totalEnergy /= bufferLength;
 
-            // Update energy display
-            document.getElementById('rawEnergy').innerText = totalEnergy.toFixed(3);
-            document.getElementById('energyValue').innerText = totalEnergy.toFixed(3);
-            document.getElementById('energyLevel').innerText = totalEnergy.toFixed(3);
-            document.getElementById('energyMeter').style.width = (totalEnergy * 100) + '%';
+            // Calculate the frequency of the loudest bin
+            maxEnergyFreq = (maxEnergyIdx / bufferLength) * nyquist;
 
-            // Find peak frequency
-            let maxVal = 0;
-            let maxIdx = 0;
-            for (let i = 0; i < bufferLength; i++) {
-                if (dataArray[i] > maxVal) {
-                    maxVal = dataArray[i];
-                    maxIdx = i;
+            // Build a list of significant frequencies for debugging (every 10th frame)
+            if (Math.random() < 0.02) { // 2% of frames for debugging
+                let significantFreqs = [];
+                for (let i = 0; i < bufferLength; i += 10) {
+                    const freq = (i / bufferLength) * nyquist;
+                    const val = dataArray[i] / 255;
+                    if (val > 0.01) {
+                        significantFreqs.push(`${Math.round(freq)}Hz:${val.toFixed(2)}`);
+                    }
+                }
+                if (significantFreqs.length > 0) {
+                    console.log("🎤 Mic sees:", significantFreqs.join(', '));
+                    // Also show in the log occasionally
+                    if (Math.random() < 0.1) {
+                        log(`📊 Freq scan: ${significantFreqs.slice(0, 3).join(', ')}...`);
+                    }
                 }
             }
 
-            const nyquist = audioCtx.sampleRate / 2;
-            const peakFreq = (maxIdx / bufferLength) * nyquist;
-            document.getElementById('peakFreq').innerText = Math.round(peakFreq);
+            // Update displays
+            document.getElementById('rawEnergy').innerText = totalEnergy.toFixed(3);
+            document.getElementById('energyValue').innerText = maxEnergy.toFixed(3);
+            document.getElementById('energyLevel').innerText = maxEnergy.toFixed(3);
+            document.getElementById('energyMeter').style.width = (maxEnergy * 100) + '%';
+            document.getElementById('peakFreq').innerText = Math.round(maxEnergyFreq);
             document.getElementById('currentFreq').innerText = Math.round(currentExpectedFreq);
 
-            // VERY SENSITIVE detection - if we have ANY significant energy
-            if (totalEnergy > ENERGY_THRESHOLD) {
+            // SUPER SENSITIVE detection - use the actual dominant frequency
+            if (maxEnergy > ENERGY_THRESHOLD) {
 
-                // Check if energy is in the ballpark of our expected frequency
-                const freqDiff = Math.abs(peakFreq - currentExpectedFreq);
+                // Log every detection for debugging
+                console.log(`🔊 Energy detected: ${maxEnergy.toFixed(3)} at ${Math.round(maxEnergyFreq)}Hz`);
 
-                if (freqDiff < FREQ_TOLERANCE) {
+                if (!patternState.isInNote) {
+                    // Start a new note at whatever frequency we're hearing
+                    patternState.isInNote = true;
+                    patternState.noteStartTime = now;
+                    patternState.detectedWarbles = [{
+                        time: 0,
+                        energy: maxEnergy,
+                        freq: maxEnergyFreq
+                    }];
 
-                    if (!patternState.isInNote) {
-                        // Start a new note
-                        patternState.isInNote = true;
-                        patternState.noteStartTime = now;
-                        patternState.detectedWarbles = [{ time: 0, energy: totalEnergy }];
+                    document.getElementById('detectionStatus').innerText = 'SOUND DETECTED';
+                    updatePatternDots(patternState.expectedTimes.length, 1);
 
-                        document.getElementById('detectionStatus').innerText = 'NOTE STARTED';
-                        updatePatternDots(patternState.expectedTimes.length, 1);
+                    log(`🔊 SOUND STARTED - energy: ${maxEnergy.toFixed(3)} at ${Math.round(maxEnergyFreq)}Hz`);
 
-                        log(`🔴 NOTE STARTED - energy: ${totalEnergy.toFixed(3)} at ${peakFreq.toFixed(0)}Hz`);
-
-                        // Set timeout
-                        if (patternState.pendingTimeout) clearTimeout(patternState.pendingTimeout);
-                        patternState.pendingTimeout = setTimeout(() => {
-                            if (patternState.isInNote) {
-                                log("⏰ Note timeout");
-                                patternState.isInNote = false;
-                                patternState.detectedWarbles = [];
-                                document.getElementById('detectionStatus').innerText = 'Timeout';
-                                updatePatternDots(patternState.expectedTimes.length, 0);
-                            }
-                        }, NOTE_TIMEOUT_MS);
-
-                    } else {
-                        // Already in a note - check if this is a new warble
-                        const timeSinceStart = now - patternState.noteStartTime;
-                        const lastWarbleTime = patternState.detectedWarbles.length > 0
-                            ? patternState.detectedWarbles[patternState.detectedWarbles.length - 1].time
-                            : -1000;
-
-                        // Only count if enough time has passed since last detection
-                        if (timeSinceStart - lastWarbleTime > 100) {
-                            patternState.detectedWarbles.push({
-                                time: timeSinceStart,
-                                energy: totalEnergy
-                            });
-
-                            // Update visualization
-                            updatePatternDots(
-                                patternState.expectedTimes.length,
-                                patternState.detectedWarbles.length
-                            );
-
-                            updateTimeline(patternState.expectedTimes, patternState.detectedWarbles);
-
-                            log(`   🔴 Warble ${patternState.detectedWarbles.length} at +${Math.round(timeSinceStart)}ms`);
-
-                            document.getElementById('warbleCount').innerText =
-                                `${patternState.detectedWarbles.length}/${patternState.expectedTimes.length}`;
-
-                            // Check if we have all expected warbles
-                            if (patternState.detectedWarbles.length === patternState.expectedTimes.length) {
-                                validatePattern();
-                            }
+                    // Set timeout to reset if pattern doesn't complete
+                    if (patternState.pendingTimeout) clearTimeout(patternState.pendingTimeout);
+                    patternState.pendingTimeout = setTimeout(() => {
+                        if (patternState.isInNote) {
+                            log("⏰ Note timeout - no pattern completed");
+                            patternState.isInNote = false;
+                            patternState.detectedWarbles = [];
+                            document.getElementById('detectionStatus').innerText = 'Timeout';
+                            updatePatternDots(patternState.expectedTimes.length, 0);
                         }
+                    }, NOTE_TIMEOUT_MS);
+
+                } else {
+                    // Already in a note - check if this is a new warble
+                    const timeSinceStart = now - patternState.noteStartTime;
+                    const lastWarbleTime = patternState.detectedWarbles.length > 0
+                        ? patternState.detectedWarbles[patternState.detectedWarbles.length - 1].time
+                        : -1000;
+
+                    // Only count if enough time has passed since last detection (prevent double-counting)
+                    // AND the frequency is in the ballpark of the first detection
+                    const freqDiff = Math.abs(maxEnergyFreq - patternState.detectedWarbles[0].freq);
+                    const isSameSource = freqDiff < 100; // Within 100Hz of the first detection
+
+                    if (timeSinceStart - lastWarbleTime > 100 && isSameSource) {
+                        patternState.detectedWarbles.push({
+                            time: timeSinceStart,
+                            energy: maxEnergy,
+                            freq: maxEnergyFreq
+                        });
+
+                        // Update visualization
+                        updatePatternDots(
+                            patternState.expectedTimes.length,
+                            patternState.detectedWarbles.length
+                        );
+
+                        updateTimeline(patternState.expectedTimes, patternState.detectedWarbles);
+
+                        log(`   🔴 Warble ${patternState.detectedWarbles.length} at +${Math.round(timeSinceStart)}ms (${Math.round(maxEnergyFreq)}Hz)`);
+
+                        document.getElementById('warbleCount').innerText =
+                            `${patternState.detectedWarbles.length}/${patternState.expectedTimes.length}`;
+
+                        // Check if we have all expected warbles
+                        if (patternState.detectedWarbles.length === patternState.expectedTimes.length) {
+                            validatePattern();
+                        }
+                    } else if (timeSinceStart - lastWarbleTime > 100) {
+                        // Different frequency source - might be interference
+                        console.log(`   Ignoring sound at ${Math.round(maxEnergyFreq)}Hz - different from source ${Math.round(patternState.detectedWarbles[0].freq)}Hz`);
+                    }
+                }
+            } else {
+                // No significant energy - if we were in a note but lost signal, reset after a while
+                if (patternState.isInNote && now - patternState.noteStartTime > 1000) {
+                    const timeSinceLastWarble = now - (patternState.detectedWarbles[patternState.detectedWarbles.length - 1]?.time || patternState.noteStartTime);
+                    if (timeSinceLastWarble > 1000) {
+                        log("⏰ Signal lost - resetting");
+                        patternState.isInNote = false;
+                        patternState.detectedWarbles = [];
+                        document.getElementById('detectionStatus').innerText = 'Signal lost';
+                        updatePatternDots(patternState.expectedTimes.length, 0);
                     }
                 }
             }
