@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Zynth Device - Single Flute Warbling Note Receiver</title>
+    <title>Zynth Device - Pattern Detector</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <style>
@@ -72,29 +72,48 @@
             padding: 20px;
             margin: 15px 0;
         }
-        .note-indicator {
+        .pattern-display {
             display: flex;
-            align-items: center;
             justify-content: center;
+            gap: 15px;
             margin: 20px 0;
+            padding: 15px;
+            background: #000;
+            border-radius: 50px;
         }
-        .note-light {
-            width: 80px;
-            height: 80px;
+        .pattern-dot {
+            width: 30px;
+            height: 30px;
             border-radius: 50%;
-            background: #222;
-            transition: all 0.1s ease;
-            box-shadow: 0 0 20px rgba(0,255,204,0);
+            background: #333;
+            transition: all 0.2s;
         }
-        .note-light.detected {
+        .pattern-dot.detected {
             background: #00ffcc;
-            box-shadow: 0 0 60px #00ffcc;
+            box-shadow: 0 0 20px #00ffcc;
             animation: pulse 0.3s ease;
         }
         @keyframes pulse {
             0% { transform: scale(1); }
-            50% { transform: scale(1.2); }
+            50% { transform: scale(1.3); }
             100% { transform: scale(1); }
+        }
+        .warble-timeline {
+            background: #000;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 15px 0;
+            min-height: 60px;
+            position: relative;
+        }
+        .timeline-event {
+            position: absolute;
+            width: 8px;
+            height: 40px;
+            background: #ffcc00;
+            border-radius: 4px;
+            bottom: 10px;
+            transition: left 0.1s;
         }
         .modulation-meter {
             background: #000;
@@ -117,9 +136,9 @@
             width: 0%;
             transition: width 0.1s;
         }
-        .warble-stats {
+        .pattern-stats {
             display: grid;
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: 1fr 1fr 1fr;
             gap: 10px;
             margin: 10px 0;
         }
@@ -176,39 +195,28 @@
             color: #888;
             margin-top: 20px;
         }
-        .permission-status {
-            font-size: 0.9rem;
-            padding: 8px 12px;
-            border-radius: 15px;
-            text-align: center;
-            margin-top: 10px;
-        }
-        .granted {
-            background: #1e4d1e;
-            color: #8bc34a;
-        }
-        .detection-badge {
+        .pattern-badge {
             display: inline-block;
-            padding: 4px 8px;
-            border-radius: 12px;
-            font-size: 0.8rem;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.9rem;
             font-weight: bold;
         }
-        .warble-detected {
-            background: #ffcc00;
-            color: #000;
-        }
-        .pure-detected {
+        .pattern-matched {
             background: #00ffcc;
             color: #000;
+        }
+        .pattern-waiting {
+            background: #442288;
+            color: #fff;
         }
     </style>
 </head>
 <body>
     <div id="container">
         <div id="header">
-            <div id="seat-label">Flute Note Receiver</div>
-            <div id="device-type">Listening for single flute notes</div>
+            <div id="seat-label">Pattern Detector</div>
+            <div id="device-type">Listening for warble patterns</div>
         </div>
 
         <div id="status-panel">
@@ -226,18 +234,26 @@
             <!-- Detection Panel -->
             <div class="detection-panel">
                 <div style="display: flex; justify-content: space-between; margin-bottom: 15px;">
-                    <span style="color: #00ffcc; font-weight: bold;">🎵 Last Detection</span>
-                    <span id="detectionType" class="detection-badge">---</span>
+                    <span style="color: #00ffcc; font-weight: bold;">🎵 Detected Pattern</span>
+                    <span id="patternStatus" class="pattern-badge pattern-waiting">Waiting...</span>
                 </div>
 
-                <div class="note-indicator">
-                    <div id="noteLight" class="note-light"></div>
+                <div class="pattern-display" id="patternDisplay">
+                    <!-- 5 dots for pattern visualization -->
                 </div>
 
-                <div class="warble-stats">
+                <div class="warble-timeline" id="timeline">
+                    <!-- Warble events appear here -->
+                </div>
+
+                <div class="pattern-stats">
                     <div class="stat-box">
-                        <div class="stat-label">Detected Frequency</div>
-                        <div class="stat-number" id="detectedFreq">--- Hz</div>
+                        <div class="stat-label">Warbles Detected</div>
+                        <div class="stat-number" id="warbleCount">0</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-label">Pattern Length</div>
+                        <div class="stat-number" id="patternLength">0</div>
                     </div>
                     <div class="stat-box">
                         <div class="stat-label">Confidence</div>
@@ -248,32 +264,22 @@
                 <div class="modulation-meter">
                     <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
                         <span>🎵 Warble Analysis</span>
-                        <span id="warbleStatus" style="color: #888;">No signal</span>
+                        <span id="warbleStatus">No signal</span>
                     </div>
                     <div class="meter-bar">
                         <div class="meter-fill" id="confidenceMeter" style="width: 0%;"></div>
                     </div>
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px;">
-                        <div>
-                            <span style="color: #888;">Vibrato rate:</span>
-                            <span style="color: #ffcc00;" id="detectedRate">---</span> Hz
-                        </div>
-                        <div>
-                            <span style="color: #888;">Depth:</span>
-                            <span style="color: #ffcc00;" id="detectedDepth">---</span> Hz
-                        </div>
-                    </div>
                 </div>
             </div>
 
-            <!-- Last Note Info -->
+            <!-- Last Pattern Info -->
             <div class="status-row">
-                <span class="label">Last note from conductor:</span>
-                <span class="value" id="lastNoteInfo">---</span>
+                <span class="label">Last detected pattern:</span>
+                <span class="value" id="lastPattern">---</span>
             </div>
             <div class="status-row">
-                <span class="label">Detections today:</span>
-                <span class="value" id="detectionCount">0</span>
+                <span class="label">Valid patterns:</span>
+                <span class="value" id="patternCount">0</span>
             </div>
 
             <canvas id="visualizer" class="visualizer"></canvas>
@@ -306,13 +312,13 @@
         let animationFrame = null;
         let serverOffset = 0;
 
-        // Warble detection parameters (from successful test)
-        const BASE_FLUTE_FREQ = 440;  // Will be updated from detected note
+        // Warble detection parameters
         const WARBLE_ENERGY_THRESHOLD = 0.02;
         const WARBLE_FREQ_BINS = 3;
-        const WARBLE_MIN_CONFIDENCE = 0.6;
+        const WARBLE_MIN_CONFIDENCE = 0.7;
         const WARBLE_LOOKBACK_FRAMES = 15;
         const WARBLE_COOLDOWN_MS = 200;
+        const NOTE_DURATION_MS = 2000; // Expected note duration
 
         const MIN_WARBLE_DEPTH = 15;
         const MAX_WARBLE_DEPTH = 80;
@@ -322,11 +328,18 @@
 
         const FFT_SIZE = 4096;
 
-        // Detection state
+        // Pattern detection state
         let warbleBuffer = [];
         let lastDetectionTime = 0;
         let detectionCount = 0;
-        let currentBaseFreq = 440;
+        let patternCount = 0;
+        let currentPattern = [];
+        let patternStartTime = 0;
+        let isInNote = false;
+        let expectedFreq = 440;
+
+        // Timeline for visualization
+        let timelineEvents = [];
 
         // ============================================
         // Clock sync
@@ -336,21 +349,70 @@
         });
 
         // ============================================
+        // UI Setup
+        // ============================================
+        function updatePatternDisplay() {
+            const container = document.getElementById('patternDisplay');
+            container.innerHTML = '';
+
+            // Show up to 5 pattern positions
+            for (let i = 0; i < 5; i++) {
+                const dot = document.createElement('div');
+                dot.className = `pattern-dot ${i < currentPattern.length && currentPattern[i] ? 'detected' : ''}`;
+                container.appendChild(dot);
+            }
+
+            document.getElementById('warbleCount').innerText = currentPattern.filter(b => b).length;
+            document.getElementById('patternLength').innerText = currentPattern.length;
+        }
+
+        function updateTimeline() {
+            const timeline = document.getElementById('timeline');
+            timeline.innerHTML = '';
+
+            const width = timeline.clientWidth - 20;
+
+            timelineEvents.forEach((event, index) => {
+                if (index < 10) { // Show last 10 events
+                    const left = (event.time / NOTE_DURATION_MS) * width;
+                    if (left >= 0 && left <= width) {
+                        const div = document.createElement('div');
+                        div.className = 'timeline-event';
+                        div.style.left = left + 'px';
+                        timeline.appendChild(div);
+                    }
+                }
+            });
+        }
+
+        // ============================================
         // Listen for conductor's notes
         // ============================================
         function listenForConductor() {
-            db.ref('zynth/last_note').on('value', snap => {
+            db.ref('zynth/pattern_note').on('value', snap => {
                 const note = snap.val();
                 if (note) {
                     const timeStr = new Date(note.timestamp).toLocaleTimeString();
-                    const warbleStr = note.hasWarble ? 'with warble' : 'pure tone';
-                    document.getElementById('lastNoteInfo').innerHTML =
-                        `${note.frequency}Hz ${warbleStr} at ${timeStr}`;
+                    expectedFreq = note.frequency;
+                    log(`📡 Conductor played pattern: ${note.pattern} at ${timeStr}`);
 
-                    // Update expected base frequency
-                    currentBaseFreq = note.frequency;
+                    // Reset for new note
+                    isInNote = true;
+                    patternStartTime = Date.now();
+                    currentPattern = [];
 
-                    log(`📡 Conductor played: ${note.frequency}Hz ${warbleStr}`);
+                    // Clear old timeline events
+                    timelineEvents = [];
+                    updateTimeline();
+
+                    // Auto-reset after note duration
+                    setTimeout(() => {
+                        isInNote = false;
+                        if (currentPattern.length > 0) {
+                            const patternStr = currentPattern.map(b => b ? '1' : '0').join('');
+                            log(`📝 Note complete, detected pattern: ${patternStr}`);
+                        }
+                    }, note.duration + 500);
                 }
             });
         }
@@ -391,12 +453,12 @@
                 mediaStream = stream;
 
                 isListening = true;
-                document.getElementById('status-value').innerText = 'Listening...';
+                document.getElementById('status-value').innerText = 'Listening for patterns...';
 
-                log("✅ Ear activated - listening for flute notes");
+                log("✅ Ear activated - listening for warble patterns");
 
                 // Start detection
-                detectWarble();
+                detectWarblePattern();
                 drawVisualizer();
 
             } catch (err) {
@@ -427,11 +489,11 @@
         }
 
         // ============================================
-        // Warble Detection (from successful test)
+        // Warble Pattern Detection
         // ============================================
-        function detectWarble() {
+        function detectWarblePattern() {
             if (!isListening || !analyser || !audioCtx) {
-                requestAnimationFrame(detectWarble);
+                requestAnimationFrame(detectWarblePattern);
                 return;
             }
 
@@ -459,18 +521,18 @@
             }
 
             if (warbleBuffer.length < WARBLE_LOOKBACK_FRAMES) {
-                requestAnimationFrame(detectWarble);
+                requestAnimationFrame(detectWarblePattern);
                 return;
             }
 
             const recentFrames = warbleBuffer.slice(-WARBLE_LOOKBACK_FRAMES);
 
-            // Calculate frequency bin for current base frequency
+            // Calculate frequency bin for expected frequency
             const nyquist = audioCtx.sampleRate / 2;
-            const binIndex = Math.floor(currentBaseFreq / nyquist * bufferLength);
+            const binIndex = Math.floor(expectedFreq / nyquist * bufferLength);
 
             if (binIndex < 0 || binIndex >= bufferLength) {
-                requestAnimationFrame(detectWarble);
+                requestAnimationFrame(detectWarblePattern);
                 return;
             }
 
@@ -487,7 +549,7 @@
             energy = energy / binCount;
 
             if (energy < WARBLE_ENERGY_THRESHOLD) {
-                requestAnimationFrame(detectWarble);
+                requestAnimationFrame(detectWarblePattern);
                 return;
             }
 
@@ -512,7 +574,7 @@
             }
 
             if (peakFreqs.length < 5) {
-                requestAnimationFrame(detectWarble);
+                requestAnimationFrame(detectWarblePattern);
                 return;
             }
 
@@ -535,19 +597,14 @@
 
             let zeroCrossings = 0;
             for (let i = 1; i < peakFreqs.length; i++) {
-                if ((peakFreqs[i] - currentBaseFreq) * (peakFreqs[i-1] - currentBaseFreq) < 0) {
+                if ((peakFreqs[i] - expectedFreq) * (peakFreqs[i-1] - expectedFreq) < 0) {
                     zeroCrossings++;
                 }
             }
             const vibratoRate = (zeroCrossings / 2) / (WARBLE_LOOKBACK_FRAMES * 23 / 1000);
 
-            // Update UI
-            document.getElementById('detectedRate').innerText = vibratoRate.toFixed(1);
-            document.getElementById('detectedDepth').innerText = Math.round(freqRange);
-
             // Calculate confidence
             let modulationScore = 0;
-            let isWarble = false;
 
             if (freqRange >= MIN_WARBLE_DEPTH && freqRange <= MAX_WARBLE_DEPTH) {
                 modulationScore += 0.4;
@@ -567,50 +624,33 @@
             document.getElementById('confidenceMeter').style.width = (modulationScore * 100) + '%';
             document.getElementById('confidenceValue').innerText = Math.round(modulationScore * 100) + '%';
 
-            // Check if this is a warble or pure tone
+            // If warble detected with good confidence
             if (modulationScore >= WARBLE_MIN_CONFIDENCE) {
-                // Warble detected!
                 if (now - lastDetectionTime > WARBLE_COOLDOWN_MS) {
                     lastDetectionTime = now;
 
-                    // Flash the light
-                    const light = document.getElementById('noteLight');
-                    light.classList.add('detected');
-                    setTimeout(() => light.classList.remove('detected'), 300);
+                    if (isInNote) {
+                        // Add to current pattern
+                        const timeInNote = now - patternStartTime;
+                        currentPattern.push(1);
 
-                    document.getElementById('detectionType').innerHTML =
-                        '<span class="detection-badge warble-detected">WARBLE DETECTED</span>';
-                    document.getElementById('warbleStatus').innerText = 'Warble!';
-                    document.getElementById('detectedFreq').innerText = Math.round(currentBaseFreq) + ' Hz';
+                        // Add to timeline
+                        timelineEvents.push({ time: timeInNote });
+                        if (timelineEvents.length > 20) timelineEvents.shift();
 
-                    detectionCount++;
-                    document.getElementById('detectionCount').innerText = detectionCount;
+                        updatePatternDisplay();
+                        updateTimeline();
 
-                    log(`🎯 WARBLE DETECTED! Depth: ${Math.round(freqRange)}Hz, Rate: ${vibratoRate.toFixed(1)}Hz`, 'detection');
-                }
-            } else if (energy > WARBLE_ENERGY_THRESHOLD) {
-                // Pure tone detected (energy but no warble)
-                if (now - lastDetectionTime > WARBLE_COOLDOWN_MS) {
-                    lastDetectionTime = now;
+                        document.getElementById('warbleStatus').innerText = 'WARBLE!';
+                        document.getElementById('patternStatus').className = 'pattern-badge pattern-matched';
+                        document.getElementById('patternStatus').innerText = 'Detecting...';
 
-                    // Subtle flash for pure tone
-                    const light = document.getElementById('noteLight');
-                    light.classList.add('detected');
-                    setTimeout(() => light.classList.remove('detected'), 200);
-
-                    document.getElementById('detectionType').innerHTML =
-                        '<span class="detection-badge pure-detected">PURE TONE</span>';
-                    document.getElementById('warbleStatus').innerText = 'Pure tone';
-                    document.getElementById('detectedFreq').innerText = Math.round(currentBaseFreq) + ' Hz';
-
-                    detectionCount++;
-                    document.getElementById('detectionCount').innerText = detectionCount;
-
-                    log(`🎵 Pure tone detected: ${Math.round(currentBaseFreq)}Hz`, 'detection');
+                        log(`🔊 Warble ${currentPattern.length} at ${timeInNote}ms`);
+                    }
                 }
             }
 
-            requestAnimationFrame(detectWarble);
+            requestAnimationFrame(detectWarblePattern);
         }
 
         // ============================================
@@ -650,8 +690,8 @@
                 ctx.fillRect(x, height - barHeight, barWidth, barHeight);
             }
 
-            // Highlight current base frequency
-            const baseBin = Math.floor(currentBaseFreq / (audioCtx.sampleRate / FFT_SIZE));
+            // Highlight expected frequency
+            const baseBin = Math.floor(expectedFreq / (audioCtx.sampleRate / FFT_SIZE));
             if (baseBin >= startBin && baseBin < endBin) {
                 const x = (baseBin - startBin) * (barWidth + 1);
                 ctx.fillStyle = '#ff3366';
@@ -664,7 +704,7 @@
         // ============================================
         // Logging
         // ============================================
-        function log(message, type = 'normal') {
+        function log(message) {
             const logDiv = document.getElementById('log');
             const timestamp = new Date().toLocaleTimeString();
             logDiv.innerHTML = `<div>[${timestamp}] ${message}</div>` + logDiv.innerHTML;
@@ -682,10 +722,17 @@
         // Initialize
         // ============================================
         window.onload = () => {
-            log("🎵 Zynth Device ready - Single Flute Note Receiver");
-            log("   • Listening for flute notes from conductor");
-            log("   • Detects both pure tones and warbles");
-            log("   • Warble parameters from bach_baker.py: 2.5Hz rate, 30Hz depth");
+            // Initialize pattern display
+            for (let i = 0; i < 5; i++) {
+                const dot = document.createElement('div');
+                dot.className = 'pattern-dot';
+                document.getElementById('patternDisplay').appendChild(dot);
+            }
+
+            log("🎵 Pattern Detector ready");
+            log("   • Listening for multiple warbles per note");
+            log("   • Building pattern from warble timing");
+            log("   • Room noise won't match specific patterns");
 
             // Start listening for conductor
             listenForConductor();
