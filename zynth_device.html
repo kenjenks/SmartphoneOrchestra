@@ -455,7 +455,7 @@
         }
 
         // ============================================
-        // Pattern Detection (VERY sensitive with frequency scanning)
+        // Pattern Detection (with frequency filtering)
         // ============================================
         function detectPattern() {
             if (!isListening || !analyser) {
@@ -472,14 +472,23 @@
 
             const nyquist = audioCtx.sampleRate / 2;
 
-            // Calculate total energy and find dominant frequency
+            // Define flute frequency range (C4 to C6)
+            const FLUTE_RANGE = {
+                min: 220,  // A3 (below flute range, but includes A4=440)
+                max: 1046  // C6
+            };
+
+            // Calculate total energy and find dominant frequency WITHIN FLUTE RANGE
             let totalEnergy = 0;
             let maxEnergy = 0;
             let maxEnergyFreq = 0;
             let maxEnergyIdx = 0;
 
-            // Scan all frequency bins to find the loudest one
-            for (let i = 0; i < bufferLength; i++) {
+            // Only scan bins within flute frequency range
+            const minBin = Math.floor(FLUTE_RANGE.min / nyquist * bufferLength);
+            const maxBin = Math.ceil(FLUTE_RANGE.max / nyquist * bufferLength);
+
+            for (let i = minBin; i < maxBin && i < bufferLength; i++) {
                 const energy = dataArray[i] / 255;
                 totalEnergy += energy;
 
@@ -488,15 +497,15 @@
                     maxEnergyIdx = i;
                 }
             }
-            totalEnergy /= bufferLength;
+            totalEnergy /= (maxBin - minBin);
 
-            // Calculate the frequency of the loudest bin
+            // Calculate the frequency of the loudest bin within flute range
             maxEnergyFreq = (maxEnergyIdx / bufferLength) * nyquist;
 
-            // Build a list of significant frequencies for debugging (every 10th frame)
+            // Build a list of significant frequencies for debugging (only within flute range)
             if (Math.random() < 0.02) { // 2% of frames for debugging
                 let significantFreqs = [];
-                for (let i = 0; i < bufferLength; i += 10) {
+                for (let i = minBin; i < maxBin; i += 5) {
                     const freq = (i / bufferLength) * nyquist;
                     const val = dataArray[i] / 255;
                     if (val > 0.01) {
@@ -504,10 +513,10 @@
                     }
                 }
                 if (significantFreqs.length > 0) {
-                    console.log("🎤 Mic sees:", significantFreqs.join(', '));
+                    console.log("🎤 Mic sees (flute range):", significantFreqs.join(', '));
                     // Also show in the log occasionally
                     if (Math.random() < 0.1) {
-                        log(`📊 Freq scan: ${significantFreqs.slice(0, 3).join(', ')}...`);
+                        log(`📊 Flute range: ${significantFreqs.slice(0, 3).join(', ')}...`);
                     }
                 }
             }
@@ -520,14 +529,31 @@
             document.getElementById('peakFreq').innerText = Math.round(maxEnergyFreq);
             document.getElementById('currentFreq').innerText = Math.round(currentExpectedFreq);
 
-            // SUPER SENSITIVE detection - use the actual dominant frequency
+            // Log out-of-band noise for debugging (but don't trigger detections)
+            if (maxEnergy > ENERGY_THRESHOLD * 2) {
+                // Check if there's significant energy outside flute range
+                let outOfBandEnergy = 0;
+                for (let i = 0; i < minBin; i++) {
+                    outOfBandEnergy += dataArray[i] / 255;
+                }
+                for (let i = maxBin; i < bufferLength; i++) {
+                    outOfBandEnergy += dataArray[i] / 255;
+                }
+                outOfBandEnergy /= (bufferLength - (maxBin - minBin));
+
+                if (outOfBandEnergy > maxEnergy * 0.5) {
+                    console.log(`⚠️ Significant out-of-band noise: ${outOfBandEnergy.toFixed(3)}`);
+                }
+            }
+
+            // ONLY PROCESS if we have significant energy WITHIN flute range
             if (maxEnergy > ENERGY_THRESHOLD) {
 
                 // Log every detection for debugging
-                console.log(`🔊 Energy detected: ${maxEnergy.toFixed(3)} at ${Math.round(maxEnergyFreq)}Hz`);
+                console.log(`🔊 Flute-range energy: ${maxEnergy.toFixed(3)} at ${Math.round(maxEnergyFreq)}Hz`);
 
                 if (!patternState.isInNote) {
-                    // Start a new note at whatever frequency we're hearing
+                    // Start a new note
                     patternState.isInNote = true;
                     patternState.noteStartTime = now;
                     patternState.detectedWarbles = [{
@@ -536,10 +562,10 @@
                         freq: maxEnergyFreq
                     }];
 
-                    document.getElementById('detectionStatus').innerText = 'SOUND DETECTED';
+                    document.getElementById('detectionStatus').innerText = 'FLUTE DETECTED';
                     updatePatternDots(patternState.expectedTimes.length, 1);
 
-                    log(`🔊 SOUND STARTED - energy: ${maxEnergy.toFixed(3)} at ${Math.round(maxEnergyFreq)}Hz`);
+                    log(`🔊 FLUTE STARTED - energy: ${maxEnergy.toFixed(3)} at ${Math.round(maxEnergyFreq)}Hz`);
 
                     // Set timeout to reset if pattern doesn't complete
                     if (patternState.pendingTimeout) clearTimeout(patternState.pendingTimeout);
@@ -563,7 +589,7 @@
                     // Only count if enough time has passed since last detection (prevent double-counting)
                     // AND the frequency is in the ballpark of the first detection
                     const freqDiff = Math.abs(maxEnergyFreq - patternState.detectedWarbles[0].freq);
-                    const isSameSource = freqDiff < 100; // Within 100Hz of the first detection
+                    const isSameSource = freqDiff < 50; // Within 50Hz of the first detection (stricter now)
 
                     if (timeSinceStart - lastWarbleTime > 100 && isSameSource) {
                         patternState.detectedWarbles.push({
@@ -590,12 +616,12 @@
                             validatePattern();
                         }
                     } else if (timeSinceStart - lastWarbleTime > 100) {
-                        // Different frequency source - might be interference
-                        console.log(`   Ignoring sound at ${Math.round(maxEnergyFreq)}Hz - different from source ${Math.round(patternState.detectedWarbles[0].freq)}Hz`);
+                        // Different frequency source or too soon - ignore
+                        console.log(`   Ignoring sound at ${Math.round(maxEnergyFreq)}Hz - diff: ${Math.round(freqDiff)}Hz from source`);
                     }
                 }
             } else {
-                // No significant energy - if we were in a note but lost signal, reset after a while
+                // No significant energy in flute range - if we were in a note but lost signal, reset after a while
                 if (patternState.isInNote && now - patternState.noteStartTime > 1000) {
                     const timeSinceLastWarble = now - (patternState.detectedWarbles[patternState.detectedWarbles.length - 1]?.time || patternState.noteStartTime);
                     if (timeSinceLastWarble > 1000) {
