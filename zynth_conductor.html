@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zynth Conductor - 30 Second Test with Simulated Delays</title>
+    <title>Zynth Conductor - 30 Second Test with Random Jitter</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <style>
@@ -12,7 +12,7 @@
             color: #eee;
             font-family: 'Segoe UI', sans-serif;
             padding: 20px;
-            max-width: 800px;
+            max-width: 900px;
             margin: 0 auto;
         }
         h1 {
@@ -26,7 +26,7 @@
         }
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: repeat(4, 1fr);
             gap: 15px;
             margin: 20px 0;
         }
@@ -59,26 +59,57 @@
             width: 0%;
             transition: width 0.1s;
         }
+        .jitter-control {
+            background: #1a1a1a;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        .slider-group {
+            margin: 15px 0;
+        }
+        .slider-label {
+            display: flex;
+            justify-content: space-between;
+            color: #888;
+            margin-bottom: 5px;
+        }
+        input[type=range] {
+            width: 100%;
+            height: 5px;
+            background: #333;
+            border-radius: 5px;
+            outline: none;
+        }
         .note-table {
             width: 100%;
             border-collapse: collapse;
             font-size: 0.8rem;
+            margin: 20px 0;
+            max-height: 300px;
+            overflow-y: auto;
+            display: block;
         }
         .note-table th {
             background: #1a1a1a;
             color: #00ccff;
             padding: 8px;
             text-align: left;
+            position: sticky;
+            top: 0;
         }
         .note-table td {
             padding: 8px;
             border-bottom: 1px solid #333;
         }
-        .note-table tr.simulated {
-            color: #ffaa00;
+        .note-table .early {
+            color: #ff6666;
         }
-        .note-table tr.measured {
-            color: #00ccff;
+        .note-table .late {
+            color: #66ff66;
+        }
+        .note-table .overlap {
+            background: #442200;
         }
         button {
             background: #00ccff;
@@ -133,7 +164,7 @@
     </style>
 </head>
 <body>
-    <h1>🎵 Zynth Conductor - 30 Second Test with Simulated Delays</h1>
+    <h1>🎵 Zynth Conductor - 30 Second Test with Random Jitter</h1>
 
     <div class="panel">
         <div style="display: flex; align-items: center; margin-bottom: 15px;">
@@ -143,17 +174,36 @@
 
         <div class="stats-grid">
             <div class="stat-card">
-                <div class="stat-label">Notes in sequence</div>
+                <div class="stat-label">Notes</div>
                 <div class="stat-value" id="totalNotes">0</div>
             </div>
             <div class="stat-card">
                 <div class="stat-label">Duration</div>
-                <div class="stat-value" id="totalDuration">0s</div>
+                <div class="stat-value" id="totalDuration">30s</div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Avg Simulated Delay</div>
-                <div class="stat-value" id="avgDelay">0ms</div>
+                <div class="stat-label">Max Jitter</div>
+                <div class="stat-value" id="maxJitter">±200ms</div>
             </div>
+            <div class="stat-card">
+                <div class="stat-label">Overlaps</div>
+                <div class="stat-value" id="overlapCount">0</div>
+            </div>
+        </div>
+
+        <div class="jitter-control">
+            <h3>🎲 Random Jitter Settings</h3>
+            <div class="slider-group">
+                <div class="slider-label">
+                    <span>Maximum Jitter (±ms)</span>
+                    <span id="jitterValue" class="param-value">200 ms</span>
+                </div>
+                <input type="range" id="jitterSlider" min="0" max="500" value="200" step="10">
+            </div>
+            <p style="color: #888; font-size: 0.9rem;">
+                Each note will start at its scheduled time ± random jitter.<br>
+                Notes may overlap if jitter is large enough!
+            </p>
         </div>
 
         <div class="progress-bar">
@@ -161,20 +211,21 @@
         </div>
 
         <div>
-            <button id="playBtn">▶️ PLAY 30 SECOND SEQUENCE</button>
+            <button id="playBtn">▶️ PLAY WITH JITTER</button>
             <button id="stopBtn" class="danger">⏹️ STOP</button>
         </div>
 
         <div style="margin-top: 20px;">
-            <h3>Note Schedule (first 10 shown)</h3>
+            <h3>Note Schedule with Jitter (first 20 shown)</h3>
             <table class="note-table" id="noteTable">
                 <thead>
                     <tr>
                         <th>Note</th>
                         <th>Pitch</th>
-                        <th>Offset (ms)</th>
-                        <th>Duration (ms)</th>
-                        <th>Simulated Delay (ms)</th>
+                        <th>Scheduled (ms)</th>
+                        <th>Jitter (ms)</th>
+                        <th>Actual (ms)</th>
+                        <th>Duration</th>
                     </tr>
                 </thead>
                 <tbody id="noteTableBody">
@@ -205,11 +256,10 @@
         let audioCtx = null;
         let serverOffset = 0;
         let isPlaying = false;
-        let currentTimeout = null;
         let scheduledNotes = [];
+        let overlapCount = 0;
 
-        // First 30 seconds of notes from tuning_mode.json (up to ~30,000ms)
-        // Based on the tuning_mode.json data you shared
+        // First 30 seconds of notes from tuning_mode.json
         const allNotes = [
             { pitch: 'G4', freq: 392, duration: 371.5, offset: 301.9 },
             { pitch: 'A4', freq: 440, duration: 278.6, offset: 696.6 },
@@ -284,7 +334,7 @@
             { pitch: 'D5', freq: 587, duration: 278.6, offset: 20387.1 },
             { pitch: 'B4', freq: 494, duration: 1671.8, offset: 20689.0 },
             { pitch: 'C5', freq: 523, duration: 835.9, offset: 22407.3 }
-        ].filter(note => note.offset < 30000); // First 30 seconds
+        ].filter(note => note.offset < 30000);
 
         // Clock sync
         db.ref(".info/serverTimeOffset").on("value", snap => {
@@ -304,37 +354,80 @@
             }
         });
 
-        // Generate random simulated delays for each note (0-200ms)
-        function generateSimulatedDelays() {
-            return allNotes.map(() => Math.floor(Math.random() * 200));
+        // Jitter slider
+        let maxJitter = 200;
+        document.getElementById('jitterSlider').addEventListener('input', (e) => {
+            maxJitter = parseInt(e.target.value);
+            document.getElementById('jitterValue').innerText = maxJitter + ' ms';
+            document.getElementById('maxJitter').innerText = '±' + maxJitter + 'ms';
+        });
+
+        // Generate random jitter for each note
+        function generateJitter() {
+            const jitters = [];
+            for (let i = 0; i < allNotes.length; i++) {
+                // Random jitter between -maxJitter and +maxJitter
+                const jitter = Math.floor(Math.random() * (maxJitter * 2 + 1)) - maxJitter;
+                jitters.push(jitter);
+            }
+            return jitters;
+        }
+
+        // Check for overlaps
+        function checkOverlaps(notes, jitters) {
+            let overlaps = 0;
+            const scheduledTimes = notes.map((note, i) => note.offset);
+            const actualTimes = notes.map((note, i) => note.offset + jitters[i]);
+
+            for (let i = 0; i < notes.length - 1; i++) {
+                const currentEnd = actualTimes[i] + notes[i].duration;
+                const nextStart = actualTimes[i + 1];
+
+                if (currentEnd > nextStart) {
+                    overlaps++;
+                }
+            }
+
+            document.getElementById('overlapCount').innerText = overlaps;
+            return overlaps;
         }
 
         // Update the note table
-        function updateNoteTable(simulatedDelays) {
+        function updateNoteTable(jitters) {
             const tbody = document.getElementById('noteTableBody');
             tbody.innerHTML = '';
 
-            const avgDelay = simulatedDelays.reduce((a, b) => a + b, 0) / simulatedDelays.length;
-            document.getElementById('avgDelay').innerText = Math.round(avgDelay) + 'ms';
-
-            for (let i = 0; i < Math.min(10, allNotes.length); i++) {
+            for (let i = 0; i < Math.min(20, allNotes.length); i++) {
                 const note = allNotes[i];
+                const jitter = jitters[i];
+                const actualTime = note.offset + jitter;
+
+                // Check if this note overlaps with next
+                let rowClass = '';
+                if (i < allNotes.length - 1) {
+                    const nextActual = allNotes[i + 1].offset + jitters[i + 1];
+                    if (actualTime + note.duration > nextActual) {
+                        rowClass = 'overlap';
+                    }
+                }
+
                 const row = document.createElement('tr');
+                row.className = rowClass;
                 row.innerHTML = `
                     <td>${i}</td>
                     <td>${note.pitch}</td>
                     <td>${note.offset}</td>
-                    <td>${note.duration}</td>
-                    <td style="color: #ffaa00;">${simulatedDelays[i]} ms</td>
+                    <td class="${jitter < 0 ? 'early' : 'late'}">${jitter > 0 ? '+' : ''}${jitter}</td>
+                    <td>${Math.round(actualTime)}</td>
+                    <td>${note.duration}ms</td>
                 `;
                 tbody.appendChild(row);
             }
 
             document.getElementById('totalNotes').innerText = allNotes.length;
-            document.getElementById('totalDuration').innerText = '30s';
         }
 
-        async function playNote(note, simulatedDelay, noteIndex, scheduledTime) {
+        async function playNote(note, jitter, noteIndex, scheduledTime) {
             return new Promise(async (resolve) => {
                 if (!audioCtx) {
                     audioCtx = new AudioContext();
@@ -369,20 +462,19 @@
                     source.buffer = buffer;
                     source.connect(audioCtx.destination);
 
-                    // Apply simulated delay
-                    const actualStartTime = Date.now() + serverOffset + simulatedDelay;
-
+                    // Apply jitter
                     setTimeout(() => {
                         source.start();
 
                         const logTime = Date.now() + serverOffset;
-                        log(`🔊 Note ${noteIndex}: ${note.pitch} at ${new Date(logTime).toLocaleTimeString()}.${String(logTime % 1000).padStart(3, '0')} (simulated delay: ${simulatedDelay}ms)`);
+                        const jitterSign = jitter > 0 ? '+' : '';
+                        log(`🔊 Note ${noteIndex}: ${note.pitch} at ${new Date(logTime).toLocaleTimeString()}.${String(logTime % 1000).padStart(3, '0')} (jitter: ${jitterSign}${jitter}ms)`);
 
                         source.onended = () => {
                             log(`✅ Note ${noteIndex} ended`);
                             resolve();
                         };
-                    }, simulatedDelay);
+                    }, Math.max(0, jitter)); // Ensure non-negative delay
 
                 }, delayMs);
             });
@@ -396,9 +488,10 @@
 
             isPlaying = true;
 
-            // Generate random simulated delays for this run
-            const simulatedDelays = generateSimulatedDelays();
-            updateNoteTable(simulatedDelays);
+            // Generate random jitter for this run
+            const jitters = generateJitter();
+            const overlaps = checkOverlaps(allNotes, jitters);
+            updateNoteTable(jitters);
 
             // Calculate scheduled start times with 1 second buffer
             const now = Date.now() + serverOffset;
@@ -407,27 +500,30 @@
 
             log('🎬 Sending GO signal with 1s buffer');
             log(`📅 Sequence starting at ${new Date(startTime).toLocaleTimeString()}.${String(startTime % 1000).padStart(3, '0')}`);
+            log(`🎲 Max jitter: ±${maxJitter}ms, ${overlaps} potential overlaps`);
 
             // Prepare notes for Firebase
             const notesForFirebase = allNotes.map((note, index) => ({
                 index: index,
                 pitch: note.pitch,
                 freq: note.freq,
-                offset: note.offset,
-                duration: note.duration,
-                simulatedDelay: simulatedDelays[index]
+                scheduledOffset: note.offset,
+                actualOffset: note.offset + jitters[index],
+                jitter: jitters[index],
+                duration: note.duration
             }));
 
             // Send GO signal to Firebase
-            await db.ref('zynth/30sec_test').set({
+            await db.ref('zynth/jitter_test').set({
                 status: 'ACTIVE',
                 startTime: startTime,
                 bufferMs: bufferMs,
+                maxJitter: maxJitter,
                 notes: notesForFirebase,
                 timestamp: now
             });
 
-            // Play each note with its simulated delay
+            // Play each note with its jitter
             for (let i = 0; i < allNotes.length; i++) {
                 const note = allNotes[i];
                 const noteTime = startTime + note.offset;
@@ -436,13 +532,13 @@
                 const progress = ((i + 1) / allNotes.length) * 100;
                 document.getElementById('progressFill').style.width = progress + '%';
 
-                await playNote(note, simulatedDelays[i], i, noteTime);
+                await playNote(note, jitters[i], i, noteTime);
             }
 
             log('✅ 30-second sequence complete');
 
             // Clear the test sequence
-            await db.ref('zynth/30sec_test').remove();
+            await db.ref('zynth/jitter_test').remove();
 
             document.getElementById('progressFill').style.width = '0%';
             isPlaying = false;
@@ -453,7 +549,7 @@
                 audioCtx.close();
                 audioCtx = null;
             }
-            db.ref('zynth/30sec_test').remove();
+            db.ref('zynth/jitter_test').remove();
             document.getElementById('progressFill').style.width = '0%';
             isPlaying = false;
             log('⏹️ Sequence stopped');
@@ -484,16 +580,17 @@
             console.log(message);
         }
 
-        // Initialize with random delays for display
-        const initialDelays = generateSimulatedDelays();
-        updateNoteTable(initialDelays);
+        // Initialize with random jitter for display
+        const initialJitters = generateJitter();
+        checkOverlaps(allNotes, initialJitters);
+        updateNoteTable(initialJitters);
 
         document.getElementById('playBtn').onclick = playSequence;
         document.getElementById('stopBtn').onclick = stopSequence;
         document.getElementById('copyLogBtn').onclick = copyLog;
 
-        log('🎵 Conductor ready - 30 second test with simulated delays');
-        log(`📊 Playing ${allNotes.length} notes over 30 seconds`);
+        log('🎵 Conductor ready - 30 second test with random jitter');
+        log(`📊 Playing ${allNotes.length} notes with ±${maxJitter}ms jitter`);
     </script>
 </body>
 </html>
