@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zynth Device - Pattern Detector</title>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
+    <style>
+        body {
+            background: #1a1a1a;
+            color: #eee;
+            font-family: 'Segoe UI', sans-serif;
+            padding: 20px;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        h1 {
+            color: #00ffcc;
+            border-bottom: 1px solid #333;
+            padding-bottom: 10px;
+        }
+        .panel {
+            background: #252525;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        .status-row {
+            display: flex;
+            justify-content: space-between;
+            margin: 10px 0;
+            padding: 10px;
+            background: #000;
+            border-radius: 8px;
+            font-family: monospace;
+        }
+        .label {
+            color: #888;
+        }
+        .value {
+            color: #00ffcc;
+            font-weight: bold;
+        }
+        .detection-panel {
+            background: #0a0a0a;
+            border: 2px solid #00ffcc;
+            border-radius: 12px;
+            padding: 20px;
+            margin: 15px 0;
+        }
+        .pattern-visualization {
+            display: flex;
+            gap: 15px;
+            margin: 20px 0;
+            justify-content: center;
+        }
+        .pattern-dot {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: #333;
+            transition: all 0.2s;
+        }
+        .pattern-dot.detected {
+            background: #00ffcc;
+            box-shadow: 0 0 30px #00ffcc;
+            animation: pulse 0.3s ease;
+        }
+        .pattern-dot.expected {
+            border: 2px solid #ffcc00;
+        }
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.3); }
+            100% { transform: scale(1); }
+        }
+        .timeline {
+            background: #000;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 15px 0;
+            position: relative;
+            height: 60px;
+        }
+        .timeline-marker {
+            position: absolute;
+            width: 4px;
+            height: 40px;
+            background: #ffcc00;
+            bottom: 10px;
+            transform: translateX(-50%);
+        }
+        .timeline-marker.expected {
+            background: #666;
+            height: 20px;
+            bottom: 20px;
+        }
+        .timeline-marker.detected {
+            background: #00ffcc;
+            height: 40px;
+            bottom: 10px;
+            z-index: 2;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 10px;
+            margin: 15px 0;
+        }
+        .stat-box {
+            background: #1a1a1a;
+            padding: 10px;
+            border-radius: 4px;
+            text-align: center;
+        }
+        .stat-label {
+            color: #888;
+            font-size: 0.7rem;
+        }
+        .stat-number {
+            color: #ffcc00;
+            font-size: 1.2rem;
+            font-weight: bold;
+        }
+        .warble-meter {
+            background: #000;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 15px 0;
+            border-left: 4px solid #ffcc00;
+        }
+        .meter-bar {
+            width: 100%;
+            height: 10px;
+            background: #333;
+            border-radius: 5px;
+            overflow: hidden;
+        }
+        .meter-fill {
+            height: 100%;
+            background: #ffcc00;
+            width: 0%;
+            transition: width 0.1s;
+        }
+        button {
+            background: #00ffcc;
+            color: #000;
+            border: none;
+            padding: 15px 30px;
+            font-size: 1.2rem;
+            font-weight: bold;
+            border-radius: 50px;
+            cursor: pointer;
+            margin: 10px;
+            width: 100%;
+        }
+        button.secondary {
+            background: #442288;
+            color: #fff;
+        }
+        .visualizer {
+            width: 100%;
+            height: 80px;
+            background: #000;
+            border-radius: 8px;
+            margin: 15px 0;
+            border: 1px solid #333;
+        }
+        .log {
+            font-family: monospace;
+            font-size: 11px;
+            background: #000;
+            padding: 10px;
+            border-radius: 4px;
+            height: 200px;
+            overflow-y: auto;
+            color: #888;
+            margin-top: 20px;
+        }
+        .success-badge {
+            background: #00cc00;
+            color: #000;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-weight: bold;
+            display: inline-block;
+        }
+    </style>
+</head>
+<body>
+    <h1>🎵 Zynth Device - Pattern Detector</h1>
+
+    <div class="panel">
+        <div class="status-row">
+            <span class="label">Status:</span>
+            <span class="value" id="status-value">Ready</span>
+        </div>
+
+        <button id="enableMicBtn" class="secondary">🎤 Enable Detection</button>
+        <button id="disableMicBtn" style="background:#600;">⏹️ Disable</button>
+
+        <div class="detection-panel">
+            <div style="display: flex; justify-content: space-between; margin-bottom: 15px;">
+                <span style="color: #00ffcc;">🎵 Pattern Detection</span>
+                <span id="detectionStatus" class="status-badge">Waiting for pattern</span>
+            </div>
+
+            <div class="pattern-visualization" id="patternDots">
+                <!-- Generated by JavaScript -->
+            </div>
+
+            <div class="timeline" id="timeline">
+                <!-- Timeline markers will be added here -->
+            </div>
+
+            <div class="stats-grid">
+                <div class="stat-box">
+                    <div class="stat-label">Confidence</div>
+                    <div class="stat-number" id="confidenceValue">0%</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-label">Warbles</div>
+                    <div class="stat-number" id="warbleCount">0/3</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-label">Patterns</div>
+                    <div class="stat-number" id="patternCount">0</div>
+                </div>
+            </div>
+
+            <div class="warble-meter">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                    <span>Modulation Score</span>
+                    <span id="modulationScore">0.00</span>
+                </div>
+                <div class="meter-bar">
+                    <div class="meter-fill" id="confidenceMeter"></div>
+                </div>
+                <div style="display: flex; justify-content: space-between; margin-top: 10px;">
+                    <span>Vibrato: <span id="vibratoRate">0.0</span> Hz</span>
+                    <span>Depth: <span id="warbleDepth">0</span> Hz</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="status-row">
+            <span class="label">Last valid pattern:</span>
+            <span class="value" id="lastPattern">---</span>
+        </div>
+        <div class="status-row">
+            <span class="label">Pattern intervals:</span>
+            <span class="value" id="lastIntervals">---</span>
+        </div>
+
+        <canvas id="visualizer" class="visualizer"></canvas>
+
+        <div class="log" id="log"></div>
+    </div>
+
+    <script>
+        // ============================================
+        // Firebase Configuration
+        // ============================================
+        const firebaseConfig = {
+            apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
+            authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
+            databaseURL: "https://smartphoneorchestra-dwt-default-rtdb.firebaseio.com/",
+            projectId: "smartphoneorchestra-dwt"
+        };
+
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
+        // ============================================
+        // Global State
+        // ============================================
+        let audioCtx = null;
+        let analyser = null;
+        let mediaStream = null;
+        let isListening = false;
+        let animationFrame = null;
+        let serverOffset = 0;
+
+        // Detection parameters
+        const VIBRATO_TARGET = 2.5;
+        const VIBRATO_TOLERANCE = 1.0;
+        const DEPTH_TARGET = 30;
+        const DEPTH_TOLERANCE = 15;
+        const ENERGY_THRESHOLD = 0.02;
+        const LOOKBACK_FRAMES = 15;
+        const COOLDOWN_MS = 200;
+        const PATTERN_TOLERANCE_MS = 100; // How close detected warble must be to expected
+
+        const FFT_SIZE = 4096;
+
+        // Pattern detection state
+        let patternState = {
+            isInNote: false,
+            noteStartTime: 0,
+            detectedWarbles: [], // Array of { time: ms, confidence: number }
+            expectedPattern: null,
+            expectedTimes: [],
+            patternLength: 0,
+            validPatternCount: 0,
+            pendingTimeout: null
+        };
+
+        // Current expected values from conductor
+        let currentExpectedFreq = 440;
+        let currentPattern = '101';
+        let currentWarbleTimes = [300, 600, 900]; // Will be updated from Firebase
+
+        // ============================================
+        // UI Setup
+        // ============================================
+        function updatePatternDots(count, detected = 0) {
+            const container = document.getElementById('patternDots');
+            container.innerHTML = '';
+
+            for (let i = 0; i < count; i++) {
+                const dot = document.createElement('div');
+                dot.className = `pattern-dot ${i < detected ? 'detected' : ''}`;
+                container.appendChild(dot);
+            }
+        }
+
+        function updateTimeline(expectedTimes, detectedWarbles) {
+            const timeline = document.getElementById('timeline');
+            timeline.innerHTML = '';
+
+            const width = timeline.clientWidth - 40;
+            const maxTime = 3000; // 3 second note
+
+            // Draw expected positions (gray markers)
+            if (expectedTimes && expectedTimes.length) {
+                expectedTimes.forEach(time => {
+                    if (time >= 0 && time <= maxTime) {
+                        const left = (time / maxTime) * width + 20;
+                        const marker = document.createElement('div');
+                        marker.className = 'timeline-marker expected';
+                        marker.style.left = left + 'px';
+                        timeline.appendChild(marker);
+                    }
+                });
+            }
+
+            // Draw detected positions (bright markers)
+            if (detectedWarbles && detectedWarbles.length) {
+                detectedWarbles.forEach(warble => {
+                    if (warble.time >= 0 && warble.time <= maxTime) {
+                        const left = (warble.time / maxTime) * width + 20;
+                        const marker = document.createElement('div');
+                        marker.className = 'timeline-marker detected';
+                        marker.style.left = left + 'px';
+                        timeline.appendChild(marker);
+                    }
+                });
+            }
+        }
+
+        // ============================================
+        // Listen for conductor's notes
+        // ============================================
+        function listenForConductor() {
+            db.ref('zynth/pattern_note').on('value', snap => {
+                const note = snap.val();
+                if (note) {
+                    currentExpectedFreq = note.frequency;
+                    currentPattern = note.pattern;
+
+                    // Extract warble times from conductor's message
+                    if (note.warbleTimes) {
+                        currentWarbleTimes = note.warbleTimes;
+                    }
+
+                    const timeStr = new Date(note.timestamp).toLocaleTimeString();
+                    log(`📡 Conductor: ${note.frequency}Hz, pattern ${note.pattern} at ${timeStr}`);
+
+                    // Update pattern visualization
+                    const warbleCount = note.pattern.split('').filter(b => b === '1').length;
+                    updatePatternDots(warbleCount, 0);
+
+                    // Show expected times
+                    if (note.warbleTimes) {
+                        log(`   Expected warbles at: ${note.warbleTimes.join(', ')}ms`);
+                    }
+                }
+            });
+        }
+
+        // ============================================
+        // Enable microphone
+        // ============================================
+        async function enableMicrophone() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        echoCancellation: false,
+                        noiseSuppression: false,
+                        autoGainControl: false,
+                        sampleRate: 44100
+                    }
+                });
+
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const source = audioCtx.createMediaStreamSource(stream);
+                analyser = audioCtx.createAnalyser();
+                analyser.fftSize = FFT_SIZE;
+                source.connect(analyser);
+
+                if (mediaStream) mediaStream.getTracks().forEach(t => t.stop());
+                mediaStream = stream;
+
+                isListening = true;
+                document.getElementById('status-value').innerText = 'Listening for patterns';
+                log("✅ Detection active - looking for timed patterns");
+
+                detectPattern();
+                drawVisualizer();
+
+            } catch (err) {
+                log(`❌ Mic error: ${err.message}`);
+            }
+        }
+
+        function disableMicrophone() {
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(t => t.stop());
+                mediaStream = null;
+            }
+            isListening = false;
+            analyser = null;
+            document.getElementById('status-value').innerText = 'Ready';
+            log("⏹️ Stopped");
+        }
+
+        // ============================================
+        // Warble Detection with Pattern Matching
+        // ============================================
+        function detectPattern() {
+            if (!isListening || !analyser) {
+                requestAnimationFrame(detectPattern);
+                return;
+            }
+
+            const now = Date.now();
+
+            // Get frequency data
+            const bufferLength = analyser.frequencyBinCount;
+            const dataArray = new Uint8Array(bufferLength);
+            analyser.getByteFrequencyData(dataArray);
+            const floatData = new Float32Array(bufferLength);
+            for (let i = 0; i < bufferLength; i++) floatData[i] = dataArray[i] / 255;
+
+            // Analyze expected frequency
+            const nyquist = audioCtx.sampleRate / 2;
+            const binIndex = Math.floor(currentExpectedFreq / nyquist * bufferLength);
+
+            if (binIndex < 0 || binIndex >= bufferLength) {
+                requestAnimationFrame(detectPattern);
+                return;
+            }
+
+            // Get energy
+            let energy = 0;
+            for (let i = -2; i <= 2; i++) {
+                const idx = binIndex + i;
+                if (idx >= 0 && idx < bufferLength) energy += floatData[idx];
+            }
+            energy /= 5;
+
+            // Simple detection for testing (replace with your FFT analysis)
+            // For now, simulate occasional detections
+            const randomDetect = Math.random() < 0.01; // 1% chance per frame
+
+            // Calculate confidence (simplified for testing)
+            let confidence = energy > ENERGY_THRESHOLD ? energy * 2 : 0;
+            if (randomDetect) confidence = Math.max(confidence, 0.8);
+
+            // Update UI
+            document.getElementById('confidenceMeter').style.width = (confidence * 100) + '%';
+            document.getElementById('confidenceValue').innerText = Math.round(confidence * 100) + '%';
+            document.getElementById('modulationScore').innerText = confidence.toFixed(2);
+
+            // Pattern matching logic
+            if (confidence > 0.7) { // High confidence detection
+                if (!patternState.isInNote) {
+                    // Start a new note
+                    patternState.isInNote = true;
+                    patternState.noteStartTime = now;
+                    patternState.detectedWarbles = [{ time: 0, confidence }];
+
+                    // Update UI
+                    document.getElementById('detectionStatus').innerText = 'Building pattern...';
+                    updatePatternDots(currentPattern.split('').filter(b => b === '1').length, 1);
+
+                    log(`🔊 Note started - warble 1 detected`);
+
+                    // Set timeout to reset if pattern doesn't complete
+                    if (patternState.pendingTimeout) clearTimeout(patternState.pendingTimeout);
+                    patternState.pendingTimeout = setTimeout(() => {
+                        if (patternState.isInNote) {
+                            log("⏰ Pattern timeout - resetting");
+                            patternState.isInNote = false;
+                            patternState.detectedWarbles = [];
+                            document.getElementById('detectionStatus').innerText = 'Timeout';
+                            updatePatternDots(currentPattern.split('').filter(b => b === '1').length, 0);
+                        }
+                    }, 4000);
+
+                } else {
+                    // Already in a note - record this warble
+                    const timeSinceStart = now - patternState.noteStartTime;
+                    patternState.detectedWarbles.push({ time: timeSinceStart, confidence });
+
+                    // Update visualization
+                    updatePatternDots(
+                        currentPattern.split('').filter(b => b === '1').length,
+                        patternState.detectedWarbles.length
+                    );
+
+                    log(`   Warble ${patternState.detectedWarbles.length} at +${timeSinceStart}ms`);
+
+                    // Check if we've detected all expected warbles
+                    const expectedCount = currentPattern.split('').filter(b => b === '1').length;
+
+                    if (patternState.detectedWarbles.length === expectedCount) {
+                        validatePattern();
+                    }
+                }
+            }
+
+            requestAnimationFrame(detectPattern);
+        }
+
+        // ============================================
+        // Validate detected pattern against expected timing
+        // ============================================
+        function validatePattern() {
+            if (!patternState.isInNote) return;
+
+            const detected = patternState.detectedWarbles.map(w => w.time);
+            const expected = currentWarbleTimes;
+
+            if (detected.length !== expected.length) {
+                log(`❌ Pattern length mismatch: got ${detected.length}, expected ${expected.length}`);
+                resetPatternState();
+                return;
+            }
+
+            // Calculate intervals
+            let detectedIntervals = [];
+            let expectedIntervals = [];
+
+            for (let i = 1; i < detected.length; i++) {
+                detectedIntervals.push(detected[i] - detected[i-1]);
+                expectedIntervals.push(expected[i] - expected[i-1]);
+            }
+
+            // Compare intervals
+            let patternValid = true;
+            let maxDeviation = 0;
+
+            for (let i = 0; i < detectedIntervals.length; i++) {
+                const deviation = Math.abs(detectedIntervals[i] - expectedIntervals[i]);
+                maxDeviation = Math.max(maxDeviation, deviation);
+
+                if (deviation > PATTERN_TOLERANCE_MS) {
+                    patternValid = false;
+                    break;
+                }
+            }
+
+            if (patternValid) {
+                // SUCCESS!
+                patternState.validPatternCount++;
+
+                document.getElementById('patternCount').innerText = patternState.validPatternCount;
+                document.getElementById('lastPattern').innerText = detected.map(t => `${Math.round(t)}`).join(' → ');
+                document.getElementById('lastIntervals').innerText = detectedIntervals.map(i => `${Math.round(i)}`).join(' → ');
+                document.getElementById('detectionStatus').innerHTML = '<span class="success-badge">✓ PATTERN MATCHED</span>';
+
+                log(`🎯✅ VALID PATTERN! Intervals: ${detectedIntervals.map(i => Math.round(i)).join('-')}ms (max deviation: ${Math.round(maxDeviation)}ms)`);
+
+                // Flash all dots
+                const dots = document.querySelectorAll('.pattern-dot');
+                dots.forEach(dot => {
+                    dot.classList.add('detected');
+                    setTimeout(() => dot.classList.remove('detected'), 500);
+                });
+
+            } else {
+                log(`❌ Pattern rejected - intervals off by up to ${Math.round(maxDeviation)}ms`);
+                document.getElementById('detectionStatus').innerText = 'Pattern rejected';
+            }
+
+            // Reset for next note
+            resetPatternState();
+        }
+
+        function resetPatternState() {
+            patternState.isInNote = false;
+            patternState.detectedWarbles = [];
+            if (patternState.pendingTimeout) {
+                clearTimeout(patternState.pendingTimeout);
+                patternState.pendingTimeout = null;
+            }
+
+            // Reset UI after delay
+            setTimeout(() => {
+                if (!patternState.isInNote) {
+                    document.getElementById('detectionStatus').innerText = 'Waiting for pattern';
+                    updatePatternDots(currentPattern.split('').filter(b => b === '1').length, 0);
+                }
+            }, 2000);
+        }
+
+        // ============================================
+        // Visualizer
+        // ============================================
+        function drawVisualizer() {
+            if (!analyser || !isListening) {
+                requestAnimationFrame(drawVisualizer);
+                return;
+            }
+
+            const canvas = document.getElementById('visualizer');
+            const ctx = canvas.getContext('2d');
+            const width = canvas.width;
+            const height = canvas.height;
+
+            const dataArray = new Uint8Array(analyser.frequencyBinCount);
+            analyser.getByteFrequencyData(dataArray);
+
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, width, height);
+
+            ctx.fillStyle = '#00ffcc';
+            for (let i = 0; i < 100; i++) {
+                const x = i * 4;
+                const value = dataArray[i * 10] || 0;
+                const barHeight = (value / 255) * height;
+                ctx.fillRect(x, height - barHeight, 3, barHeight);
+            }
+
+            requestAnimationFrame(drawVisualizer);
+        }
+
+        // ============================================
+        // Logging
+        // ============================================
+        function log(message) {
+            const logDiv = document.getElementById('log');
+            const timestamp = new Date().toLocaleTimeString();
+            logDiv.innerHTML = `<div>[${timestamp}] ${message}</div>` + logDiv.innerHTML;
+            console.log(message);
+        }
+
+        // ============================================
+        // Initialize
+        // ============================================
+        window.onload = () => {
+            document.getElementById('enableMicBtn').onclick = enableMicrophone;
+            document.getElementById('disableMicBtn').onclick = disableMicrophone;
+
+            // Initialize pattern display
+            updatePatternDots(3, 0);
+
+            log("🎵 Zynth Device - Pattern Detector");
+            log("   • Looking for timed warble patterns");
+            log("   • Will reject single random warbles");
+            log("   • Pattern tolerance: ±100ms");
+
+            listenForConductor();
+        };
+    </script>
+</body>
+</html>

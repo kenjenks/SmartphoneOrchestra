@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zynth Device - Pattern Detector</title>
+    <title>Zynth Conductor - Pattern Warble (Louder)</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <style>
@@ -27,145 +27,104 @@
             padding: 20px;
             margin: 20px 0;
         }
-        .status-row {
-            display: flex;
-            justify-content: space-between;
-            margin: 10px 0;
-            padding: 10px;
-            background: #000;
-            border-radius: 8px;
-            font-family: monospace;
-        }
-        .label {
-            color: #888;
-        }
-        .value {
-            color: #00ffcc;
-            font-weight: bold;
-        }
-        .detection-panel {
-            background: #0a0a0a;
+        .note-display {
+            background: #1a1a1a;
             border: 2px solid #00ffcc;
             border-radius: 12px;
-            padding: 20px;
-            margin: 15px 0;
-        }
-        .pattern-visualization {
-            display: flex;
-            gap: 15px;
+            padding: 30px;
+            font-size: 3rem;
+            text-align: center;
+            color: #00ffcc;
             margin: 20px 0;
-            justify-content: center;
+            font-family: monospace;
         }
-        .pattern-dot {
+        .warble-pattern {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin: 30px 0;
+            padding: 20px;
+            background: #000;
+            border-radius: 50px;
+        }
+        .warble-dot {
             width: 40px;
             height: 40px;
             border-radius: 50%;
             background: #333;
             transition: all 0.2s;
+            cursor: pointer;
         }
-        .pattern-dot.detected {
+        .warble-dot.active {
             background: #00ffcc;
             box-shadow: 0 0 30px #00ffcc;
-            animation: pulse 0.3s ease;
         }
-        .pattern-dot.expected {
-            border: 2px solid #ffcc00;
+        .slider-group {
+            margin: 20px 0;
         }
-        @keyframes pulse {
-            0% { transform: scale(1); }
-            50% { transform: scale(1.3); }
-            100% { transform: scale(1); }
-        }
-        .timeline {
-            background: #000;
-            border-radius: 8px;
-            padding: 20px;
-            margin: 15px 0;
-            position: relative;
-            height: 60px;
-        }
-        .timeline-marker {
-            position: absolute;
-            width: 4px;
-            height: 40px;
-            background: #ffcc00;
-            bottom: 10px;
-            transform: translateX(-50%);
-        }
-        .timeline-marker.expected {
-            background: #666;
-            height: 20px;
-            bottom: 20px;
-        }
-        .timeline-marker.detected {
-            background: #00ffcc;
-            height: 40px;
-            bottom: 10px;
-            z-index: 2;
-        }
-        .stats-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr 1fr;
-            gap: 10px;
-            margin: 15px 0;
-        }
-        .stat-box {
-            background: #1a1a1a;
-            padding: 10px;
-            border-radius: 4px;
-            text-align: center;
-        }
-        .stat-label {
+        .slider-label {
+            display: flex;
+            justify-content: space-between;
             color: #888;
-            font-size: 0.7rem;
+            margin-bottom: 5px;
         }
-        .stat-number {
-            color: #ffcc00;
-            font-size: 1.2rem;
-            font-weight: bold;
-        }
-        .warble-meter {
-            background: #000;
-            border-radius: 8px;
-            padding: 15px;
-            margin: 15px 0;
-            border-left: 4px solid #ffcc00;
-        }
-        .meter-bar {
+        input[type=range] {
             width: 100%;
-            height: 10px;
+            height: 5px;
             background: #333;
             border-radius: 5px;
-            overflow: hidden;
+            outline: none;
         }
-        .meter-fill {
-            height: 100%;
-            background: #ffcc00;
-            width: 0%;
-            transition: width 0.1s;
+        .param-value {
+            color: #00ffcc;
+            font-weight: bold;
         }
         button {
             background: #00ffcc;
             color: #000;
             border: none;
-            padding: 15px 30px;
-            font-size: 1.2rem;
+            padding: 20px 40px;
+            font-size: 1.5rem;
             font-weight: bold;
             border-radius: 50px;
             cursor: pointer;
             margin: 10px;
+            transition: transform 0.2s;
             width: 100%;
         }
         button.secondary {
             background: #442288;
             color: #fff;
         }
+        .pattern-buttons {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            margin: 15px 0;
+        }
+        .pattern-btn {
+            background: #333;
+            color: #fff;
+            border: 1px solid #555;
+            padding: 10px;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 0.9rem;
+        }
+        .pattern-btn:hover {
+            background: #444;
+        }
+        .pattern-btn.selected {
+            background: #00ffcc;
+            color: #000;
+            border: none;
+        }
         .visualizer {
             width: 100%;
-            height: 80px;
+            height: 100px;
             background: #000;
             border-radius: 8px;
-            margin: 15px 0;
+            margin: 20px 0;
             border: 1px solid #333;
         }
         .log {
@@ -174,89 +133,120 @@
             background: #000;
             padding: 10px;
             border-radius: 4px;
-            height: 200px;
+            height: 150px;
             overflow-y: auto;
             color: #888;
             margin-top: 20px;
         }
-        .success-badge {
-            background: #00cc00;
-            color: #000;
-            padding: 4px 12px;
-            border-radius: 20px;
-            font-weight: bold;
-            display: inline-block;
+        .volume-indicator {
+            width: 100%;
+            height: 30px;
+            background: linear-gradient(90deg, #333, #ff3366, #00ffcc);
+            border-radius: 15px;
+            margin: 15px 0;
+            position: relative;
+        }
+        .volume-marker {
+            position: absolute;
+            width: 4px;
+            height: 40px;
+            background: #fff;
+            top: -5px;
+            transform: translateX(-50%);
+        }
+        .warning {
+            color: #ffcc00;
+            font-size: 0.9rem;
+            margin-top: 10px;
+            padding: 10px;
+            background: #332200;
+            border-radius: 8px;
         }
     </style>
 </head>
 <body>
-    <h1>🎵 Zynth Device - Pattern Detector</h1>
+    <h1>🎵 Zynth Conductor - Pattern Warble (Louder)</h1>
 
     <div class="panel">
-        <div class="status-row">
-            <span class="label">Status:</span>
-            <span class="value" id="status-value">Ready</span>
+        <div class="note-display" id="noteDisplay">A4</div>
+
+        <div class="warble-pattern" id="warblePattern">
+            <!-- Generated by JavaScript -->
+        </div>
+        <div style="color: #888; text-align: center; margin-bottom: 20px;">
+            Click dots to set pattern (max 5 warbles)
         </div>
 
-        <button id="enableMicBtn" class="secondary">🎤 Enable Detection</button>
-        <button id="disableMicBtn" style="background:#600;">⏹️ Disable</button>
+        <div class="pattern-buttons">
+            <button class="pattern-btn" onclick="setPattern('101')">🌊 101</button>
+            <button class="pattern-btn" onclick="setPattern('1001')">🌊 1001</button>
+            <button class="pattern-btn" onclick="setPattern('10101')">🌊 10101</button>
+            <button class="pattern-btn" onclick="setPattern('11011')">🌊 11011</button>
+            <button class="pattern-btn" onclick="setPattern('111')">🌊 Triple</button>
+            <button class="pattern-btn" onclick="setPattern('1')">🌊 Single</button>
+        </div>
 
-        <div class="detection-panel">
-            <div style="display: flex; justify-content: space-between; margin-bottom: 15px;">
-                <span style="color: #00ffcc;">🎵 Pattern Detection</span>
-                <span id="detectionStatus" class="status-badge">Waiting for pattern</span>
+        <div class="slider-group">
+            <div class="slider-label">
+                <span>🎵 Pitch</span>
+                <span id="pitchValue" class="param-value">A4 (440 Hz)</span>
             </div>
+            <input type="range" id="pitchSlider" min="220" max="880" value="440" step="1">
+        </div>
 
-            <div class="pattern-visualization" id="patternDots">
-                <!-- Generated by JavaScript -->
+        <div class="slider-group">
+            <div class="slider-label">
+                <span>🔊 Warble Volume (dB)</span>
+                <span id="volumeValue" class="param-value">-6 dB</span>
             </div>
-
-            <div class="timeline" id="timeline">
-                <!-- Timeline markers will be added here -->
+            <input type="range" id="volumeSlider" min="-12" max="0" value="-6" step="1">
+            <div class="volume-indicator">
+                <div class="volume-marker" id="volumeMarker" style="left: 50%;"></div>
             </div>
-
-            <div class="stats-grid">
-                <div class="stat-box">
-                    <div class="stat-label">Confidence</div>
-                    <div class="stat-number" id="confidenceValue">0%</div>
-                </div>
-                <div class="stat-box">
-                    <div class="stat-label">Warbles</div>
-                    <div class="stat-number" id="warbleCount">0/3</div>
-                </div>
-                <div class="stat-box">
-                    <div class="stat-label">Patterns</div>
-                    <div class="stat-number" id="patternCount">0</div>
-                </div>
-            </div>
-
-            <div class="warble-meter">
-                <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
-                    <span>Modulation Score</span>
-                    <span id="modulationScore">0.00</span>
-                </div>
-                <div class="meter-bar">
-                    <div class="meter-fill" id="confidenceMeter"></div>
-                </div>
-                <div style="display: flex; justify-content: space-between; margin-top: 10px;">
-                    <span>Vibrato: <span id="vibratoRate">0.0</span> Hz</span>
-                    <span>Depth: <span id="warbleDepth">0</span> Hz</span>
-                </div>
+            <div class="warning">
+                ⚠️ Currently at -6dB for testing (clearly audible). Will be reduced later for performance.
             </div>
         </div>
 
-        <div class="status-row">
-            <span class="label">Last valid pattern:</span>
-            <span class="value" id="lastPattern">---</span>
-        </div>
-        <div class="status-row">
-            <span class="label">Pattern intervals:</span>
-            <span class="value" id="lastIntervals">---</span>
+        <div class="slider-group">
+            <div class="slider-label">
+                <span>🎵 Warble Depth (Hz)</span>
+                <span id="depthValue" class="param-value">30 Hz</span>
+            </div>
+            <input type="range" id="depthSlider" min="15" max="60" value="30" step="5">
         </div>
 
-        <canvas id="visualizer" class="visualizer"></canvas>
+        <div class="slider-group">
+            <div class="slider-label">
+                <span>⏱️ Warble Spacing (ms)</span>
+                <span id="spacingValue" class="param-value">300 ms</span>
+            </div>
+            <input type="range" id="spacingSlider" min="150" max="600" value="300" step="10">
+        </div>
 
-        <div class="log" id="log"></div>
+        <button id="playBtn">🎵 PLAY PATTERNED NOTE</button>
+        <button id="playPureBtn" class="secondary">🎵 PLAY PURE TONE</button>
+
+        <div style="margin-top: 20px; padding: 15px; background: #1a1a1a; border-radius: 8px;">
+            <h3 style="color: #00ffcc; margin-top: 0;">📡 Current Pattern</h3>
+            <div style="font-family: monospace; font-size: 1.5rem; text-align: center;" id="currentPatternDisplay">101</div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px;">
+                <div>
+                    <div style="color: #888;">Warble times:</div>
+                    <div id="warbleTimes" style="color: #00ffcc;">0, 300, 600 ms</div>
+                </div>
+                <div>
+                    <div style="color: #888;">Intervals:</div>
+                    <div id="warbleIntervals" style="color: #ffcc00;">300, 300 ms</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <canvas id="visualizer" class="visualizer"></canvas>
+
+    <div class="log" id="log">
+        Ready...
     </div>
 
     <script>
@@ -278,350 +268,359 @@
         // ============================================
         let audioCtx = null;
         let analyser = null;
-        let mediaStream = null;
-        let isListening = false;
         let animationFrame = null;
         let serverOffset = 0;
 
-        // Detection parameters
-        const VIBRATO_TARGET = 2.5;
-        const VIBRATO_TOLERANCE = 1.0;
-        const DEPTH_TARGET = 30;
-        const DEPTH_TOLERANCE = 15;
-        const ENERGY_THRESHOLD = 0.02;
-        const LOOKBACK_FRAMES = 15;
-        const COOLDOWN_MS = 200;
-        const PATTERN_TOLERANCE_MS = 100; // How close detected warble must be to expected
+        // Flute parameters
+        const FADE_MS = 20;
+        const VIBRATO_RATE = 2.5;
+        const NOTE_DURATION = 3000; // 3 seconds
+        const HARMONICS = [
+            { gain: 1.0, phase: 0.0 },   // Fundamental
+            { gain: 0.3, phase: 0.2 },   // Second harmonic
+            { gain: 0.1, phase: 0.5 }    // Third harmonic
+        ];
 
-        const FFT_SIZE = 4096;
-
-        // Pattern detection state
-        let patternState = {
-            isInNote: false,
-            noteStartTime: 0,
-            detectedWarbles: [], // Array of { time: ms, confidence: number }
-            expectedPattern: null,
-            expectedTimes: [],
-            patternLength: 0,
-            validPatternCount: 0,
-            pendingTimeout: null
-        };
-
-        // Current expected values from conductor
-        let currentExpectedFreq = 440;
-        let currentPattern = '101';
-        let currentWarbleTimes = [300, 600, 900]; // Will be updated from Firebase
+        // Current parameters
+        let currentFreq = 440;
+        let warbleDepth = 30;
+        let warbleVolumeDB = -6;  // Louder for testing!
+        let warbleSpacing = 300;  // ms between warbles
+        let warblePattern = [1, 0, 1];  // Default 101
 
         // ============================================
         // UI Setup
         // ============================================
-        function updatePatternDots(count, detected = 0) {
-            const container = document.getElementById('patternDots');
+        function updateWarblePatternUI() {
+            const container = document.getElementById('warblePattern');
             container.innerHTML = '';
 
-            for (let i = 0; i < count; i++) {
+            for (let i = 0; i < 5; i++) {
                 const dot = document.createElement('div');
-                dot.className = `pattern-dot ${i < detected ? 'detected' : ''}`;
+                dot.className = `warble-dot ${i < warblePattern.length && warblePattern[i] === 1 ? 'active' : ''}`;
+                dot.onclick = () => toggleWarbleBit(i);
                 container.appendChild(dot);
             }
+
+            updatePatternDisplay();
         }
 
-        function updateTimeline(expectedTimes, detectedWarbles) {
-            const timeline = document.getElementById('timeline');
-            timeline.innerHTML = '';
-
-            const width = timeline.clientWidth - 40;
-            const maxTime = 3000; // 3 second note
-
-            // Draw expected positions (gray markers)
-            if (expectedTimes && expectedTimes.length) {
-                expectedTimes.forEach(time => {
-                    if (time >= 0 && time <= maxTime) {
-                        const left = (time / maxTime) * width + 20;
-                        const marker = document.createElement('div');
-                        marker.className = 'timeline-marker expected';
-                        marker.style.left = left + 'px';
-                        timeline.appendChild(marker);
-                    }
-                });
+        function toggleWarbleBit(index) {
+            while (warblePattern.length <= index) {
+                warblePattern.push(0);
             }
-
-            // Draw detected positions (bright markers)
-            if (detectedWarbles && detectedWarbles.length) {
-                detectedWarbles.forEach(warble => {
-                    if (warble.time >= 0 && warble.time <= maxTime) {
-                        const left = (warble.time / maxTime) * width + 20;
-                        const marker = document.createElement('div');
-                        marker.className = 'timeline-marker detected';
-                        marker.style.left = left + 'px';
-                        timeline.appendChild(marker);
-                    }
-                });
+            warblePattern[index] = warblePattern[index] === 1 ? 0 : 1;
+            while (warblePattern.length > 0 && warblePattern[warblePattern.length - 1] === 0) {
+                warblePattern.pop();
             }
+            if (warblePattern.length === 0) warblePattern = [1]; // At least one warble
+            updateWarblePatternUI();
+            log(`📝 Pattern: ${warblePattern.join('')}`);
         }
 
-        // ============================================
-        // Listen for conductor's notes
-        // ============================================
-        function listenForConductor() {
-            db.ref('zynth/pattern_note').on('value', snap => {
-                const note = snap.val();
-                if (note) {
-                    currentExpectedFreq = note.frequency;
-                    currentPattern = note.pattern;
+        function setPattern(pattern) {
+            warblePattern = pattern.split('').map(b => parseInt(b));
+            updateWarblePatternUI();
+            log(`📝 Pattern set: ${pattern}`);
+        }
 
-                    // Extract warble times from conductor's message
-                    if (note.warbleTimes) {
-                        currentWarbleTimes = note.warbleTimes;
-                    }
+        function updatePatternDisplay() {
+            document.getElementById('currentPatternDisplay').innerText = warblePattern.join('');
 
-                    const timeStr = new Date(note.timestamp).toLocaleTimeString();
-                    log(`📡 Conductor: ${note.frequency}Hz, pattern ${note.pattern} at ${timeStr}`);
+            // Calculate warble times
+            let warbleIndices = [];
+            for (let i = 0; i < warblePattern.length; i++) {
+                if (warblePattern[i] === 1) warbleIndices.push(i);
+            }
 
-                    // Update pattern visualization
-                    const warbleCount = note.pattern.split('').filter(b => b === '1').length;
-                    updatePatternDots(warbleCount, 0);
+            if (warbleIndices.length > 0) {
+                // Center the pattern in the note
+                const totalDuration = NOTE_DURATION - 500; // Leave 250ms padding at start and end
+                const patternWidth = (warbleIndices.length - 1) * warbleSpacing;
+                const startTime = (NOTE_DURATION - patternWidth) / 2;
 
-                    // Show expected times
-                    if (note.warbleTimes) {
-                        log(`   Expected warbles at: ${note.warbleTimes.join(', ')}ms`);
-                    }
+                let times = [];
+                let intervals = [];
+                for (let i = 0; i < warbleIndices.length; i++) {
+                    const time = Math.round(startTime + i * warbleSpacing);
+                    times.push(time);
+                    if (i > 0) intervals.push(time - times[i-1]);
                 }
-            });
+
+                document.getElementById('warbleTimes').innerText = times.join(', ') + ' ms';
+                document.getElementById('warbleIntervals').innerText = intervals.join(', ') + ' ms';
+            }
         }
 
-        // ============================================
-        // Enable microphone
-        // ============================================
-        async function enableMicrophone() {
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({
-                    audio: {
-                        echoCancellation: false,
-                        noiseSuppression: false,
-                        autoGainControl: false,
-                        sampleRate: 44100
-                    }
-                });
+        // Slider handlers
+        document.getElementById('pitchSlider').addEventListener('input', (e) => {
+            currentFreq = parseInt(e.target.value);
+            const noteNames = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+            const semitone = Math.round(12 * Math.log2(currentFreq / 440) + 69);
+            const octave = Math.floor(semitone / 12) - 1;
+            const noteName = noteNames[semitone % 12] + octave;
+            document.getElementById('pitchValue').innerText = `${noteName} (${currentFreq} Hz)`;
+            document.getElementById('noteDisplay').innerText = noteName;
+        });
 
+        document.getElementById('volumeSlider').addEventListener('input', (e) => {
+            warbleVolumeDB = parseInt(e.target.value);
+            document.getElementById('volumeValue').innerText = warbleVolumeDB + ' dB';
+
+            // Move volume marker
+            const percent = ((warbleVolumeDB + 12) / 12) * 100;
+            document.getElementById('volumeMarker').style.left = percent + '%';
+        });
+
+        document.getElementById('depthSlider').addEventListener('input', (e) => {
+            warbleDepth = parseInt(e.target.value);
+            document.getElementById('depthValue').innerText = warbleDepth + ' Hz';
+        });
+
+        document.getElementById('spacingSlider').addEventListener('input', (e) => {
+            warbleSpacing = parseInt(e.target.value);
+            document.getElementById('spacingValue').innerText = warbleSpacing + ' ms';
+            updatePatternDisplay();
+        });
+
+        // ============================================
+        // Audio Initialization
+        // ============================================
+        async function initAudio() {
+            if (!audioCtx) {
                 audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-                const source = audioCtx.createMediaStreamSource(stream);
                 analyser = audioCtx.createAnalyser();
-                analyser.fftSize = FFT_SIZE;
-                source.connect(analyser);
-
-                if (mediaStream) mediaStream.getTracks().forEach(t => t.stop());
-                mediaStream = stream;
-
-                isListening = true;
-                document.getElementById('status-value').innerText = 'Listening for patterns';
-                log("✅ Detection active - looking for timed patterns");
-
-                detectPattern();
+                analyser.fftSize = 2048;
+                log("🔊 AudioContext created");
                 drawVisualizer();
-
-            } catch (err) {
-                log(`❌ Mic error: ${err.message}`);
             }
-        }
-
-        function disableMicrophone() {
-            if (mediaStream) {
-                mediaStream.getTracks().forEach(t => t.stop());
-                mediaStream = null;
-            }
-            isListening = false;
-            analyser = null;
-            document.getElementById('status-value').innerText = 'Ready';
-            log("⏹️ Stopped");
+            if (audioCtx.state === 'suspended') await audioCtx.resume();
+            return true;
         }
 
         // ============================================
-        // Warble Detection with Pattern Matching
+        // Generate Continuous Flute Tone
         // ============================================
-        function detectPattern() {
-            if (!isListening || !analyser) {
-                requestAnimationFrame(detectPattern);
-                return;
+        function generateFluteTone(baseFreq, durationMs) {
+            const sampleRate = audioCtx.sampleRate;
+            const nSamples = Math.floor(sampleRate * (durationMs / 1000));
+            const t = new Float32Array(nSamples);
+            for (let i = 0; i < nSamples; i++) t[i] = i / sampleRate;
+
+            const samples = new Float32Array(nSamples);
+
+            // Add harmonics
+            for (let h = 0; h < HARMONICS.length; h++) {
+                const harmonic = HARMONICS[h];
+                const harmonicFreq = baseFreq * (h + 1);
+                for (let i = 0; i < nSamples; i++) {
+                    samples[i] += harmonic.gain * Math.sin(2 * Math.PI * harmonicFreq * t[i] + harmonic.phase);
+                }
             }
 
-            const now = Date.now();
+            // Normalize
+            let maxVal = 0;
+            for (let i = 0; i < nSamples; i++) maxVal = Math.max(maxVal, Math.abs(samples[i]));
+            if (maxVal > 0) for (let i = 0; i < nSamples; i++) samples[i] /= maxVal;
 
-            // Get frequency data
-            const bufferLength = analyser.frequencyBinCount;
-            const dataArray = new Uint8Array(bufferLength);
-            analyser.getByteFrequencyData(dataArray);
-            const floatData = new Float32Array(bufferLength);
-            for (let i = 0; i < bufferLength; i++) floatData[i] = dataArray[i] / 255;
-
-            // Analyze expected frequency
-            const nyquist = audioCtx.sampleRate / 2;
-            const binIndex = Math.floor(currentExpectedFreq / nyquist * bufferLength);
-
-            if (binIndex < 0 || binIndex >= bufferLength) {
-                requestAnimationFrame(detectPattern);
-                return;
+            // Apply envelope
+            const fadeSamples = Math.floor(FADE_MS / 1000 * sampleRate);
+            for (let i = 0; i < nSamples; i++) {
+                if (i < fadeSamples) {
+                    samples[i] *= 0.5 * (1 - Math.cos(Math.PI * i / fadeSamples));
+                } else if (i > nSamples - fadeSamples) {
+                    const j = i - (nSamples - fadeSamples);
+                    samples[i] *= 0.5 * (1 - Math.cos(Math.PI * j / fadeSamples));
+                }
             }
 
-            // Get energy
-            let energy = 0;
-            for (let i = -2; i <= 2; i++) {
-                const idx = binIndex + i;
-                if (idx >= 0 && idx < bufferLength) energy += floatData[idx];
+            return samples;
+        }
+
+        // ============================================
+        // Generate Warble (for overlay)
+        // ============================================
+        function generateWarble(baseFreq, durationMs) {
+            const sampleRate = audioCtx.sampleRate;
+            const nSamples = Math.floor(sampleRate * (durationMs / 1000));
+            const t = new Float32Array(nSamples);
+            for (let i = 0; i < nSamples; i++) t[i] = i / sampleRate;
+
+            // Create smooth frequency modulation
+            const rawMod = new Float32Array(nSamples);
+            for (let i = 0; i < nSamples; i++) {
+                rawMod[i] = Math.sin(2 * Math.PI * VIBRATO_RATE * t[i]);
             }
-            energy /= 5;
 
-            // Simple detection for testing (replace with your FFT analysis)
-            // For now, simulate occasional detections
-            const randomDetect = Math.random() < 0.01; // 1% chance per frame
-
-            // Calculate confidence (simplified for testing)
-            let confidence = energy > ENERGY_THRESHOLD ? energy * 2 : 0;
-            if (randomDetect) confidence = Math.max(confidence, 0.8);
-
-            // Update UI
-            document.getElementById('confidenceMeter').style.width = (confidence * 100) + '%';
-            document.getElementById('confidenceValue').innerText = Math.round(confidence * 100) + '%';
-            document.getElementById('modulationScore').innerText = confidence.toFixed(2);
-
-            // Pattern matching logic
-            if (confidence > 0.7) { // High confidence detection
-                if (!patternState.isInNote) {
-                    // Start a new note
-                    patternState.isInNote = true;
-                    patternState.noteStartTime = now;
-                    patternState.detectedWarbles = [{ time: 0, confidence }];
-
-                    // Update UI
-                    document.getElementById('detectionStatus').innerText = 'Building pattern...';
-                    updatePatternDots(currentPattern.split('').filter(b => b === '1').length, 1);
-
-                    log(`🔊 Note started - warble 1 detected`);
-
-                    // Set timeout to reset if pattern doesn't complete
-                    if (patternState.pendingTimeout) clearTimeout(patternState.pendingTimeout);
-                    patternState.pendingTimeout = setTimeout(() => {
-                        if (patternState.isInNote) {
-                            log("⏰ Pattern timeout - resetting");
-                            patternState.isInNote = false;
-                            patternState.detectedWarbles = [];
-                            document.getElementById('detectionStatus').innerText = 'Timeout';
-                            updatePatternDots(currentPattern.split('').filter(b => b === '1').length, 0);
-                        }
-                    }, 4000);
-
-                } else {
-                    // Already in a note - record this warble
-                    const timeSinceStart = now - patternState.noteStartTime;
-                    patternState.detectedWarbles.push({ time: timeSinceStart, confidence });
-
-                    // Update visualization
-                    updatePatternDots(
-                        currentPattern.split('').filter(b => b === '1').length,
-                        patternState.detectedWarbles.length
-                    );
-
-                    log(`   Warble ${patternState.detectedWarbles.length} at +${timeSinceStart}ms`);
-
-                    // Check if we've detected all expected warbles
-                    const expectedCount = currentPattern.split('').filter(b => b === '1').length;
-
-                    if (patternState.detectedWarbles.length === expectedCount) {
-                        validatePattern();
+            // Apply smoothing
+            const smoothMod = new Float32Array(nSamples);
+            const sigma = Math.floor(nSamples / 20);
+            for (let i = 0; i < nSamples; i++) {
+                let sum = 0, weight = 0;
+                for (let j = -sigma; j <= sigma; j++) {
+                    const idx = i + j;
+                    if (idx >= 0 && idx < nSamples) {
+                        const w = Math.exp(-(j*j) / (2 * sigma*sigma));
+                        sum += rawMod[idx] * w;
+                        weight += w;
                     }
                 }
+                smoothMod[i] = sum / weight;
             }
 
-            requestAnimationFrame(detectPattern);
-        }
+            // Normalize
+            let maxVal = 0;
+            for (let i = 0; i < nSamples; i++) maxVal = Math.max(maxVal, Math.abs(smoothMod[i]));
+            if (maxVal > 0) for (let i = 0; i < nSamples; i++) smoothMod[i] /= maxVal;
 
-        // ============================================
-        // Validate detected pattern against expected timing
-        // ============================================
-        function validatePattern() {
-            if (!patternState.isInNote) return;
-
-            const detected = patternState.detectedWarbles.map(w => w.time);
-            const expected = currentWarbleTimes;
-
-            if (detected.length !== expected.length) {
-                log(`❌ Pattern length mismatch: got ${detected.length}, expected ${expected.length}`);
-                resetPatternState();
-                return;
+            // Convert to frequency modulation
+            const modDepth = warbleDepth / baseFreq;
+            const warbleFactor = new Float32Array(nSamples);
+            for (let i = 0; i < nSamples; i++) {
+                warbleFactor[i] = 1.0 + modDepth * smoothMod[i];
             }
 
-            // Calculate intervals
-            let detectedIntervals = [];
-            let expectedIntervals = [];
-
-            for (let i = 1; i < detected.length; i++) {
-                detectedIntervals.push(detected[i] - detected[i-1]);
-                expectedIntervals.push(expected[i] - expected[i-1]);
+            // Generate with phase accumulation
+            const phase = new Float32Array(nSamples);
+            phase[0] = 0;
+            for (let i = 1; i < nSamples; i++) {
+                phase[i] = phase[i-1] + 2 * Math.PI * baseFreq * warbleFactor[i] * t[1];
             }
 
-            // Compare intervals
-            let patternValid = true;
-            let maxDeviation = 0;
+            const samples = new Float32Array(nSamples);
+            for (let i = 0; i < nSamples; i++) {
+                samples[i] = Math.sin(phase[i]);
+            }
 
-            for (let i = 0; i < detectedIntervals.length; i++) {
-                const deviation = Math.abs(detectedIntervals[i] - expectedIntervals[i]);
-                maxDeviation = Math.max(maxDeviation, deviation);
-
-                if (deviation > PATTERN_TOLERANCE_MS) {
-                    patternValid = false;
-                    break;
+            // Apply envelope
+            const fadeSamples = Math.floor(FADE_MS / 1000 * sampleRate);
+            for (let i = 0; i < nSamples; i++) {
+                if (i < fadeSamples) {
+                    samples[i] *= 0.5 * (1 - Math.cos(Math.PI * i / fadeSamples));
+                } else if (i > nSamples - fadeSamples) {
+                    const j = i - (nSamples - fadeSamples);
+                    samples[i] *= 0.5 * (1 - Math.cos(Math.PI * j / fadeSamples));
                 }
             }
 
-            if (patternValid) {
-                // SUCCESS!
-                patternState.validPatternCount++;
+            return samples;
+        }
 
-                document.getElementById('patternCount').innerText = patternState.validPatternCount;
-                document.getElementById('lastPattern').innerText = detected.map(t => `${Math.round(t)}`).join(' → ');
-                document.getElementById('lastIntervals').innerText = detectedIntervals.map(i => `${Math.round(i)}`).join(' → ');
-                document.getElementById('detectionStatus').innerHTML = '<span class="success-badge">✓ PATTERN MATCHED</span>';
+        // ============================================
+        // Play Note with Pattern
+        // ============================================
+        async function playNote(withPattern = true) {
+            try {
+                await initAudio();
 
-                log(`🎯✅ VALID PATTERN! Intervals: ${detectedIntervals.map(i => Math.round(i)).join('-')}ms (max deviation: ${Math.round(maxDeviation)}ms)`);
+                if (withPattern) {
+                    log(`🎵 Playing pattern: ${warblePattern.join('')}`);
+                    log(`   Warble volume: ${warbleVolumeDB}dB (clearly audible for testing)`);
+                } else {
+                    log(`🎵 Playing pure tone`);
+                }
 
-                // Flash all dots
-                const dots = document.querySelectorAll('.pattern-dot');
-                dots.forEach(dot => {
-                    dot.classList.add('detected');
-                    setTimeout(() => dot.classList.remove('detected'), 500);
+                // Generate continuous flute tone (background)
+                const pureTone = generateFluteTone(currentFreq, NOTE_DURATION);
+
+                // Create master buffer
+                const sampleRate = audioCtx.sampleRate;
+                const totalSamples = Math.floor(sampleRate * (NOTE_DURATION / 1000));
+                const masterBuffer = audioCtx.createBuffer(1, totalSamples, sampleRate);
+                const masterData = masterBuffer.getChannelData(0);
+
+                // Copy pure tone to master
+                for (let i = 0; i < totalSamples; i++) {
+                    masterData[i] = pureTone[i];
+                }
+
+                if (withPattern) {
+                    // Find warble positions
+                    let warbleIndices = [];
+                    for (let i = 0; i < warblePattern.length; i++) {
+                        if (warblePattern[i] === 1) warbleIndices.push(i);
+                    }
+
+                    if (warbleIndices.length > 0) {
+                        // Center the pattern in the note
+                        const patternWidth = (warbleIndices.length - 1) * warbleSpacing;
+                        const startTime = (NOTE_DURATION - patternWidth) / 2;
+
+                        const warbleDuration = 150; // ms
+                        const warbleGain = Math.pow(10, warbleVolumeDB / 20);
+
+                        let warbleTimes = [];
+
+                        for (let i = 0; i < warbleIndices.length; i++) {
+                            const warbleTime = startTime + i * warbleSpacing;
+                            warbleTimes.push(Math.round(warbleTime));
+
+                            // Generate warble
+                            const warbleSamples = generateWarble(currentFreq, warbleDuration);
+
+                            // Overlay on master
+                            const startSample = Math.floor(warbleTime / 1000 * sampleRate);
+                            for (let j = 0; j < warbleSamples.length; j++) {
+                                if (startSample + j < totalSamples) {
+                                    masterData[startSample + j] += warbleSamples[j] * warbleGain;
+                                }
+                            }
+
+                            log(`   Warble ${i+1} at ${Math.round(warbleTime)}ms (gain: ${warbleGain.toFixed(2)})`);
+                        }
+
+                        // Calculate intervals for logging
+                        let intervals = [];
+                        for (let i = 1; i < warbleTimes.length; i++) {
+                            intervals.push(warbleTimes[i] - warbleTimes[i-1]);
+                        }
+                        log(`   Pattern intervals: ${intervals.join('-')}ms`);
+
+                        // Normalize to prevent clipping
+                        let maxSample = 0;
+                        for (let i = 0; i < totalSamples; i++) {
+                            maxSample = Math.max(maxSample, Math.abs(masterData[i]));
+                        }
+                        if (maxSample > 1.0) {
+                            for (let i = 0; i < totalSamples; i++) {
+                                masterData[i] /= maxSample;
+                            }
+                            log(`   Normalized (peak was ${maxSample.toFixed(2)})`);
+                        }
+                    }
+                }
+
+                // Play
+                const source = audioCtx.createBufferSource();
+                source.buffer = masterBuffer;
+                source.connect(audioCtx.destination);
+                if (analyser) source.connect(analyser);
+                source.start();
+
+                // Announce to Firebase with full pattern details
+                await db.ref('zynth/pattern_note').set({
+                    frequency: currentFreq,
+                    pattern: warblePattern.join(''),
+                    warbleTimes: warbleTimes,
+                    intervals: intervals,
+                    volume: warbleVolumeDB,
+                    depth: warbleDepth,
+                    spacing: warbleSpacing,
+                    timestamp: Date.now() + serverOffset
                 });
 
-            } else {
-                log(`❌ Pattern rejected - intervals off by up to ${Math.round(maxDeviation)}ms`);
-                document.getElementById('detectionStatus').innerText = 'Pattern rejected';
+                log(`✅ Note playing (${warbleTimes.length} warbles)`);
+
+            } catch (e) {
+                log(`❌ Playback failed: ${e.message}`);
             }
-
-            // Reset for next note
-            resetPatternState();
-        }
-
-        function resetPatternState() {
-            patternState.isInNote = false;
-            patternState.detectedWarbles = [];
-            if (patternState.pendingTimeout) {
-                clearTimeout(patternState.pendingTimeout);
-                patternState.pendingTimeout = null;
-            }
-
-            // Reset UI after delay
-            setTimeout(() => {
-                if (!patternState.isInNote) {
-                    document.getElementById('detectionStatus').innerText = 'Waiting for pattern';
-                    updatePatternDots(currentPattern.split('').filter(b => b === '1').length, 0);
-                }
-            }, 2000);
         }
 
         // ============================================
         // Visualizer
         // ============================================
         function drawVisualizer() {
-            if (!analyser || !isListening) {
+            if (!analyser) {
                 requestAnimationFrame(drawVisualizer);
                 return;
             }
@@ -649,6 +648,12 @@
         }
 
         // ============================================
+        // Button handlers
+        // ============================================
+        document.getElementById('playBtn').onclick = () => playNote(true);
+        document.getElementById('playPureBtn').onclick = () => playNote(false);
+
+        // ============================================
         // Logging
         // ============================================
         function log(message) {
@@ -662,18 +667,13 @@
         // Initialize
         // ============================================
         window.onload = () => {
-            document.getElementById('enableMicBtn').onclick = enableMicrophone;
-            document.getElementById('disableMicBtn').onclick = disableMicrophone;
+            updateWarblePatternUI();
+            updatePatternDisplay();
 
-            // Initialize pattern display
-            updatePatternDots(3, 0);
-
-            log("🎵 Zynth Device - Pattern Detector");
-            log("   • Looking for timed warble patterns");
-            log("   • Will reject single random warbles");
-            log("   • Pattern tolerance: ±100ms");
-
-            listenForConductor();
+            log("🎵 Zynth Conductor - Pattern Warble (LOUDER TEST)");
+            log("   • Warble volume: -6dB (clearly audible)");
+            log("   • Pattern: 101 (warbles at 0, 300, 600ms)");
+            log("   • Testing pattern detection reliability");
         };
     </script>
 </body>
