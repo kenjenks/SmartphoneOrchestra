@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zynth Conductor - Fully Corrected</title>
+    <title>Zynth Conductor - Final Fixes</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <style>
@@ -162,7 +162,7 @@
     </style>
 </head>
 <body>
-    <h1>🎵 Zynth Conductor - Fully Corrected</h1>
+    <h1>🎵 Zynth Conductor - Final Fixes</h1>
 
     <div class="panel">
         <div style="display: flex; align-items: center; margin-bottom: 15px;">
@@ -368,7 +368,6 @@
             const now = Date.now() + serverOffset;
 
             // Add extra buffer to account for Firebase write latency (worst case 400ms)
-            // This ensures notePlayTime is always after the Firebase write completes
             const firebaseWriteBuffer = 500; // ms
             const bufferMs = 1000 + firebaseWriteBuffer;
             const scheduledWallTime = now + bufferMs; // When the sequence starts
@@ -396,7 +395,6 @@
                     offset: firstNote.offset,  // Seek position in MP3
                     duration: firstNote.duration,
                     jitter: jitter
-                    // Note: expectedPlayTime is NOT sent - device will compute it
                 }
             });
 
@@ -434,10 +432,8 @@
             source.start(scheduledAudioTime, firstNote.offset / 1000, firstNote.duration / 1000);
 
             // Use a single source.onended callback for accurate timing
-            // No separate setTimeout - this avoids race conditions
             source.onended = () => {
                 const endTime = Date.now() + serverOffset;
-                // Calculate actual start time based on scheduled audio time
                 const actualStartTime = notePlayTime; // Best estimate
                 const actualDuration = endTime - actualStartTime;
 
@@ -449,8 +445,11 @@
                 isPlaying = false;
                 document.getElementById('playBtn').disabled = false;
 
-                // Clear the test
-                db.ref('zynth/single_note_test').remove();
+                // Wait 2 seconds before clearing the test to give device time to detect
+                setTimeout(() => {
+                    db.ref('zynth/single_note_test').remove();
+                    log('🧹 Test cleared from Firebase');
+                }, 2000);
             };
 
             // Also log when Web Audio thinks it started (via a separate callback)
@@ -479,7 +478,7 @@
             // Load MP3
             loadMP3();
 
-            log('🎵 Zynth Conductor - Fully Corrected ready');
+            log('🎵 Zynth Conductor - Final Fixes ready');
             log('🎯 First note: G4 at 302ms offset');
             log('⏳ Waiting for server offset and MP3 load...');
         };
