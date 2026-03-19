@@ -12,16 +12,16 @@ Survey Purge: During setup, you might do several "test walks." This button allow
 
 Database Health: Keeping the devices node empty when the show isn't running prevents Firebase from racking up unnecessary "Simultaneous Connection" charges.
 
-Seat Configuration: Upload seat_config.tsv to define seat positions for spatial audio calculations.
+Seat Configuration: Upload seat_config.tsv to define seat positions for spatial audio calculations. Also computes neighbor map for distributed calibration.
 
-Tuning Mode Configuration: Upload tuning_mode.json for the Bach "Jesu, Joy of Man's Desiring" calibration sequence.
+Tuning Mode Configuration: Upload tuning_mode.json for the piccolo "Jesu, Joy of Man's Desiring" calibration sequence.
 
 Operational SOP for Admin:
 
 * Pre-Show:
   (1) Upload pillar_config.json with the current XY locations of the 4 pillars in meters from front left of house.
-  (2) Upload seat_config.tsv with all seat positions for spatial audio.
-  (3) Upload tuning_mode.json for the Bach calibration sequence (if using).
+  (2) Upload seat_config.tsv with all seat positions for spatial audio. Neighbor map auto-computed.
+  (3) Upload tuning_mode.json for the piccolo calibration sequence (if using).
   (4) Check Admin to ensure Pillars = 0 and Devices = 0 (a clean slate).
   (5) Upload visual_timeline.json, which schedules the audio and visual cues.
 
@@ -136,7 +136,14 @@ Operational SOP for Admin:
             </div>
 
             <div class="config-status">
-                <div class="status-title">TUNING MODE (BACH)</div>
+                <div class="status-title">NEIGHBOR MAP (2m radius)</div>
+                <div id="neighbor-view" style="max-height: 150px; overflow-y: auto;">
+                    <div style="color: #444; font-style: italic; font-size: 0.8rem;">Generated from seat upload</div>
+                </div>
+            </div>
+
+            <div class="config-status">
+                <div class="status-title">TUNING MODE (PICCOLO)</div>
                 <div id="tuning-view" style="max-height: 200px; overflow-y: auto;">
                     <div style="color: #444; font-style: italic; font-size: 0.8rem;">Checking for tuning config...</div>
                 </div>
@@ -230,11 +237,13 @@ Operational SOP for Admin:
                     document.getElementById('seat-status').innerHTML = 'Loaded';
                     document.getElementById('seat-status').className = 'status-badge badge-loaded';
                     updateSeatView(seatData);
-                    log(`✅ Found seat config with ${seatData.seats.length} seats`);
+                    updateNeighborView(seatData);
+                    log(`✅ Found seat config with ${seatData.seats.length} seats and neighbor map`);
                 } else {
                     document.getElementById('seat-status').innerHTML = 'Not Loaded';
                     document.getElementById('seat-status').className = 'status-badge badge-missing';
                     document.getElementById('seat-view').innerHTML = '<div style="color: #444; font-style: italic; font-size: 0.8rem;">No Seat Config Loaded</div>';
+                    document.getElementById('neighbor-view').innerHTML = '<div style="color: #444; font-style: italic; font-size: 0.8rem;">No Neighbor Map Available</div>';
                 }
             } catch (e) {
                 log(`⚠️ Error checking seat config: ${e.message}`);
@@ -303,20 +312,50 @@ Operational SOP for Admin:
                 document.getElementById('seat-view').innerHTML = '<div style="color: #444; font-style: italic; font-size: 0.8rem;">No Seat Config Loaded</div>';
                 return;
             }
-            let html = "<table><tr><th>Seat</th><th>X</th><th>Y</th></tr>";
+            let html = "<table><tr><th>Seat</th><th>X</th><th>Y</th><th>Section</th></tr>";
             // Show first 10 seats as preview
             config.seats.slice(0, 10).forEach(s => {
+                const section = s.y < 15 ? 'Orchestra' : 'Balcony';
                 html += `<tr>
                     <td style="color:#00ffcc;">${s.id}</td>
                     <td>${s.x}</td>
                     <td>${s.y}</td>
+                    <td>${section}</td>
                 </tr>`;
             });
             if (config.seats.length > 10) {
-                html += `<tr><td colspan="3">... and ${config.seats.length - 10} more</td></tr>`;
+                html += `<tr><td colspan="4">... and ${config.seats.length - 10} more</td></tr>`;
             }
             html += "</table>";
             document.getElementById('seat-view').innerHTML = html;
+        }
+
+        function updateNeighborView(config) {
+            if (!config || !config.neighborMap) {
+                document.getElementById('neighbor-view').innerHTML = '<div style="color: #444; font-style: italic; font-size: 0.8rem;">No Neighbor Map Available</div>';
+                return;
+            }
+
+            const seats = Object.keys(config.neighborMap).slice(0, 8);
+            let html = "<table><tr><th>Seat</th><th>Neighbors</th><th>Pillars</th></tr>";
+
+            seats.forEach(seatId => {
+                const entry = config.neighborMap[seatId];
+                const neighborCount = entry.neighbors?.length || 0;
+                const pillarCount = entry.pillars?.length || 0;
+                html += `<tr>
+                    <td style="color:#00ffcc;">${seatId}</td>
+                    <td>${neighborCount} within 2m</td>
+                    <td>${pillarCount}</td>
+                </tr>`;
+            });
+
+            if (Object.keys(config.neighborMap).length > 8) {
+                html += `<tr><td colspan="3">... and ${Object.keys(config.neighborMap).length - 8} more seats</td></tr>`;
+            }
+
+            html += "</table>";
+            document.getElementById('neighbor-view').innerHTML = html;
         }
 
         function updateTuningView(config) {
@@ -333,11 +372,11 @@ Operational SOP for Admin:
             </tr>`;
             html += "</table>";
 
-            // Show flute asset
-            if (config.assets?.flute) {
-                html += `<div style="margin-top:5px;"><span style="color:#00ffcc;">🎵 Flute:</span> <span class="asset-url" title="${config.assets.flute}">${config.assets.flute}</span></div>`;
+            // Show piccolo asset
+            if (config.assets?.piccolo) {
+                html += `<div style="margin-top:5px;"><span style="color:#00ffcc;">🎵 Piccolo:</span> <span class="asset-url" title="${config.assets.piccolo}">${config.assets.piccolo}</span></div>`;
             } else if (config.metadata?.source_audio_url) {
-                html += `<div style="margin-top:5px;"><span style="color:#00ffcc;">🎵 Flute:</span> <span class="asset-url" title="${config.metadata.source_audio_url}">${config.metadata.source_audio_url}</span></div>`;
+                html += `<div style="margin-top:5px;"><span style="color:#00ffcc;">🎵 Piccolo:</span> <span class="asset-url" title="${config.metadata.source_audio_url}">${config.metadata.source_audio_url}</span></div>`;
             }
 
             // Show test pulse if available
@@ -424,11 +463,13 @@ Operational SOP for Admin:
             const config = snap.val();
             if (!config || !config.seats) {
                 document.getElementById('seat-view').innerHTML = '<div style="color: #444; font-style: italic; font-size: 0.8rem;">No Seat Config Loaded</div>';
+                document.getElementById('neighbor-view').innerHTML = '<div style="color: #444; font-style: italic; font-size: 0.8rem;">No Neighbor Map Available</div>';
                 document.getElementById('seat-status').innerHTML = 'Not Loaded';
                 document.getElementById('seat-status').className = 'status-badge badge-missing';
                 return;
             }
             updateSeatView(config);
+            updateNeighborView(config);
             document.getElementById('seat-status').innerHTML = 'Loaded';
             document.getElementById('seat-status').className = 'status-badge badge-loaded';
         });
@@ -516,8 +557,73 @@ Operational SOP for Admin:
                     }
 
                     log(`Parsed ${seats.length} seats from TSV`);
-                    await db.ref('seat_config').set({ seats, uploadedAt: Date.now() });
-                    log("SUCCESS: Seat configuration uploaded.");
+
+                    // Compute neighbor map for distributed calibration
+                    log("🗺️ Computing neighbor map (2m radius)...");
+                    const neighborMap = {};
+
+                    // First, separate pillars from patron seats
+                    const pillars = seats.filter(s => s.id.startsWith('PILLAR_'));
+                    const patronSeats = seats.filter(s => !s.id.startsWith('PILLAR_'));
+
+                    // Determine section thresholds - use Y coordinate to separate orchestra from balcony
+                    // Assume orchestra is y < 15, balcony is y >= 15 (adjust based on actual theater)
+                    const ORCHESTRA_MAX_Y = 15;
+
+                    for (const seat of patronSeats) {
+                        // Find neighbors within 2m that are in the same section
+                        const neighbors = patronSeats
+                            .filter(other => {
+                                if (other.id === seat.id) return false; // Skip self
+
+                                // Check if same section (orchestra vs balcony)
+                                const sameSection = (seat.y < ORCHESTRA_MAX_Y && other.y < ORCHESTRA_MAX_Y) ||
+                                                   (seat.y >= ORCHESTRA_MAX_Y && other.y >= ORCHESTRA_MAX_Y);
+                                if (!sameSection) return false;
+
+                                const dx = seat.x - other.x;
+                                const dy = seat.y - other.y;
+                                const dist = Math.sqrt(dx*dx + dy*dy);
+                                return dist <= 2.0; // 2 meter radius
+                            })
+                            .map(s => s.id);
+
+                        // Get all pillar IDs (all 4 pillars always included)
+                        const pillarIds = pillars.map(p => p.id);
+
+                        neighborMap[seat.id] = {
+                            neighbors: neighbors,
+                            pillars: pillarIds
+                        };
+                    }
+
+                    // Also create entries for pillars (they may need to know their neighbors too)
+                    for (const pillar of pillars) {
+                        // Pillars can have patron neighbors (but not other pillars in neighbor list)
+                        const patronNeighbors = patronSeats
+                            .filter(patron => {
+                                const dx = pillar.x - patron.x;
+                                const dy = pillar.y - patron.y;
+                                const dist = Math.sqrt(dx*dx + dy*dy);
+                                return dist <= 2.0;
+                            })
+                            .map(s => s.id);
+
+                        neighborMap[pillar.id] = {
+                            neighbors: patronNeighbors, // Pillar's neighbors are patrons within 2m
+                            pillars: pillars.filter(p => p.id !== pillar.id).map(p => p.id) // Other pillars
+                        };
+                    }
+
+                    log(`✅ Generated neighbor map for ${Object.keys(neighborMap).length} seats`);
+                    log(`   Sample: ${patronSeats[0]?.id} has ${neighborMap[patronSeats[0]?.id]?.neighbors?.length || 0} neighbors`);
+
+                    await db.ref('seat_config').set({
+                        seats,
+                        neighborMap,
+                        uploadedAt: Date.now()
+                    });
+                    log("SUCCESS: Seat configuration with neighbor map uploaded.");
                 } catch (err) { log(`ERROR: ${err.message}`); }
             };
             reader.readAsText(file);
@@ -534,7 +640,7 @@ Operational SOP for Admin:
 
                     // Validate asset URLs if present
                     if (data.assets) {
-                        if (data.assets.flute) log(`📦 Flute asset: ${data.assets.flute.split('/').pop()}`);
+                        if (data.assets.piccolo) log(`📦 Piccolo asset: ${data.assets.piccolo.split('/').pop()}`);
                         if (data.assets.pillars) {
                             const pillarCount = Object.keys(data.assets.pillars).length;
                             log(`📦 ${pillarCount} pillar assets found`);
@@ -551,7 +657,7 @@ Operational SOP for Admin:
                         status: 'ACTIVE',
                         startTime: Date.now(),
                         generatedAt: Date.now(),
-                        fluteUrl: data.assets?.flute || data.metadata?.source_audio_url,
+                        piccoloUrl: data.assets?.piccolo || data.metadata?.source_audio_url,
                         pillars: data.assets?.pillars || {
                             FL: data.metadata?.source_audio_FL,
                             FR: data.metadata?.source_audio_FR,
@@ -634,7 +740,7 @@ Operational SOP for Admin:
 
         // --- WIPE REALTIME DATA ---
         async function wipeRealtimeData() {
-            if (confirm("Wipe all realtime data? This will clear:\n• Device registrations\n• Current tuning state\n• Current cues\n• Survey results\n\nPillar config, seat config, tuning mode, and show timeline will be preserved.")) {
+            if (confirm("Wipe all realtime data? This will clear:\n• Device registrations\n• Current tuning state\n• Current cues\n• Survey results\n• All measurements\n\nPillar config, seat config, tuning mode, and show timeline will be preserved.")) {
                 log("🧹 Wiping realtime data...");
 
                 const updates = {};
@@ -643,6 +749,8 @@ Operational SOP for Admin:
                 const realtimePaths = [
                     'devices',
                     'tuning/current',
+                    'tuning/last_heard', // Legacy, but clean it
+                    'measurements',
                     'show/currentCue',
                     'survey_results'
                 ];
