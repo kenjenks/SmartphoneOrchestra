@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zynth Device - Two Note Detector with Lookback (FIXED)</title>
+    <title>Zynth Device - Adaptive Delay Learning</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <style>
@@ -210,10 +210,19 @@
             font-size: 10px;
             color: #00ff00;
         }
+        .delay-stats {
+            display: flex;
+            justify-content: space-between;
+            margin: 10px 0;
+            padding: 10px;
+            background: #1a1a1a;
+            border-radius: 4px;
+            font-family: monospace;
+        }
     </style>
 </head>
 <body>
-    <h1>⏱️ Zynth Device - Two Note Detector with Lookback (FIXED)</h1>
+    <h1>⏱️ Zynth Device - Adaptive Delay Learning</h1>
 
     <div class="panel">
         <div style="display: flex; align-items: center; margin-bottom: 15px;">
@@ -234,6 +243,12 @@
         <div class="note-indicator">
             <div class="note-dot" id="note0Dot">G4</div>
             <div class="note-dot" id="note1Dot">A4</div>
+        </div>
+
+        <div class="delay-stats">
+            <div><span class="label">Est. Delay:</span> <span id="estimatedDelay" class="value">1800 ms</span></div>
+            <div><span class="label">Window:</span> <span id="adaptiveWindow" class="value">1000 ms</span></div>
+            <div><span class="label">Samples:</span> <span id="delaySamples" class="value">0</span></div>
         </div>
 
         <div class="debug-box" id="debugInfo">
@@ -267,26 +282,10 @@
 
             <div class="slider-group">
                 <div class="slider-label">
-                    <span>Window Before (ms)</span>
-                    <span id="beforeValue" class="param-value">4000 ms</span>
-                </div>
-                <input type="range" id="beforeSlider" min="2000" max="8000" value="4000" step="100">
-            </div>
-
-            <div class="slider-group">
-                <div class="slider-label">
-                    <span>Window After (ms)</span>
-                    <span id="afterValue" class="param-value">6000 ms</span>
-                </div>
-                <input type="range" id="afterSlider" min="3000" max="10000" value="6000" step="100">
-            </div>
-
-            <div class="slider-group">
-                <div class="slider-label">
                     <span>Baseline Samples (ms)</span>
-                    <span id="samplesValue" class="param-value">1000 ms</span>
+                    <span id="samplesValue" class="param-value">200 ms</span>
                 </div>
-                <input type="range" id="samplesSlider" min="200" max="2000" value="1000" step="50">
+                <input type="range" id="samplesSlider" min="50" max="500" value="200" step="10">
             </div>
 
             <div class="slider-group">
@@ -302,7 +301,7 @@
                 <button id="resetSensitivityBtn" style="background: #333; flex: 1;">Reset</button>
             </div>
             <div class="sensitivity-status" id="sensitivityStatus">
-                Current: 1.1x, 4000/6000ms, 1000ms samples, 500ms lookback
+                Current: 1.1x, 200ms samples, 500ms lookback
             </div>
         </div>
 
@@ -386,6 +385,7 @@
                     <div>🔍 Note: ${expectedNoteIndex}/2</div>
                     <div>🔍 Window: ${windowEntered}</div>
                     <div>🔍 History: ${spectrumHistory.length}</div>
+                    <div>🔍 Est Delay: ${Math.round(estimatedDelayMs)}ms</div>
                 `;
             }
         }
@@ -393,7 +393,45 @@
         function updateSensitivityStatus(saved = false) {
             const status = document.getElementById('sensitivityStatus');
             if (!status) return;
-            status.innerHTML = `Current: ${BASELINE_THRESHOLD_MULTIPLIER.toFixed(2)}x, ${WINDOW_BEFORE_MS}/${WINDOW_AFTER_MS}ms, ${BASELINE_SAMPLES_MS}ms samples, ${LOOKBACK_MS}ms lookback${saved ? ' (saved)' : ''}`;
+            status.innerHTML = `Current: ${BASELINE_THRESHOLD_MULTIPLIER.toFixed(2)}x, ${BASELINE_SAMPLES_MS}ms samples, ${LOOKBACK_MS}ms lookback${saved ? ' (saved)' : ''}`;
+        }
+
+        // ========== ADAPTIVE DELAY LEARNING ==========
+        let estimatedDelayMs = 1800; // Start with our known value
+        let delayMeasurements = []; // Store successful measurements
+        let adaptiveWindowMs = 1000; // Start with 1s window
+        let maxAdaptiveWindowMs = 3000; // Max window size
+        let consecutiveMisses = 0;
+
+        function updateEstimatedDelay(newDelay) {
+            // Store the measurement
+            delayMeasurements.push(newDelay);
+
+            // Keep last 15 measurements
+            if (delayMeasurements.length > 15) {
+                delayMeasurements.shift();
+            }
+
+            // Calculate new estimate as median of recent measurements
+            if (delayMeasurements.length >= 3) {
+                const sorted = [...delayMeasurements].sort((a, b) => a - b);
+                estimatedDelayMs = sorted[Math.floor(sorted.length / 2)];
+
+                // Update UI
+                document.getElementById('estimatedDelay').innerText = Math.round(estimatedDelayMs) + ' ms';
+                document.getElementById('delaySamples').innerText = delayMeasurements.length;
+
+                log(`📊 Adaptive delay updated: ${Math.round(estimatedDelayMs)}ms (from ${delayMeasurements.length} samples)`);
+
+                // Adjust window size based on consistency
+                const recent = delayMeasurements.slice(-5);
+                const range = Math.max(...recent) - Math.min(...recent);
+                adaptiveWindowMs = Math.min(maxAdaptiveWindowMs, 500 + range * 1.5);
+                document.getElementById('adaptiveWindow').innerText = Math.round(adaptiveWindowMs) + ' ms';
+                log(`   Adaptive window: ${Math.round(adaptiveWindowMs)}ms (based on ±${Math.round(range/2)}ms variation)`);
+            }
+
+            consecutiveMisses = 0; // Reset miss counter on successful detection
         }
 
         // ========== GLOBAL VARIABLES ==========
@@ -434,17 +472,16 @@
         let note0ActualTime = null;
         let note0ExpectedTime = null;
         let note1ActualTime = null;
-        let note1ExpectedTime = null;  // This must be let, not const
+        let note1ExpectedTime = null;
 
         // ========== SPECTRUM RECORDING ==========
-        const SPECTRUM_HISTORY_SECONDS = 15; // Keep 15 seconds of history
-        const SPECTRUM_SAMPLES_PER_SECOND = 10; // Sample at 10Hz
+        const SPECTRUM_HISTORY_SECONDS = 15;
+        const SPECTRUM_SAMPLES_PER_SECOND = 10;
         const MAX_HISTORY_SAMPLES = SPECTRUM_HISTORY_SECONDS * SPECTRUM_SAMPLES_PER_SECOND;
 
-        let spectrumHistory = []; // Array of {timestamp, energy, freq}
+        let spectrumHistory = [];
 
         function recordSpectrum(now, avgEnergy, dominantFreq) {
-            // Record every 100ms (10Hz)
             if (spectrumHistory.length === 0 || now - spectrumHistory[spectrumHistory.length-1].timestamp > 100) {
                 spectrumHistory.push({
                     timestamp: now,
@@ -452,7 +489,6 @@
                     freq: dominantFreq
                 });
 
-                // Keep only last 15 seconds
                 while (spectrumHistory.length > MAX_HISTORY_SAMPLES) {
                     spectrumHistory.shift();
                 }
@@ -462,7 +498,6 @@
         }
 
         function findNoteInHistory(expectedTime, expectedFreq, toleranceMs, freqTolerance = 20) {
-            // Search backwards through history for a matching energy spike
             const windowStart = expectedTime - toleranceMs;
             const windowEnd = expectedTime + toleranceMs;
 
@@ -472,11 +507,8 @@
             for (let i = spectrumHistory.length - 1; i >= 0; i--) {
                 const sample = spectrumHistory[i];
 
-                // Check if within time window
                 if (sample.timestamp >= windowStart && sample.timestamp <= windowEnd) {
-                    // Check if frequency matches expected
                     if (Math.abs(sample.freq - expectedFreq) < freqTolerance) {
-                        // Found a candidate
                         if (sample.energy > bestEnergy) {
                             bestEnergy = sample.energy;
                             bestMatch = sample;
@@ -490,13 +522,8 @@
 
         // ========== SENSITIVITY CONTROLS ==========
         let BASELINE_THRESHOLD_MULTIPLIER = 1.1;
-        let WINDOW_BEFORE_MS = 4000;
-        let WINDOW_AFTER_MS = 6000;
-        let BASELINE_SAMPLES_MS = 200; // Was 1000
+        let BASELINE_SAMPLES_MS = 200; // Faster baseline (was 1000)
         let LOOKBACK_MS = 500;
-
-        // Known total system delay from measurements (speaker + mic)
-        const KNOWN_TOTAL_DELAY_MS = 1800;
 
         // ========== FFT SETUP ==========
         const FFT_SIZE = 2048;
@@ -509,32 +536,22 @@
                 if (saved) {
                     const settings = JSON.parse(saved);
                     BASELINE_THRESHOLD_MULTIPLIER = settings.threshold || 1.1;
-                    WINDOW_BEFORE_MS = settings.before || 4000;
-                    WINDOW_AFTER_MS = settings.after || 6000;
-                    BASELINE_SAMPLES_MS = settings.samples || 1000;
+                    BASELINE_SAMPLES_MS = settings.samples || 200;
                     LOOKBACK_MS = settings.lookback || 500;
 
                     const thresholdSlider = document.getElementById('thresholdSlider');
-                    const beforeSlider = document.getElementById('beforeSlider');
-                    const afterSlider = document.getElementById('afterSlider');
                     const samplesSlider = document.getElementById('samplesSlider');
                     const historySlider = document.getElementById('historySlider');
 
                     if (thresholdSlider) thresholdSlider.value = BASELINE_THRESHOLD_MULTIPLIER;
-                    if (beforeSlider) beforeSlider.value = WINDOW_BEFORE_MS;
-                    if (afterSlider) afterSlider.value = WINDOW_AFTER_MS;
                     if (samplesSlider) samplesSlider.value = BASELINE_SAMPLES_MS;
                     if (historySlider) historySlider.value = LOOKBACK_MS;
 
                     const thresholdValue = document.getElementById('thresholdValue');
-                    const beforeValue = document.getElementById('beforeValue');
-                    const afterValue = document.getElementById('afterValue');
                     const samplesValue = document.getElementById('samplesValue');
                     const historyValue = document.getElementById('historyValue');
 
                     if (thresholdValue) thresholdValue.innerText = BASELINE_THRESHOLD_MULTIPLIER.toFixed(2) + 'x';
-                    if (beforeValue) beforeValue.innerText = WINDOW_BEFORE_MS + ' ms';
-                    if (afterValue) afterValue.innerText = WINDOW_AFTER_MS + ' ms';
                     if (samplesValue) samplesValue.innerText = BASELINE_SAMPLES_MS + ' ms';
                     if (historyValue) historyValue.innerText = LOOKBACK_MS + ' ms';
 
@@ -548,8 +565,6 @@
         function saveSensitivitySettings() {
             const settings = {
                 threshold: BASELINE_THRESHOLD_MULTIPLIER,
-                before: WINDOW_BEFORE_MS,
-                after: WINDOW_AFTER_MS,
                 samples: BASELINE_SAMPLES_MS,
                 lookback: LOOKBACK_MS
             };
@@ -559,7 +574,6 @@
         }
 
         // ========== FIREBASE LISTENERS ==========
-        // Connection status
         db.ref('.info/connected').on('value', snap => {
             const connected = snap.val();
             const statusEl = document.getElementById('firebaseStatus');
@@ -576,13 +590,11 @@
             }
         });
 
-        // Server time offset
         db.ref(".info/serverTimeOffset").on("value", snap => {
             serverOffset = snap.val() || 0;
             log(`⏱️ Server offset: ${serverOffset}ms`);
         });
 
-        // Listen for two-note test
         db.ref('zynth/two_note_test').on('value', snap => {
             const sequence = snap.val();
             const now = Date.now() + serverOffset;
@@ -602,25 +614,23 @@
                 detectedCount = 0;
                 isNoteActive = false;
                 windowEntered = false;
+                consecutiveMisses = 0;
 
-                // Reset note timing storage
                 note0ActualTime = null;
                 note0ExpectedTime = null;
                 note1ActualTime = null;
                 note1ExpectedTime = null;
 
-                // Clear history for new test
                 spectrumHistory = [];
 
                 if (expectedNotes) {
                     expectedNotes.forEach((note, i) => {
-                        // Calculate detection time with known delay
-                        const expectedDetectionTime = note.expectedPlayTime + KNOWN_TOTAL_DELAY_MS;
-                        const windowStart = expectedDetectionTime - WINDOW_BEFORE_MS;
-                        const windowEnd = expectedDetectionTime + WINDOW_AFTER_MS;
+                        const expectedDetectionTime = note.expectedPlayTime + estimatedDelayMs;
+                        const windowStart = expectedDetectionTime - adaptiveWindowMs/2;
+                        const windowEnd = expectedDetectionTime + adaptiveWindowMs/2;
                         log(`🎯 Note ${i} (${note.pitch}) at: ${new Date(note.expectedPlayTime).toLocaleTimeString()}.${String(note.expectedPlayTime % 1000).padStart(3, '0')}`);
-                        log(`   Detection expected at: ${new Date(expectedDetectionTime).toLocaleTimeString()}.${String(expectedDetectionTime % 1000).padStart(3, '0')} (+${KNOWN_TOTAL_DELAY_MS}ms delay)`);
-                        log(`   Window: ${new Date(windowStart).toLocaleTimeString()}.${String(windowStart % 1000).padStart(3, '0')} → ${new Date(windowEnd).toLocaleTimeString()}.${String(windowEnd % 1000).padStart(3, '0')}`);
+                        log(`   Detection expected at: ${new Date(expectedDetectionTime).toLocaleTimeString()}.${String(expectedDetectionTime % 1000).padStart(3, '0')} (+${Math.round(estimatedDelayMs)}ms est. delay)`);
+                        log(`   Adaptive window: ${new Date(windowStart).toLocaleTimeString()}.${String(windowStart % 1000).padStart(3, '0')} → ${new Date(windowEnd).toLocaleTimeString()}.${String(windowEnd % 1000).padStart(3, '0')}`);
                     });
                 }
 
@@ -643,7 +653,7 @@
                 const stream = await navigator.mediaDevices.getUserMedia({
                     audio: {
                         echoCancellation: false,
-                        noiseSuppression: true,  // Enable to reduce background noise
+                        noiseSuppression: true,
                         autoGainControl: false,
                         sampleRate: 44100
                     }
@@ -735,7 +745,6 @@
             const minBin = Math.floor(FLUTE_RANGE.min / nyquist * bufferLength);
             const maxBin = Math.ceil(FLUTE_RANGE.max / nyquist * bufferLength);
 
-            // Find dominant frequency
             let maxVal = 0;
             let maxIdx = minBin;
             for (let i = minBin; i < maxBin && i < bufferLength; i++) {
@@ -747,7 +756,6 @@
             const dominantFreq = (maxIdx / bufferLength) * nyquist;
             currentDominantFreq = dominantFreq;
 
-            // Calculate average energy in flute range
             let totalEnergy = 0;
             let binCount = 0;
             for (let i = minBin; i < maxBin && i < bufferLength; i++) {
@@ -758,7 +766,6 @@
 
             currentAvgEnergy = avgEnergy;
 
-            // Record spectrum for lookback
             recordSpectrum(now, avgEnergy, dominantFreq);
 
             const energyEl = document.getElementById('energyValue');
@@ -773,18 +780,14 @@
             let ratioToBaseline = baselineEnergy > 0 ? avgEnergy / baselineEnergy : 1.0;
             if (ratioEl) ratioEl.innerText = ratioToBaseline.toFixed(2);
 
-            // Detect notes
             if (sequenceActive && expectedNotes && expectedNoteIndex < expectedNotes.length && !isNoteActive) {
-                // FIX BUG 1: Define currentNote first!
                 const currentNote = expectedNotes[expectedNoteIndex];
                 const expectedPlayTime = currentNote.expectedPlayTime;
 
-                // Calculate when we actually expect to detect the note (with known system delay)
-                const expectedDetectionTime = expectedPlayTime + KNOWN_TOTAL_DELAY_MS;
-
-                // Tight window centered on expected detection time
-                const windowStart = expectedDetectionTime - 500; // 500ms before
-                const windowEnd = expectedDetectionTime + 500;   // 500ms after
+                // Use adaptive delay and window
+                const expectedDetectionTime = expectedPlayTime + estimatedDelayMs;
+                const windowStart = expectedDetectionTime - adaptiveWindowMs/2;
+                const windowEnd = expectedDetectionTime + adaptiveWindowMs/2;
 
                 if (now >= windowStart && now <= windowEnd) {
                     if (!windowEntered) {
@@ -795,12 +798,11 @@
                         const currentNoteEl = document.getElementById('currentNote');
                         if (currentNoteEl) currentNoteEl.innerText = currentNote.pitch;
                         log(`🔍 WINDOW ${expectedNoteIndex} at ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
-                        log(`   Window: ${new Date(windowStart).toLocaleTimeString()}.${String(windowStart % 1000).padStart(3, '0')} → ${new Date(windowEnd).toLocaleTimeString()}.${String(windowEnd % 1000).padStart(3, '0')}`);
-                        log(`   Expected detection: ${new Date(expectedDetectionTime).toLocaleTimeString()}.${String(expectedDetectionTime % 1000).padStart(3, '0')}`);
+                        log(`   Adaptive window: ${new Date(windowStart).toLocaleTimeString()}.${String(windowStart % 1000).padStart(3, '0')} → ${new Date(windowEnd).toLocaleTimeString()}.${String(windowEnd % 1000).padStart(3, '0')}`);
+                        log(`   Expected detection: ${new Date(expectedDetectionTime).toLocaleTimeString()}.${String(expectedDetectionTime % 1000).padStart(3, '0')} (${Math.round(estimatedDelayMs)}ms est. delay)`);
                     }
 
                     if (!baselineComplete) {
-                        log(`🕒 Baseline collection: ${now - baselineStartTime}ms elapsed, ${baselineSamples.length} samples`);
                         if (now - baselineStartTime < BASELINE_SAMPLES_MS) {
                             baselineSamples.push(avgEnergy);
                         } else {
@@ -827,18 +829,18 @@
                             lastNoteTime = now;
                             detectedCount++;
 
-                            // FIX BUG 2: Use expectedPlayTime, not expectedTime
                             const delay = now - expectedPlayTime;
 
+                            // Update adaptive delay with this measurement
+                            updateEstimatedDelay(delay);
+
                             if (expectedNoteIndex === 0) {
-                                // Store note 0 timing
                                 note0ActualTime = now;
                                 note0ExpectedTime = expectedPlayTime;
 
                                 log(`🔊 NOTE 0 DETECTED: G4 at ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
-                                log(`   Delay: ${delay}ms (from schedule + ${KNOWN_TOTAL_DELAY_MS}ms system delay)`);
+                                log(`   Delay: ${Math.round(delay)}ms (adaptive estimate now ${Math.round(estimatedDelayMs)}ms)`);
 
-                                // Send feedback for note 0
                                 db.ref('zynth/device_feedback').set({
                                     noteIndex: 0,
                                     pitch: 'G4',
@@ -848,32 +850,26 @@
                                     timestamp: now
                                 });
 
-                                // Calculate when note 1 should be heard based on note 0's actual timing
-                                const note1Offset = 696.6 - 301.9; // 394.7ms gap between note starts
-                                // FIX BUG 3: Don't use const - assign to outer let variable
+                                const note1Offset = 696.6 - 301.9;
                                 note1ExpectedTime = note0ActualTime + note1Offset;
 
                                 log(`📅 Note 1 expected at: ${new Date(note1ExpectedTime).toLocaleTimeString()}.${String(note1ExpectedTime % 1000).padStart(3, '0')}`);
-                                log(`   (from note 0 actual + ${note1Offset}ms gap + ${KNOWN_TOTAL_DELAY_MS}ms system delay)`);
+                                log(`   (from note 0 actual + ${note1Offset}ms gap + adaptive delay)`);
 
-                                // Set up window for note 1
                                 expectedNoteIndex = 1;
                                 windowEntered = false;
                                 baselineComplete = false;
                                 baselineSamples = [];
 
-                                // Update UI
                                 document.getElementById('currentNote').innerText = 'A4';
                                 document.getElementById('note0Dot').classList.add('active');
 
                             } else if (expectedNoteIndex === 1) {
-                                // Store note 1 timing
                                 note1ActualTime = now;
 
                                 log(`🔊 NOTE 1 DETECTED: A4 at ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
-                                log(`   Delay: ${delay}ms (from schedule + ${KNOWN_TOTAL_DELAY_MS}ms system delay)`);
+                                log(`   Delay: ${Math.round(delay)}ms`);
 
-                                // Send feedback for note 1
                                 db.ref('zynth/device_feedback').set({
                                     noteIndex: 1,
                                     pitch: 'A4',
@@ -885,22 +881,18 @@
 
                                 document.getElementById('note1Dot').classList.add('active');
 
-                                // Check if we missed note 0
                                 if (note0ActualTime === null && note0ExpectedTime !== null) {
                                     log('🔍 Note 0 was missed - checking history...');
 
-                                    // Look for note 0 in history
                                     const note0InHistory = findNoteInHistory(note0ExpectedTime, 392, LOOKBACK_MS);
 
                                     if (note0InHistory) {
                                         const historyDelay = note0InHistory.timestamp - note0ExpectedTime;
                                         log(`🔍 FOUND NOTE 0 IN HISTORY at ${new Date(note0InHistory.timestamp).toLocaleTimeString()}.${String(note0InHistory.timestamp % 1000).padStart(3, '0')}`);
-                                        log(`   Delay: ${historyDelay}ms, Energy: ${note0InHistory.energy.toFixed(4)}`);
+                                        log(`   Delay: ${Math.round(historyDelay)}ms, Energy: ${note0InHistory.energy.toFixed(4)}`);
 
-                                        // Mark note 0 dot as history
                                         document.getElementById('note0Dot').classList.add('history');
 
-                                        // Send combined feedback
                                         db.ref('zynth/device_feedback').set({
                                             note0: {
                                                 detected: true,
@@ -914,19 +906,23 @@
                                                 timestamp: now
                                             }
                                         });
+
+                                        // Also learn from history detection
+                                        updateEstimatedDelay(historyDelay);
                                     } else {
                                         log('❌ Could not find note 0 in history');
+                                        consecutiveMisses++;
                                     }
                                 }
 
-                                expectedNoteIndex = 2; // Complete
+                                expectedNoteIndex = 2;
                                 windowEntered = false;
                             }
 
                             const noteCountEl = document.getElementById('noteCount');
                             const lastDelayEl = document.getElementById('lastDelay');
                             if (noteCountEl) noteCountEl.innerText = `${detectedCount}/2`;
-                            if (lastDelayEl) lastDelayEl.innerText = delay + ' ms';
+                            if (lastDelayEl) lastDelayEl.innerText = Math.round(delay) + ' ms';
 
                             if (expectedNoteIndex >= 2) {
                                 log('✅ All notes detected');
@@ -937,7 +933,15 @@
                     }
                 } else if (windowEntered) {
                     windowEntered = false;
-                    log(`🚪 Window ${expectedNoteIndex} closed without detection`);
+                    consecutiveMisses++;
+                    log(`🚪 Window ${expectedNoteIndex} closed without detection (miss #${consecutiveMisses})`);
+
+                    // If we're missing consistently, widen the window
+                    if (consecutiveMisses >= 2) {
+                        adaptiveWindowMs = Math.min(maxAdaptiveWindowMs, adaptiveWindowMs * 1.5);
+                        document.getElementById('adaptiveWindow').innerText = Math.round(adaptiveWindowMs) + ' ms';
+                        log(`📊 Widening adaptive window to ${Math.round(adaptiveWindowMs)}ms due to consecutive misses`);
+                    }
                 }
             }
 
@@ -953,8 +957,6 @@
         // ========== SENSITIVITY CONTROLS EVENT LISTENERS ==========
         function setupSensitivityControls() {
             const thresholdSlider = document.getElementById('thresholdSlider');
-            const beforeSlider = document.getElementById('beforeSlider');
-            const afterSlider = document.getElementById('afterSlider');
             const samplesSlider = document.getElementById('samplesSlider');
             const historySlider = document.getElementById('historySlider');
             const applyBtn = document.getElementById('applySensitivityBtn');
@@ -965,22 +967,6 @@
                     BASELINE_THRESHOLD_MULTIPLIER = parseFloat(e.target.value);
                     const thresholdValue = document.getElementById('thresholdValue');
                     if (thresholdValue) thresholdValue.innerText = BASELINE_THRESHOLD_MULTIPLIER.toFixed(2) + 'x';
-                });
-            }
-
-            if (beforeSlider) {
-                beforeSlider.addEventListener('input', (e) => {
-                    WINDOW_BEFORE_MS = parseInt(e.target.value);
-                    const beforeValue = document.getElementById('beforeValue');
-                    if (beforeValue) beforeValue.innerText = WINDOW_BEFORE_MS + ' ms';
-                });
-            }
-
-            if (afterSlider) {
-                afterSlider.addEventListener('input', (e) => {
-                    WINDOW_AFTER_MS = parseInt(e.target.value);
-                    const afterValue = document.getElementById('afterValue');
-                    if (afterValue) afterValue.innerText = WINDOW_AFTER_MS + ' ms';
                 });
             }
 
@@ -1007,27 +993,19 @@
             if (resetBtn) {
                 resetBtn.addEventListener('click', () => {
                     BASELINE_THRESHOLD_MULTIPLIER = 1.1;
-                    WINDOW_BEFORE_MS = 4000;
-                    WINDOW_AFTER_MS = 6000;
-                    BASELINE_SAMPLES_MS = 1000;
+                    BASELINE_SAMPLES_MS = 200;
                     LOOKBACK_MS = 500;
 
                     if (thresholdSlider) thresholdSlider.value = 1.1;
-                    if (beforeSlider) beforeSlider.value = 4000;
-                    if (afterSlider) afterSlider.value = 6000;
-                    if (samplesSlider) samplesSlider.value = 1000;
+                    if (samplesSlider) samplesSlider.value = 200;
                     if (historySlider) historySlider.value = 500;
 
                     const thresholdValue = document.getElementById('thresholdValue');
-                    const beforeValue = document.getElementById('beforeValue');
-                    const afterValue = document.getElementById('afterValue');
                     const samplesValue = document.getElementById('samplesValue');
                     const historyValue = document.getElementById('historyValue');
 
                     if (thresholdValue) thresholdValue.innerText = '1.10x';
-                    if (beforeValue) beforeValue.innerText = '4000 ms';
-                    if (afterValue) afterValue.innerText = '6000 ms';
-                    if (samplesValue) samplesValue.innerText = '1000 ms';
+                    if (samplesValue) samplesValue.innerText = '200 ms';
                     if (historyValue) historyValue.innerText = '500 ms';
 
                     saveSensitivitySettings();
@@ -1037,8 +1015,8 @@
 
         // ========== INITIALIZATION ==========
         window.onload = () => {
-            log('⏱️ Zynth Device - Two Note Detector with Lookback (FIXED) ready');
-            log(`⚙️ Known system delay: ${KNOWN_TOTAL_DELAY_MS}ms`);
+            log('⏱️ Zynth Device - Adaptive Delay Learning ready');
+            log(`⚙️ Initial estimated delay: ${estimatedDelayMs}ms`);
 
             // Load saved settings
             loadSensitivitySettings();
@@ -1050,6 +1028,11 @@
             document.getElementById('enableBtn').onclick = enableMicrophone;
             document.getElementById('disableBtn').onclick = disableMicrophone;
             document.getElementById('copyLogBtn').onclick = copyLog;
+
+            // Initialize stats display
+            document.getElementById('estimatedDelay').innerText = estimatedDelayMs + ' ms';
+            document.getElementById('adaptiveWindow').innerText = adaptiveWindowMs + ' ms';
+            document.getElementById('delaySamples').innerText = delayMeasurements.length;
 
             // Start debug updates
             setInterval(() => {
