@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zynth Conductor - MP3 Primed</title>
+    <title>Zynth Conductor - Two Note Test</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <style>
@@ -24,16 +24,32 @@
             padding: 20px;
             margin: 20px 0;
         }
-        .note-display {
-            background: #1a1a1a;
-            border: 2px solid #00ccff;
-            border-radius: 12px;
-            padding: 30px;
-            font-size: 3rem;
-            text-align: center;
-            color: #00ccff;
+        .note-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
             margin: 20px 0;
-            font-family: monospace;
+        }
+        .note-card {
+            background: #1a1a1a;
+            border: 2px solid #333;
+            border-radius: 8px;
+            padding: 15px;
+            text-align: center;
+        }
+        .note-card.active {
+            border-color: #00ccff;
+            box-shadow: 0 0 20px #00ccff;
+        }
+        .note-pitch {
+            font-size: 2rem;
+            font-weight: bold;
+            color: #00ccff;
+        }
+        .note-details {
+            color: #888;
+            font-size: 0.9rem;
+            margin-top: 10px;
         }
         .jitter-control {
             background: #1a1a1a;
@@ -162,7 +178,7 @@
     </style>
 </head>
 <body>
-    <h1>🎵 Zynth Conductor - MP3 Primed</h1>
+    <h1>🎵 Zynth Conductor - Two Note Test</h1>
 
     <div class="panel">
         <div style="display: flex; align-items: center; margin-bottom: 15px;">
@@ -170,12 +186,21 @@
             <span id="connectionText">Connecting to Firebase...</span>
         </div>
 
-        <div class="note-display" id="noteDisplay">
-            G4
-        </div>
-
         <div class="audio-status" id="audioStatus">
             ⏳ Loading MP3 file...
+        </div>
+
+        <div class="note-grid">
+            <div class="note-card" id="note0Card">
+                <div class="note-pitch">G4</div>
+                <div class="note-details">392 Hz · 371.5 ms</div>
+                <div class="note-details">Offset: 301.9 ms</div>
+            </div>
+            <div class="note-card" id="note1Card">
+                <div class="note-pitch">A4</div>
+                <div class="note-details">440 Hz · 278.6 ms</div>
+                <div class="note-details">Offset: 696.6 ms</div>
+            </div>
         </div>
 
         <div class="jitter-control">
@@ -188,17 +213,17 @@
                 <input type="range" id="jitterSlider" min="0" max="500" value="200" step="10">
             </div>
             <p style="color: #888; font-size: 0.9rem;">
-                First note: G4 at 302ms into MP3, duration 372ms<br>
+                Two notes: G4 (302ms) then A4 (697ms)<br>
                 <span class="ready-status" id="readyStatus">⏳ Waiting for system ready...</span>
             </p>
         </div>
 
         <div class="delay-display">
-            <div class="delay-label">Last Measured Delay</div>
-            <div class="delay-value" id="lastDelay">---</div>
+            <div class="delay-label">Last Measured Delays</div>
+            <div class="delay-value" id="lastDelay">--- / ---</div>
         </div>
 
-        <button id="playBtn" disabled>🔊 PLAY SINGLE NOTE</button>
+        <button id="playBtn" disabled>🔊 PLAY TWO NOTES</button>
 
         <div class="status" id="status">
             Initializing...
@@ -233,18 +258,28 @@
         let isPlaying = false;
         let isPrimed = false;
 
-        // First note from tuning_mode.json
-        const firstNote = {
-            pitch: 'G4',
-            offset: 301.9,
-            duration: 371.5
-        };
+        // First two notes from tuning_mode.json
+        const notes = [
+            {
+                pitch: 'G4',
+                freq: 392,
+                offset: 301.9,
+                duration: 371.5
+            },
+            {
+                pitch: 'A4',
+                freq: 440,
+                offset: 696.6,
+                duration: 278.6
+            }
+        ];
 
         // MP3 URL - forte flute, no warbles
         const MP3_URL = "https://static.wixstatic.com/mp3/9178d1_90075dcab43749b7a644df60ca7acc58.mp3";
 
         // Jitter range
         let maxJitter = 200;
+        let lastDelays = ['---', '---'];
 
         // ========== HELPER FUNCTIONS ==========
         function log(message) {
@@ -271,6 +306,10 @@
             }
 
             selection.removeAllRanges();
+        }
+
+        function updateDelayDisplay() {
+            document.getElementById('lastDelay').innerText = lastDelays.join(' / ');
         }
 
         function checkReady() {
@@ -308,8 +347,9 @@
         db.ref('zynth/device_feedback').on('value', snap => {
             const feedback = snap.val();
             if (feedback && feedback.delay !== undefined) {
-                document.getElementById('lastDelay').innerText = feedback.delay + ' ms';
-                log(`📊 Received device feedback: delay = ${feedback.delay}ms`);
+                lastDelays[feedback.noteIndex] = feedback.delay + ' ms';
+                updateDelayDisplay();
+                log(`📊 Received device feedback: note ${feedback.noteIndex} delay = ${feedback.delay}ms`);
             }
         });
 
@@ -330,7 +370,6 @@
                 isAudioReady = true;
                 log('✅ MP3 loaded successfully');
 
-                // Prime the hardware using the actual MP3
                 await primeAudioHardware();
 
             } catch (err) {
@@ -340,7 +379,6 @@
             }
         }
 
-        // ========== PROPER MP3-BASED HARDWARE PRIMING ==========
         async function primeAudioHardware() {
             if (!audioCtx || !audioBuffer) {
                 log('⚠️ Cannot prime - audio not ready');
@@ -349,25 +387,18 @@
 
             log('🔊 Priming audio hardware with silent MP3 playback...');
 
-            // Create a silent gain node
             const silentGain = audioCtx.createGain();
-            silentGain.gain.value = 0; // Complete silence
+            silentGain.gain.value = 0;
 
-            // Create a source that uses the actual MP3 buffer
             const primeSource = audioCtx.createBufferSource();
             primeSource.buffer = audioBuffer;
-
-            // Connect through silent gain
             primeSource.connect(silentGain).connect(audioCtx.destination);
 
-            // Play a tiny silent segment to wake up the hardware
-            // This uses the same code path as real playback
             const primeStartTime = audioCtx.currentTime + 0.1;
-            primeSource.start(primeStartTime, 0, 0.1); // 100ms silent segment
+            primeSource.start(primeStartTime, 0, 0.1);
 
             log('⏱️ Prime scheduled at audio time: ' + primeStartTime.toFixed(3) + 's');
 
-            // Wait for priming to complete
             await new Promise(resolve => setTimeout(resolve, 300));
 
             isPrimed = true;
@@ -382,7 +413,7 @@
         });
 
         // ========== PLAYBACK FUNCTION ==========
-        async function playNote() {
+        async function playNotes() {
             if (isPlaying) {
                 log('⚠️ Already playing');
                 return;
@@ -395,99 +426,145 @@
 
             isPlaying = true;
             document.getElementById('playBtn').disabled = true;
+            lastDelays = ['---', '---'];
+            updateDelayDisplay();
 
-            const jitter = Math.floor(Math.random() * (maxJitter * 2 + 1)) - maxJitter;
+            // Generate random jitter for each note
+            const jitter0 = Math.floor(Math.random() * (maxJitter * 2 + 1)) - maxJitter;
+            const jitter1 = Math.floor(Math.random() * (maxJitter * 2 + 1)) - maxJitter;
+
             const now = Date.now() + serverOffset;
             const bufferMs = 1500;
             const scheduledWallTime = now + bufferMs;
-            const notePlayTime = scheduledWallTime + jitter;
 
-            log('🎬 ===== STARTING NEW TEST =====');
-            log(`🕐 Current Firebase time (now): ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
-            log(`📅 Sequence scheduled start: ${new Date(scheduledWallTime).toLocaleTimeString()}.${String(scheduledWallTime % 1000).padStart(3, '0')} (in ${bufferMs/1000}s)`);
-            log(`🎲 Jitter: ${jitter > 0 ? '+' : ''}${jitter}ms`);
-            log(`🎯 Note scheduled at: ${new Date(notePlayTime).toLocaleTimeString()}.${String(notePlayTime % 1000).padStart(3, '0')}`);
-            log(`   (MP3 seek position: ${firstNote.offset}ms, duration: ${firstNote.duration}ms)`);
+            // Calculate play times for both notes
+            const note0PlayTime = scheduledWallTime + notes[0].offset + jitter0;
+            const note1PlayTime = scheduledWallTime + notes[1].offset + jitter1;
 
-            const serverTimeRef = db.ref('.info/serverTimeOffset');
-            serverTimeRef.once('value').then(async (snap) => {
-                const offset = snap.val() || 0;
-                const serverNow = Date.now() + offset;
+            log('🎬 ===== STARTING TWO-NOTE TEST =====');
+            log(`🕐 Current Firebase time: ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
+            log(`📅 Sequence start: ${new Date(scheduledWallTime).toLocaleTimeString()}.${String(scheduledWallTime % 1000).padStart(3, '0')}`);
+            log(`🎲 Note 0 jitter: ${jitter0 > 0 ? '+' : ''}${jitter0}ms`);
+            log(`🎯 Note 0 (G4) at: ${new Date(note0PlayTime).toLocaleTimeString()}.${String(note0PlayTime % 1000).padStart(3, '0')}`);
+            log(`🎲 Note 1 jitter: ${jitter1 > 0 ? '+' : ''}${jitter1}ms`);
+            log(`🎯 Note 1 (A4) at: ${new Date(note1PlayTime).toLocaleTimeString()}.${String(note1PlayTime % 1000).padStart(3, '0')}`);
+            log(`📊 Gap between notes: ${(note1PlayTime - note0PlayTime).toFixed(0)}ms`);
 
-                await db.ref('zynth/single_note_test').set({
-                    status: 'ACTIVE',
-                    serverTimestamp: firebase.database.ServerValue.TIMESTAMP,
-                    conductorServerTime: serverNow,
-                    scheduledWallTime: scheduledWallTime,
-                    note: {
+            // Send GO signal to Firebase
+            await db.ref('zynth/two_note_test').set({
+                status: 'ACTIVE',
+                serverTimestamp: firebase.database.ServerValue.TIMESTAMP,
+                scheduledWallTime: scheduledWallTime,
+                notes: [
+                    {
                         index: 0,
-                        pitch: firstNote.pitch,
-                        offset: firstNote.offset,
-                        duration: firstNote.duration,
-                        jitter: jitter
+                        pitch: notes[0].pitch,
+                        freq: notes[0].freq,
+                        offset: notes[0].offset,
+                        duration: notes[0].duration,
+                        jitter: jitter0,
+                        expectedPlayTime: note0PlayTime
+                    },
+                    {
+                        index: 1,
+                        pitch: notes[1].pitch,
+                        freq: notes[1].freq,
+                        offset: notes[1].offset,
+                        duration: notes[1].duration,
+                        jitter: jitter1,
+                        expectedPlayTime: note1PlayTime
                     }
-                });
-
-                log(`📤 GO signal sent to Firebase at server time: ${new Date(serverNow).toLocaleTimeString()}.${String(serverNow % 1000).padStart(3, '0')}`);
+                ]
             });
+
+            log(`📤 GO signal sent to Firebase`);
 
             if (audioCtx.state === 'suspended') {
                 await audioCtx.resume();
             }
 
             const nowAudio = audioCtx.currentTime;
-            const timeUntilStart = (notePlayTime - (Date.now() + serverOffset)) / 1000;
 
-            if (timeUntilStart < 0) {
-                log(`❌ ERROR: Missed playback window by ${(-timeUntilStart * 1000).toFixed(0)}ms`);
+            // Schedule both notes
+            const source0 = audioCtx.createBufferSource();
+            source0.buffer = audioBuffer;
+            source0.connect(audioCtx.destination);
+
+            const source1 = audioCtx.createBufferSource();
+            source1.buffer = audioBuffer;
+            source1.connect(audioCtx.destination);
+
+            // Calculate audio times
+            const timeUntil0 = (note0PlayTime - (Date.now() + serverOffset)) / 1000;
+            const timeUntil1 = (note1PlayTime - (Date.now() + serverOffset)) / 1000;
+
+            if (timeUntil0 < 0 || timeUntil1 < 0) {
+                log(`❌ ERROR: Missed playback window`);
                 isPlaying = false;
                 document.getElementById('playBtn').disabled = false;
                 return;
             }
 
-            const scheduledAudioTime = nowAudio + timeUntilStart;
+            const scheduledAudio0 = nowAudio + timeUntil0;
+            const scheduledAudio1 = nowAudio + timeUntil1;
 
-            log(`⏱️ Audio context now: ${nowAudio.toFixed(3)}s`);
-            log(`⏱️ Scheduled audio time: ${scheduledAudioTime.toFixed(3)}s`);
-            log(`⏱️ Delay until start: ${(timeUntilStart * 1000).toFixed(0)}ms`);
+            log(`⏱️ Note 0 scheduled at audio time: ${scheduledAudio0.toFixed(3)}s`);
+            log(`⏱️ Note 1 scheduled at audio time: ${scheduledAudio1.toFixed(3)}s`);
 
-            const source = audioCtx.createBufferSource();
-            source.buffer = audioBuffer;
-            source.connect(audioCtx.destination);
-            source.start(scheduledAudioTime, firstNote.offset / 1000, firstNote.duration / 1000);
+            // Start both notes
+            source0.start(scheduledAudio0, notes[0].offset / 1000, notes[0].duration / 1000);
+            source1.start(scheduledAudio1, notes[1].offset / 1000, notes[1].duration / 1000);
 
-            source.onended = () => {
+            // Highlight active notes
+            setTimeout(() => {
+                document.getElementById('note0Card').classList.add('active');
+            }, timeUntil0 * 1000);
+
+            setTimeout(() => {
+                document.getElementById('note1Card').classList.add('active');
+            }, timeUntil1 * 1000);
+
+            let endedCount = 0;
+
+            source0.onended = () => {
+                document.getElementById('note0Card').classList.remove('active');
+                endedCount++;
+                log(`✅ Note 0 ended`);
+                if (endedCount === 2) {
+                    finishTest();
+                }
+            };
+
+            source1.onended = () => {
+                document.getElementById('note1Card').classList.remove('active');
+                endedCount++;
+                log(`✅ Note 1 ended`);
+                if (endedCount === 2) {
+                    finishTest();
+                }
+            };
+
+            function finishTest() {
                 const endTime = Date.now() + serverOffset;
-                const actualDuration = endTime - notePlayTime;
-
-                log(`✅ Note ended at ${new Date(endTime).toLocaleTimeString()}.${String(endTime % 1000).padStart(3, '0')} (server time)`);
-                log(`   Expected start was: ${new Date(notePlayTime).toLocaleTimeString()}.${String(notePlayTime % 1000).padStart(3, '0')}`);
-                log(`   Actual duration: ${actualDuration}ms (expected: ${firstNote.duration}ms)`);
-                log(`   Duration error: ${actualDuration - firstNote.duration}ms`);
-
+                log(`✅ Two-note test complete at ${new Date(endTime).toLocaleTimeString()}`);
                 isPlaying = false;
                 document.getElementById('playBtn').disabled = false;
 
                 setTimeout(() => {
-                    db.ref('zynth/single_note_test').remove();
+                    db.ref('zynth/two_note_test').remove();
                     log('🧹 Test cleared from Firebase');
                 }, 2000);
-            };
-
-            setTimeout(() => {
-                const startTime = Date.now() + serverOffset;
-                log(`🔊 Note estimated start: ${new Date(startTime).toLocaleTimeString()}.${String(startTime % 1000).padStart(3, '0')} (server time)`);
-            }, timeUntilStart * 1000);
+            }
         }
 
         // ========== INITIALIZATION ==========
         window.onload = () => {
-            document.getElementById('playBtn').onclick = playNote;
+            document.getElementById('playBtn').onclick = playNotes;
             document.getElementById('copyLogBtn').onclick = copyLog;
             loadMP3();
 
-            log('🎵 Zynth Conductor - MP3 Primed ready');
-            log('🎯 First note: G4 at 302ms offset');
+            log('🎵 Zynth Conductor - Two Note Test ready');
+            log('🎯 Two notes: G4 at 302ms, A4 at 697ms');
             log('⏳ Waiting for server offset, MP3 load, and hardware prime...');
         };
     </script>

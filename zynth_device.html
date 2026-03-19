@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zynth Device - Complete Debug</title>
+    <title>Zynth Device - Two Note Detector</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <style>
@@ -23,6 +23,37 @@
             border-radius: 8px;
             padding: 20px;
             margin: 20px 0;
+        }
+        .note-indicator {
+            display: flex;
+            gap: 20px;
+            margin: 20px 0;
+            justify-content: center;
+        }
+        .note-dot {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            background: #333;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 1.2rem;
+            transition: all 0.1s;
+        }
+        .note-dot.active {
+            background: #00ccff;
+            color: #000;
+            box-shadow: 0 0 30px #00ccff;
+        }
+        .note-dot.playing {
+            animation: pulse 0.5s infinite;
+        }
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+            100% { transform: scale(1); }
         }
         .status-row {
             display: flex;
@@ -177,7 +208,7 @@
     </style>
 </head>
 <body>
-    <h1>⏱️ Zynth Device - Complete Debug</h1>
+    <h1>⏱️ Zynth Device - Two Note Detector</h1>
 
     <div class="panel">
         <div style="display: flex; align-items: center; margin-bottom: 15px;">
@@ -193,6 +224,11 @@
         <div class="button-row">
             <button id="enableBtn">🎤 Enable Mic</button>
             <button id="disableBtn" class="danger">⏹️ Disable</button>
+        </div>
+
+        <div class="note-indicator">
+            <div class="note-dot" id="note0Dot">G4</div>
+            <div class="note-dot" id="note1Dot">A4</div>
         </div>
 
         <div class="debug-box" id="debugInfo">
@@ -222,7 +258,6 @@
                     <span id="thresholdValue" class="param-value">1.1x</span>
                 </div>
                 <input type="range" id="thresholdSlider" min="1.05" max="2.0" value="1.1" step="0.05">
-                <p style="color: #888; font-size: 0.8rem; margin-top: 5px;">Trigger when energy exceeds baseline × this value</p>
             </div>
 
             <div class="slider-group">
@@ -230,8 +265,7 @@
                     <span>Window Before (ms)</span>
                     <span id="beforeValue" class="param-value">4000 ms</span>
                 </div>
-                <input type="range" id="beforeSlider" min="2000" max="6000" value="4000" step="100">
-                <p style="color: #888; font-size: 0.8rem;">Start listening this many ms before expected time</p>
+                <input type="range" id="beforeSlider" min="2000" max="8000" value="4000" step="100">
             </div>
 
             <div class="slider-group">
@@ -240,7 +274,6 @@
                     <span id="afterValue" class="param-value">6000 ms</span>
                 </div>
                 <input type="range" id="afterSlider" min="3000" max="10000" value="6000" step="100">
-                <p style="color: #888; font-size: 0.8rem;">Keep listening this many ms after expected time</p>
             </div>
 
             <div class="slider-group">
@@ -249,7 +282,6 @@
                     <span id="samplesValue" class="param-value">1000 ms</span>
                 </div>
                 <input type="range" id="samplesSlider" min="200" max="2000" value="1000" step="50">
-                <p style="color: #888; font-size: 0.8rem;">Duration to measure ambient noise after window opens</p>
             </div>
 
             <div style="display: flex; gap: 10px; margin-top: 15px;">
@@ -262,12 +294,12 @@
         </div>
 
         <div class="status-row">
-            <span class="label">Last onset:</span>
-            <span class="value" id="lastOnset">---</span>
+            <span class="label">Current note:</span>
+            <span class="value" id="currentNote">---</span>
         </div>
         <div class="status-row">
             <span class="label">Detected notes:</span>
-            <span class="value" id="noteCount">0</span>
+            <span class="value" id="noteCount">0/2</span>
         </div>
         <div class="status-row">
             <span class="label">Last delay:</span>
@@ -307,12 +339,12 @@
         let windowEntered = false;
         let lastHeartbeat = 0;
         let lastFrameTime = 0;
-        let debugCounter = 0;
 
         // Test sequence state
         let sequenceActive = false;
         let sequenceStartWallTime = 0;
-        let expectedNote = null;
+        let expectedNotes = null;
+        let expectedNoteIndex = 0;
         let detectedCount = 0;
 
         // Note tracking state
@@ -328,13 +360,12 @@
         let baselineStartTime = 0;
 
         // ========== SENSITIVITY CONTROLS ==========
-        // Very sensitive defaults to catch the note
-        let BASELINE_THRESHOLD_MULTIPLIER = 1.1;  // Only 10% above baseline
-        let WINDOW_BEFORE_MS = 4000;               // 4 seconds before
-        let WINDOW_AFTER_MS = 6000;                 // 6 seconds after
-        let BASELINE_SAMPLES_MS = 1000;              // 1 second baseline
+        let BASELINE_THRESHOLD_MULTIPLIER = 1.1;
+        let WINDOW_BEFORE_MS = 4000;
+        let WINDOW_AFTER_MS = 6000;
+        let BASELINE_SAMPLES_MS = 1000;
 
-        // Load saved settings from localStorage
+        // Load saved settings
         function loadSensitivitySettings() {
             try {
                 const saved = localStorage.getItem('zynth_sensitivity');
@@ -345,25 +376,20 @@
                     WINDOW_AFTER_MS = settings.after || 6000;
                     BASELINE_SAMPLES_MS = settings.samples || 1000;
 
-                    // Update sliders
                     document.getElementById('thresholdSlider').value = BASELINE_THRESHOLD_MULTIPLIER;
                     document.getElementById('beforeSlider').value = WINDOW_BEFORE_MS;
                     document.getElementById('afterSlider').value = WINDOW_AFTER_MS;
                     document.getElementById('samplesSlider').value = BASELINE_SAMPLES_MS;
 
-                    // Update displays
                     document.getElementById('thresholdValue').innerText = BASELINE_THRESHOLD_MULTIPLIER.toFixed(2) + 'x';
                     document.getElementById('beforeValue').innerText = WINDOW_BEFORE_MS + ' ms';
                     document.getElementById('afterValue').innerText = WINDOW_AFTER_MS + ' ms';
                     document.getElementById('samplesValue').innerText = BASELINE_SAMPLES_MS + ' ms';
-                    document.getElementById('sensitivityStatus').innerHTML = `Current: ${BASELINE_THRESHOLD_MULTIPLIER.toFixed(2)}x, ${WINDOW_BEFORE_MS}/${WINDOW_AFTER_MS}ms, ${BASELINE_SAMPLES_MS}ms samples`;
+                    updateSensitivityStatus();
                 }
-            } catch (e) {
-                console.log('No saved settings');
-            }
+            } catch (e) {}
         }
 
-        // Save settings to localStorage
         function saveSensitivitySettings() {
             const settings = {
                 threshold: BASELINE_THRESHOLD_MULTIPLIER,
@@ -372,23 +398,25 @@
                 samples: BASELINE_SAMPLES_MS
             };
             localStorage.setItem('zynth_sensitivity', JSON.stringify(settings));
-            document.getElementById('sensitivityStatus').innerHTML = `Current: ${BASELINE_THRESHOLD_MULTIPLIER.toFixed(2)}x, ${WINDOW_BEFORE_MS}/${WINDOW_AFTER_MS}ms, ${BASELINE_SAMPLES_MS}ms samples (saved)`;
-            updateDebugInfo(`⚙️ Sensitivity updated`);
+            updateSensitivityStatus('saved');
         }
 
-        // Update debug info
+        function updateSensitivityStatus(saved = false) {
+            const status = document.getElementById('sensitivityStatus');
+            status.innerHTML = `Current: ${BASELINE_THRESHOLD_MULTIPLIER.toFixed(2)}x, ${WINDOW_BEFORE_MS}/${WINDOW_AFTER_MS}ms, ${BASELINE_SAMPLES_MS}ms samples${saved ? ' (saved)' : ''}`;
+        }
+
         function updateDebugInfo(message) {
             const debugDiv = document.getElementById('debugInfo');
             if (message) {
                 debugDiv.innerHTML = `🔍 ${message}<br>` + debugDiv.innerHTML;
             } else {
                 debugDiv.innerHTML = `
-                    <div>🔍 Audio Context: ${audioCtx?.state || 'null'}</div>
+                    <div>🔍 Audio: ${audioCtx?.state || 'null'}</div>
                     <div>🔍 Listening: ${isListening}</div>
-                    <div>🔍 Sequence Active: ${sequenceActive}</div>
-                    <div>🔍 Window Entered: ${windowEntered}</div>
-                    <div>🔍 Note Active: ${isNoteActive}</div>
-                    <div>🔍 Detected: ${detectedCount}</div>
+                    <div>🔍 Sequence: ${sequenceActive}</div>
+                    <div>🔍 Note: ${expectedNoteIndex}/2</div>
+                    <div>🔍 Window: ${windowEntered}</div>
                 `;
             }
         }
@@ -403,7 +431,6 @@
                 statusEl.className = 'firebase-status connected';
                 textEl.innerText = 'Firebase Connected';
                 log('🔌 Firebase connected');
-                updateDebugInfo('Firebase connected');
             } else {
                 statusEl.className = 'firebase-status disconnected';
                 textEl.innerText = 'Firebase Disconnected';
@@ -414,57 +441,42 @@
         db.ref(".info/serverTimeOffset").on("value", snap => {
             serverOffset = snap.val() || 0;
             log(`⏱️ Server offset: ${serverOffset}ms`);
-            updateDebugInfo(`Server offset: ${serverOffset}ms`);
         });
 
-        db.ref('zynth/single_note_test').on('value', snap => {
+        // Listen for two-note test
+        db.ref('zynth/two_note_test').on('value', snap => {
             const sequence = snap.val();
             const now = Date.now() + serverOffset;
 
             log(`🔥 Firebase update received: ${sequence ? 'ACTIVE' : 'CLEARED'}`);
-            updateDebugInfo(`Firebase update: ${sequence ? 'ACTIVE' : 'CLEARED'}`);
 
             if (sequence && sequence.status === 'ACTIVE') {
                 const startTime = sequence.scheduledWallTime;
-                const expectedPlayTime = startTime + sequence.note.jitter;
 
-                const timeUntilStart = (startTime - now) / 1000;
-                const timeUntilNote = (expectedPlayTime - now) / 1000;
-                const windowStart = expectedPlayTime - WINDOW_BEFORE_MS;
-                const windowEnd = expectedPlayTime + WINDOW_AFTER_MS;
+                log(`🕐 Device current: ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
+                log(`🕐 Sequence start: ${new Date(startTime).toLocaleTimeString()}.${String(startTime % 1000).padStart(3, '0')}`);
 
-                log(`🕐 Device current time: ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
-                log(`🕐 Sequence scheduled: ${new Date(startTime).toLocaleTimeString()}.${String(startTime % 1000).padStart(3, '0')}`);
-                log(`🕐 Time until start: ${timeUntilStart.toFixed(1)}s`);
-                log(`🎯 Expected play time: ${new Date(expectedPlayTime).toLocaleTimeString()}.${String(expectedPlayTime % 1000).padStart(3, '0')}`);
-                log(`   Time until note: ${timeUntilNote.toFixed(1)}s`);
-                log(`   Window: ${new Date(windowStart).toLocaleTimeString()}.${String(windowStart % 1000).padStart(3, '0')} → ${new Date(windowEnd).toLocaleTimeString()}.${String(windowEnd % 1000).padStart(3, '0')}`);
-                log(`   (MP3 seek position: ${sequence.note.offset}ms)`);
-
-                if (expectedPlayTime < now) {
-                    log(`⚠️ WARNING: Expected play time is ${(now - expectedPlayTime).toFixed(0)}ms in the past!`);
-                }
-
-                // Set sequence state
                 sequenceActive = true;
                 sequenceStartWallTime = startTime;
-                expectedNote = {
-                    ...sequence.note,
-                    expectedPlayTime: expectedPlayTime
-                };
+                expectedNotes = sequence.notes;
+                expectedNoteIndex = 0;
                 detectedCount = 0;
                 isNoteActive = false;
                 windowEntered = false;
-                baselineEnergy = 0;
-                baselineSamples = [];
-                baselineComplete = false;
 
-                log(`✅ Sequence ACTIVE - ready to detect`);
-                updateDebugInfo(`Sequence ACTIVE, expected at ${new Date(expectedPlayTime).toLocaleTimeString()}.${String(expectedPlayTime % 1000).padStart(3, '0')}`);
+                expectedNotes.forEach((note, i) => {
+                    const windowStart = note.expectedPlayTime - WINDOW_BEFORE_MS;
+                    const windowEnd = note.expectedPlayTime + WINDOW_AFTER_MS;
+                    log(`🎯 Note ${i} (${note.pitch}) at: ${new Date(note.expectedPlayTime).toLocaleTimeString()}.${String(note.expectedPlayTime % 1000).padStart(3, '0')}`);
+                    log(`   Window: ${new Date(windowStart).toLocaleTimeString()}.${String(windowStart % 1000).padStart(3, '0')} → ${new Date(windowEnd).toLocaleTimeString()}.${String(windowEnd % 1000).padStart(3, '0')}`);
+                });
+
+                log(`✅ Sequence ACTIVE - listening for 2 notes`);
+                updateDebugInfo(`Sequence active, waiting for note 0`);
 
             } else if (!sequence) {
                 sequenceActive = false;
-                expectedNote = null;
+                expectedNotes = null;
                 log('⏹️ Sequence ended');
                 updateDebugInfo('Sequence ended');
             }
@@ -474,7 +486,6 @@
         async function enableMicrophone() {
             try {
                 log('🎤 Requesting microphone...');
-                updateDebugInfo('Requesting mic permission...');
 
                 const stream = await navigator.mediaDevices.getUserMedia({
                     audio: {
@@ -499,8 +510,7 @@
 
                 isListening = true;
                 document.getElementById('status').innerText = 'Listening';
-                log('✅ Mic enabled - waiting for single note test');
-                updateDebugInfo('Mic enabled, listening...');
+                log('✅ Mic enabled - waiting for two-note test');
 
                 if (ambientLogInterval) clearInterval(ambientLogInterval);
                 ambientLogInterval = setInterval(() => {
@@ -517,7 +527,6 @@
 
             } catch (err) {
                 log(`❌ Mic error: ${err.message}`);
-                updateDebugInfo(`Mic error: ${err.message}`);
             }
         }
 
@@ -538,7 +547,6 @@
             }
             document.getElementById('status').innerText = 'Ready';
             log('⏹️ Stopped');
-            updateDebugInfo('Mic disabled');
         }
 
         function copyLog() {
@@ -555,7 +563,6 @@
             } catch (err) {
                 console.error('Copy failed:', err);
             }
-
             selection.removeAllRanges();
         }
 
@@ -565,21 +572,19 @@
 
         // ========== NOTE DETECTION ==========
         function detectNote() {
-            // Performance monitoring
             const loopStart = performance.now();
             if (lastFrameTime) {
                 const frameGap = loopStart - lastFrameTime;
                 if (frameGap > 100) {
-                    console.warn(`⚠️ Slow detection loop: ${frameGap.toFixed(0)}ms between frames`);
+                    console.warn(`⚠️ Slow loop: ${frameGap.toFixed(0)}ms`);
                 }
             }
             lastFrameTime = loopStart;
 
-            // Heartbeat - log every 5 seconds to prove loop is running
             if (Math.floor(Date.now()/5000) !== Math.floor(lastHeartbeat/5000)) {
                 lastHeartbeat = Date.now();
-                log(`💓 Detection loop running (active: ${sequenceActive}, window: ${windowEntered})`);
-                updateDebugInfo(`Loop running, seq: ${sequenceActive}`);
+                log(`💓 Loop running (active: ${sequenceActive}, note: ${expectedNoteIndex}/2)`);
+                updateDebugInfo();
             }
 
             if (!isListening || !analyser) {
@@ -615,19 +620,12 @@
             let ratioToBaseline = baselineEnergy > 0 ? avgEnergy / baselineEnergy : 1.0;
             document.getElementById('energyRatio').innerText = ratioToBaseline.toFixed(2);
 
-            if (sequenceActive && expectedNote && !isNoteActive) {
-                const expectedTime = expectedNote.expectedPlayTime;
+            // Detect notes
+            if (sequenceActive && expectedNotes && expectedNoteIndex < expectedNotes.length && !isNoteActive) {
+                const currentNote = expectedNotes[expectedNoteIndex];
+                const expectedTime = currentNote.expectedPlayTime;
                 const windowStart = expectedTime - WINDOW_BEFORE_MS;
                 const windowEnd = expectedTime + WINDOW_AFTER_MS;
-
-                // Log window status occasionally
-                if (Math.floor(now/2000) !== Math.floor(lastLogTime/2000)) {
-                    if (now < windowStart) {
-                        log(`⏳ Waiting for window (opens in ${((windowStart - now)/1000).toFixed(1)}s)`);
-                    } else if (now > windowEnd) {
-                        log(`⌛ Window closed ${((now - windowEnd)/1000).toFixed(1)}s ago`);
-                    }
-                }
 
                 if (now >= windowStart && now <= windowEnd) {
                     if (!windowEntered) {
@@ -635,11 +633,9 @@
                         baselineStartTime = now;
                         baselineSamples = [];
                         baselineComplete = false;
-                        log(`🔍 ENTERED WINDOW at ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
+                        document.getElementById('currentNote').innerText = currentNote.pitch;
+                        log(`🔍 WINDOW ${expectedNoteIndex} at ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
                         log(`   Window: ${new Date(windowStart).toLocaleTimeString()}.${String(windowStart % 1000).padStart(3, '0')} → ${new Date(windowEnd).toLocaleTimeString()}.${String(windowEnd % 1000).padStart(3, '0')}`);
-                        log(`   Expected: ${new Date(expectedTime).toLocaleTimeString()}.${String(expectedTime % 1000).padStart(3, '0')}`);
-                        log(`   Starting baseline measurement...`);
-                        updateDebugInfo(`ENTERED WINDOW at ${new Date(now).toLocaleTimeString()}`);
                     }
 
                     if (!baselineComplete) {
@@ -650,22 +646,20 @@
                                 baselineSamples.sort((a, b) => a - b);
                                 baselineEnergy = baselineSamples[Math.floor(baselineSamples.length / 2)];
                                 baselineComplete = true;
-                                log(`📊 Baseline established: ${baselineEnergy.toFixed(4)} (${baselineSamples.length} samples)`);
-                                updateDebugInfo(`Baseline: ${baselineEnergy.toFixed(4)}`);
+                                log(`📊 Baseline ${expectedNoteIndex}: ${baselineEnergy.toFixed(4)}`);
                             }
                         }
                     }
 
                     if (Math.floor(now/1000) !== Math.floor(lastLogTime/1000)) {
                         lastLogTime = now;
-                        log(`📊 Window energy: ${avgEnergy.toFixed(4)}, baseline ratio: ${ratioToBaseline.toFixed(2)}`);
+                        log(`📊 Energy: ${avgEnergy.toFixed(4)}, ratio: ${ratioToBaseline.toFixed(2)}`);
                     }
 
                     if (baselineComplete && ratioToBaseline > BASELINE_THRESHOLD_MULTIPLIER) {
-                        log(`📈 ENERGY SPIKE! ${avgEnergy.toFixed(4)} (${(ratioToBaseline*100-100).toFixed(1)}% above baseline)`);
+                        log(`📈 SPIKE! ${avgEnergy.toFixed(4)} (${(ratioToBaseline*100-100).toFixed(1)}%)`);
 
                         if (now - lastNoteTime > 2000) {
-                            // Note started!
                             isNoteActive = true;
                             noteStartTime = now;
                             lastNoteTime = now;
@@ -673,29 +667,38 @@
 
                             const delay = now - expectedTime;
 
-                            document.getElementById('lastOnset').innerText =
-                                new Date(now).toLocaleTimeString() + `.${String(now % 1000).padStart(3, '0')}`;
-                            document.getElementById('noteCount').innerText = detectedCount;
+                            document.getElementById('noteCount').innerText = `${detectedCount}/2`;
                             document.getElementById('lastDelay').innerText = delay + ' ms';
 
-                            log(`🔊 NOTE DETECTED at ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
-                            log(`   Expected: ${new Date(expectedTime).toLocaleTimeString()}.${String(expectedTime % 1000).padStart(3, '0')}`);
-                            log(`   Delay: ${delay}ms, Energy: ${avgEnergy.toFixed(4)}, Baseline: ${baselineEnergy.toFixed(4)}`);
-                            updateDebugInfo(`✅ NOTE DETECTED! Delay: ${delay}ms`);
+                            log(`🔊 NOTE ${expectedNoteIndex} DETECTED: ${currentNote.pitch} at ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
+                            log(`   Delay: ${delay}ms`);
 
-                            // Send feedback to conductor
                             db.ref('zynth/device_feedback').set({
+                                noteIndex: expectedNoteIndex,
+                                pitch: currentNote.pitch,
                                 delay: delay,
                                 detectedAt: now,
                                 expectedAt: expectedTime,
-                                note: expectedNote.pitch,
                                 timestamp: now
                             });
+
+                            document.getElementById(`note${expectedNoteIndex}Dot`).classList.add('active');
+
+                            expectedNoteIndex++;
+                            windowEntered = false;
+                            baselineComplete = false;
+
+                            if (expectedNoteIndex >= expectedNotes.length) {
+                                log('✅ All notes detected');
+                                document.getElementById('currentNote').innerText = 'Complete';
+                            } else {
+                                document.getElementById('currentNote').innerText = expectedNotes[expectedNoteIndex].pitch;
+                            }
                         }
                     }
                 } else if (windowEntered) {
                     windowEntered = false;
-                    log(`🚪 EXITED WINDOW at ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
+                    log(`🚪 Window ${expectedNoteIndex} closed without detection`);
                 }
             }
 
@@ -708,7 +711,7 @@
             animationFrame = requestAnimationFrame(detectNote);
         }
 
-        // ========== SENSITIVITY CONTROLS EVENT LISTENERS ==========
+        // ========== SENSITIVITY CONTROLS ==========
         document.getElementById('thresholdSlider').addEventListener('input', (e) => {
             BASELINE_THRESHOLD_MULTIPLIER = parseFloat(e.target.value);
             document.getElementById('thresholdValue').innerText = BASELINE_THRESHOLD_MULTIPLIER.toFixed(2) + 'x';
@@ -729,10 +732,7 @@
             document.getElementById('samplesValue').innerText = BASELINE_SAMPLES_MS + ' ms';
         });
 
-        document.getElementById('applySensitivityBtn').addEventListener('click', () => {
-            saveSensitivitySettings();
-        });
-
+        document.getElementById('applySensitivityBtn').addEventListener('click', saveSensitivitySettings);
         document.getElementById('resetSensitivityBtn').addEventListener('click', () => {
             BASELINE_THRESHOLD_MULTIPLIER = 1.1;
             WINDOW_BEFORE_MS = 4000;
@@ -752,33 +752,17 @@
             saveSensitivitySettings();
         });
 
-        // ========== LOGGING ==========
-        function log(message) {
-            const logDiv = document.getElementById('log');
-            if (!logDiv) return;
-            const timestamp = new Date().toLocaleTimeString();
-            logDiv.innerHTML = `<div>[${timestamp}] ${message}</div>` + logDiv.innerHTML;
-            console.log(message);
-        }
-
         // ========== INITIALIZATION ==========
         window.onload = () => {
-            log('⏱️ Zynth Device - Complete Debug ready');
-            log('⚡ Very sensitive settings: 1.1x threshold, 4s/6s window');
-            updateDebugInfo('Device ready');
-
-            // Load saved sensitivity settings
+            log('⏱️ Zynth Device - Two Note Detector ready');
             loadSensitivitySettings();
 
             document.getElementById('enableBtn').onclick = enableMicrophone;
             document.getElementById('disableBtn').onclick = disableMicrophone;
             document.getElementById('copyLogBtn').onclick = copyLog;
 
-            // Update debug info periodically
             setInterval(() => {
-                if (isListening) {
-                    updateDebugInfo();
-                }
+                if (isListening) updateDebugInfo();
             }, 2000);
         };
     </script>
