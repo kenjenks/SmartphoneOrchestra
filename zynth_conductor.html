@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zynth Conductor - Two Note Test</title>
+    <title>Zynth Conductor - Two Note Test (FIXED)</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <style>
@@ -178,7 +178,7 @@
     </style>
 </head>
 <body>
-    <h1>🎵 Zynth Conductor - Two Note Test</h1>
+    <h1>🎵 Zynth Conductor - Two Note Test (FIXED)</h1>
 
     <div class="panel">
         <div style="display: flex; align-items: center; margin-bottom: 15px;">
@@ -194,12 +194,12 @@
             <div class="note-card" id="note0Card">
                 <div class="note-pitch">G4</div>
                 <div class="note-details">392 Hz · 371.5 ms</div>
-                <div class="note-details">Offset: 301.9 ms</div>
+                <div class="note-details">Offset: 301.9 ms (seek position)</div>
             </div>
             <div class="note-card" id="note1Card">
                 <div class="note-pitch">A4</div>
                 <div class="note-details">440 Hz · 278.6 ms</div>
-                <div class="note-details">Offset: 696.6 ms</div>
+                <div class="note-details">Offset: 696.6 ms (seek position)</div>
             </div>
         </div>
 
@@ -213,7 +213,7 @@
                 <input type="range" id="jitterSlider" min="0" max="500" value="200" step="10">
             </div>
             <p style="color: #888; font-size: 0.9rem;">
-                Two notes: G4 (302ms) then A4 (697ms)<br>
+                Two notes: G4 (seek 302ms) then A4 (seek 697ms)<br>
                 <span class="ready-status" id="readyStatus">⏳ Waiting for system ready...</span>
             </p>
         </div>
@@ -263,13 +263,13 @@
             {
                 pitch: 'G4',
                 freq: 392,
-                offset: 301.9,
+                offset: 301.9,  // This is a SEEK POSITION, not a delay
                 duration: 371.5
             },
             {
                 pitch: 'A4',
                 freq: 440,
-                offset: 696.6,
+                offset: 696.6,  // This is a SEEK POSITION, not a delay
                 duration: 278.6
             }
         ];
@@ -304,7 +304,6 @@
             } catch (err) {
                 console.error('Copy failed:', err);
             }
-
             selection.removeAllRanges();
         }
 
@@ -344,12 +343,28 @@
             }
         });
 
+        // FIX 4: Handle both single and combined feedback
         db.ref('zynth/device_feedback').on('value', snap => {
             const feedback = snap.val();
-            if (feedback && feedback.delay !== undefined) {
-                lastDelays[feedback.noteIndex] = feedback.delay + ' ms';
+            if (!feedback) return;
+
+            // Handle single note feedback
+            if (feedback.delay !== undefined) {
+                lastDelays[feedback.noteIndex] = Math.round(feedback.delay) + ' ms';
                 updateDelayDisplay();
-                log(`📊 Received device feedback: note ${feedback.noteIndex} delay = ${feedback.delay}ms`);
+                log(`📊 Received device feedback: note ${feedback.noteIndex} delay = ${Math.round(feedback.delay)}ms`);
+            }
+
+            // Handle combined feedback (note 0 from history + note 1)
+            if (feedback.note0 && feedback.note1) {
+                if (feedback.note0.fromHistory) {
+                    lastDelays[0] = `${Math.round(feedback.note0.delay)}ms (history)`;
+                } else {
+                    lastDelays[0] = Math.round(feedback.note0.delay) + ' ms';
+                }
+                lastDelays[1] = Math.round(feedback.note1.delay) + ' ms';
+                updateDelayDisplay();
+                log(`📊 Received combined feedback: note0 delay = ${Math.round(feedback.note0.delay)}ms${feedback.note0.fromHistory ? ' (from history)' : ''}, note1 delay = ${Math.round(feedback.note1.delay)}ms`);
             }
         });
 
@@ -437,18 +452,22 @@
             const bufferMs = 1500;
             const scheduledWallTime = now + bufferMs;
 
-            // Calculate play times for both notes
-            const note0PlayTime = scheduledWallTime + notes[0].offset + jitter0;
-            const note1PlayTime = scheduledWallTime + notes[1].offset + jitter1;
+            // FIX 1: Remove offset from play time calculation
+            // The notes play at scheduledWallTime + jitter, seeking to different positions
+            const note0PlayTime = scheduledWallTime + jitter0;  // No +offset!
+            const note1PlayTime = scheduledWallTime + jitter1;  // No +offset!
+
+            // Calculate gap between note starts in the MP3
+            const noteGapMs = notes[1].offset - notes[0].offset; // 696.6 - 301.9 = 394.7ms
 
             log('🎬 ===== STARTING TWO-NOTE TEST =====');
             log(`🕐 Current Firebase time: ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
             log(`📅 Sequence start: ${new Date(scheduledWallTime).toLocaleTimeString()}.${String(scheduledWallTime % 1000).padStart(3, '0')}`);
             log(`🎲 Note 0 jitter: ${jitter0 > 0 ? '+' : ''}${jitter0}ms`);
-            log(`🎯 Note 0 (G4) at: ${new Date(note0PlayTime).toLocaleTimeString()}.${String(note0PlayTime % 1000).padStart(3, '0')}`);
+            log(`🎯 Note 0 (G4) at: ${new Date(note0PlayTime).toLocaleTimeString()}.${String(note0PlayTime % 1000).padStart(3, '0')} (seeking to ${notes[0].offset}ms)`);
             log(`🎲 Note 1 jitter: ${jitter1 > 0 ? '+' : ''}${jitter1}ms`);
-            log(`🎯 Note 1 (A4) at: ${new Date(note1PlayTime).toLocaleTimeString()}.${String(note1PlayTime % 1000).padStart(3, '0')}`);
-            log(`📊 Gap between notes: ${(note1PlayTime - note0PlayTime).toFixed(0)}ms`);
+            log(`🎯 Note 1 (A4) at: ${new Date(note1PlayTime).toLocaleTimeString()}.${String(note1PlayTime % 1000).padStart(3, '0')} (seeking to ${notes[1].offset}ms)`);
+            log(`📊 Gap between note starts: ${noteGapMs}ms (MP3 offset difference)`);
 
             // Send GO signal to Firebase
             await db.ref('zynth/two_note_test').set({
@@ -460,19 +479,19 @@
                         index: 0,
                         pitch: notes[0].pitch,
                         freq: notes[0].freq,
-                        offset: notes[0].offset,
+                        offset: notes[0].offset,  // Seek position in MP3
                         duration: notes[0].duration,
                         jitter: jitter0,
-                        expectedPlayTime: note0PlayTime
+                        expectedPlayTime: note0PlayTime  // This is when the audio starts
                     },
                     {
                         index: 1,
                         pitch: notes[1].pitch,
                         freq: notes[1].freq,
-                        offset: notes[1].offset,
+                        offset: notes[1].offset,  // Seek position in MP3
                         duration: notes[1].duration,
                         jitter: jitter1,
-                        expectedPlayTime: note1PlayTime
+                        expectedPlayTime: note1PlayTime  // This is when the audio starts
                     }
                 ]
             });
@@ -508,10 +527,10 @@
             const scheduledAudio0 = nowAudio + timeUntil0;
             const scheduledAudio1 = nowAudio + timeUntil1;
 
-            log(`⏱️ Note 0 scheduled at audio time: ${scheduledAudio0.toFixed(3)}s`);
-            log(`⏱️ Note 1 scheduled at audio time: ${scheduledAudio1.toFixed(3)}s`);
+            log(`⏱️ Note 0 scheduled at audio time: ${scheduledAudio0.toFixed(3)}s (seek: ${notes[0].offset}ms)`);
+            log(`⏱️ Note 1 scheduled at audio time: ${scheduledAudio1.toFixed(3)}s (seek: ${notes[1].offset}ms)`);
 
-            // Start both notes
+            // Start both notes at their scheduled times, seeking to correct positions
             source0.start(scheduledAudio0, notes[0].offset / 1000, notes[0].duration / 1000);
             source1.start(scheduledAudio1, notes[1].offset / 1000, notes[1].duration / 1000);
 
@@ -563,8 +582,8 @@
             document.getElementById('copyLogBtn').onclick = copyLog;
             loadMP3();
 
-            log('🎵 Zynth Conductor - Two Note Test ready');
-            log('🎯 Two notes: G4 at 302ms, A4 at 697ms');
+            log('🎵 Zynth Conductor - Two Note Test (FIXED) ready');
+            log('🎯 Two notes: G4 (seek 302ms), A4 (seek 697ms)');
             log('⏳ Waiting for server offset, MP3 load, and hardware prime...');
         };
     </script>

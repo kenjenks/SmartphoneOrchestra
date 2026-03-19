@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zynth Device - Adaptive Delay Learning</title>
+    <title>Zynth Device - Adaptive Delay Learning (FIXED)</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <style>
@@ -222,7 +222,7 @@
     </style>
 </head>
 <body>
-    <h1>⏱️ Zynth Device - Adaptive Delay Learning</h1>
+    <h1>⏱️ Zynth Device - Adaptive Delay Learning (FIXED)</h1>
 
     <div class="panel">
         <div style="display: flex; align-items: center; margin-bottom: 15px;">
@@ -522,7 +522,7 @@
 
         // ========== SENSITIVITY CONTROLS ==========
         let BASELINE_THRESHOLD_MULTIPLIER = 1.1;
-        let BASELINE_SAMPLES_MS = 200; // Faster baseline (was 1000)
+        let BASELINE_SAMPLES_MS = 200;
         let LOOKBACK_MS = 500;
 
         // ========== FFT SETUP ==========
@@ -607,6 +607,9 @@
                 log(`🕐 Device current: ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
                 log(`🕐 Sequence start: ${new Date(startTime).toLocaleTimeString()}.${String(startTime % 1000).padStart(3, '0')}`);
 
+                // FIX 3: Reset consecutive misses at start of sequence
+                consecutiveMisses = 0;
+
                 sequenceActive = true;
                 sequenceStartWallTime = startTime;
                 expectedNotes = sequence.notes;
@@ -614,7 +617,6 @@
                 detectedCount = 0;
                 isNoteActive = false;
                 windowEntered = false;
-                consecutiveMisses = 0;
 
                 note0ActualTime = null;
                 note0ExpectedTime = null;
@@ -838,6 +840,9 @@
                                 note0ActualTime = now;
                                 note0ExpectedTime = expectedPlayTime;
 
+                                // FIX 3: Reset consecutive misses on successful detection
+                                consecutiveMisses = 0;
+
                                 log(`🔊 NOTE 0 DETECTED: G4 at ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
                                 log(`   Delay: ${Math.round(delay)}ms (adaptive estimate now ${Math.round(estimatedDelayMs)}ms)`);
 
@@ -850,11 +855,12 @@
                                     timestamp: now
                                 });
 
-                                const note1Offset = 696.6 - 301.9;
-                                note1ExpectedTime = note0ActualTime + note1Offset;
+                                // FIX 2: Use actual gap from expected play times, not fixed offset
+                                const noteGap = expectedNotes[1].expectedPlayTime - expectedNotes[0].expectedPlayTime;
+                                note1ExpectedTime = note0ActualTime + noteGap;
 
                                 log(`📅 Note 1 expected at: ${new Date(note1ExpectedTime).toLocaleTimeString()}.${String(note1ExpectedTime % 1000).padStart(3, '0')}`);
-                                log(`   (from note 0 actual + ${note1Offset}ms gap + adaptive delay)`);
+                                log(`   (from note 0 actual + ${noteGap}ms gap)`);
 
                                 expectedNoteIndex = 1;
                                 windowEntered = false;
@@ -933,14 +939,17 @@
                     }
                 } else if (windowEntered) {
                     windowEntered = false;
-                    consecutiveMisses++;
-                    log(`🚪 Window ${expectedNoteIndex} closed without detection (miss #${consecutiveMisses})`);
+                    // FIX 3: Only increment misses if we're still on the same note index
+                    if (expectedNoteIndex < 2) {
+                        consecutiveMisses++;
+                        log(`🚪 Window ${expectedNoteIndex} closed without detection (miss #${consecutiveMisses})`);
 
-                    // If we're missing consistently, widen the window
-                    if (consecutiveMisses >= 2) {
-                        adaptiveWindowMs = Math.min(maxAdaptiveWindowMs, adaptiveWindowMs * 1.5);
-                        document.getElementById('adaptiveWindow').innerText = Math.round(adaptiveWindowMs) + ' ms';
-                        log(`📊 Widening adaptive window to ${Math.round(adaptiveWindowMs)}ms due to consecutive misses`);
+                        // If we're missing consistently, widen the window
+                        if (consecutiveMisses >= 2) {
+                            adaptiveWindowMs = Math.min(maxAdaptiveWindowMs, adaptiveWindowMs * 1.5);
+                            document.getElementById('adaptiveWindow').innerText = Math.round(adaptiveWindowMs) + ' ms';
+                            log(`📊 Widening adaptive window to ${Math.round(adaptiveWindowMs)}ms due to consecutive misses`);
+                        }
                     }
                 }
             }
@@ -1015,7 +1024,7 @@
 
         // ========== INITIALIZATION ==========
         window.onload = () => {
-            log('⏱️ Zynth Device - Adaptive Delay Learning ready');
+            log('⏱️ Zynth Device - Adaptive Delay Learning (FIXED) ready');
             log(`⚙️ Initial estimated delay: ${estimatedDelayMs}ms`);
 
             // Load saved settings
