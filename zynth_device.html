@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zynth Device - Baseline Adaptation</title>
+    <title>Zynth Device - Baseline Adaptation (FIXED)</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <style>
@@ -132,7 +132,7 @@
     </style>
 </head>
 <body>
-    <h1>⏱️ Zynth Device - Baseline Adaptation</h1>
+    <h1>⏱️ Zynth Device - Baseline Adaptation (FIXED)</h1>
 
     <div class="panel">
         <div style="display: flex; align-items: center; margin-bottom: 15px;">
@@ -208,6 +208,7 @@
         let currentAvgEnergy = 0;
         let ambientLogInterval = null;
         let windowEntered = false;
+        let lastHeartbeat = 0;
 
         // Test sequence state
         let sequenceActive = false;
@@ -221,7 +222,7 @@
         let lastEnergy = 0.01;
         let lastNoteTime = 0;
 
-        // Baseline adaptation - measure ambient for first 500ms of window
+        // Baseline adaptation
         let baselineEnergy = 0;
         let baselineSamples = [];
         let baselineComplete = false;
@@ -230,8 +231,8 @@
         // Detection parameters
         let MIN_TIME_BETWEEN_NOTES = 2000;
         let DETECTION_WINDOW_MS = 3000;
-        let BASELINE_SAMPLES_MS = 500; // Measure baseline for first 500ms
-        let BASELINE_THRESHOLD_MULTIPLIER = 1.5; // Need 50% above baseline
+        let BASELINE_SAMPLES_MS = 500;
+        let BASELINE_THRESHOLD_MULTIPLIER = 1.5;
 
         // FFT setup
         const FFT_SIZE = 2048;
@@ -289,26 +290,49 @@
         // Listen for test sequence from conductor
         db.ref('zynth/single_note_test').on('value', snap => {
             const sequence = snap.val();
+            const now = Date.now() + serverOffset;
+
+            log(`🔥 Firebase update received: ${sequence ? 'ACTIVE' : 'CLEARED'}`);
 
             if (sequence && sequence.status === 'ACTIVE') {
-                // Use the server timestamp as the absolute reference
-                const serverTime = sequence.serverTimestamp;
-                const scheduledWallTime = sequence.scheduledWallTime;
+                const startTime = sequence.scheduledWallTime;
+                const expectedPlayTime = startTime + sequence.note.jitter;
 
-                // Calculate expected play time using the same formula as conductor
-                const expectedPlayTime = scheduledWallTime + sequence.note.jitter;
+                const timeUntilStart = (startTime - now) / 1000;
+                const timeUntilNote = (expectedPlayTime - now) / 1000;
 
-                // Now compute window relative to THIS device's current time
-                const now = Date.now() + serverOffset;
+                log(`🕐 Device current time: ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
+                log(`🕐 Sequence scheduled: ${new Date(startTime).toLocaleTimeString()}.${String(startTime % 1000).padStart(3, '0')}`);
+                log(`🕐 Time until start: ${timeUntilStart.toFixed(1)}s`);
+                log(`🎯 Expected play time: ${new Date(expectedPlayTime).toLocaleTimeString()}.${String(expectedPlayTime % 1000).padStart(3, '0')}`);
+                log(`   Time until note: ${timeUntilNote.toFixed(1)}s`);
+                log(`   (MP3 seek position: ${sequence.note.offset}ms)`);
 
-                // Log everything for debugging
-                log(`🕐 Server timestamp: ${new Date(serverTime).toLocaleTimeString()}.${String(serverTime % 1000).padStart(3, '0')}`);
-                log(`🕐 Scheduled start: ${new Date(scheduledWallTime).toLocaleTimeString()}.${String(scheduledWallTime % 1000).padStart(3, '0')}`);
-                log(`🕐 Expected play: ${new Date(expectedPlayTime).toLocaleTimeString()}.${String(expectedPlayTime % 1000).padStart(3, '0')}`);
-                log(`🕐 Device now: ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
-                log(`🕐 Difference: ${(expectedPlayTime - now).toFixed(0)}ms`);
+                if (expectedPlayTime < now) {
+                    log(`⚠️ WARNING: Expected play time is ${(now - expectedPlayTime).toFixed(0)}ms in the past!`);
+                }
 
-                // ... rest of the code
+                // ========== CRITICAL FIX: Set all sequence state variables ==========
+                sequenceActive = true;
+                sequenceStartWallTime = startTime;
+                expectedNote = {
+                    ...sequence.note,
+                    expectedPlayTime: expectedPlayTime
+                };
+                detectedCount = 0;
+                isNoteActive = false;
+                windowEntered = false;
+                baselineEnergy = 0;
+                baselineSamples = [];
+                baselineComplete = false;
+
+                // Log that sequence is now active
+                log(`✅ Sequence ACTIVE - ready to detect`);
+
+            } else if (!sequence) {
+                sequenceActive = false;
+                expectedNote = null;
+                log('⏹️ Sequence ended');
             }
         });
 
@@ -378,7 +402,12 @@
 
         // ========== NOTE DETECTION ==========
         function detectNote() {
-            console.log('🔍 detectNote running', { isListening, hasAnalyser: !!analyser });
+            // Heartbeat to prove loop is running
+            if (Math.floor(Date.now()/1000) !== Math.floor(lastHeartbeat/1000)) {
+                lastHeartbeat = Date.now();
+                console.log('💓 detectNote heartbeat', { isListening, sequenceActive });
+            }
+
             if (!isListening || !analyser) {
                 animationFrame = null;
                 return;
@@ -509,7 +538,7 @@
 
         // ========== INITIALIZATION ==========
         window.onload = () => {
-            log('⏱️ Zynth Device - Baseline Adaptation ready');
+            log('⏱️ Zynth Device - Baseline Adaptation (FIXED) ready');
 
             document.getElementById('enableBtn').onclick = enableMicrophone;
             document.getElementById('disableBtn').onclick = disableMicrophone;
