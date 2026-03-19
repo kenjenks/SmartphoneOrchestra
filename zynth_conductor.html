@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zynth Conductor - Single Note Test with Feedback</title>
+    <title>Zynth Conductor - Fully Corrected</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <style>
@@ -90,6 +90,11 @@
             width: 100%;
             margin: 10px 0;
         }
+        button:disabled {
+            background: #333;
+            color: #666;
+            cursor: not-allowed;
+        }
         .status {
             background: #000;
             padding: 15px;
@@ -150,10 +155,14 @@
             color: #ffaa00;
             margin: 10px 0;
         }
+        .ready-status {
+            color: #ffaa00;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
-    <h1>🎵 Zynth Conductor - Single Note Test with Feedback</h1>
+    <h1>🎵 Zynth Conductor - Fully Corrected</h1>
 
     <div class="panel">
         <div style="display: flex; align-items: center; margin-bottom: 15px;">
@@ -179,7 +188,8 @@
                 <input type="range" id="jitterSlider" min="0" max="500" value="200" step="10">
             </div>
             <p style="color: #888; font-size: 0.9rem;">
-                First note: G4 at 302ms into MP3, duration 372ms
+                First note: G4 at 302ms into MP3, duration 372ms<br>
+                <span class="ready-status" id="readyStatus">⏳ Waiting for system ready...</span>
             </p>
         </div>
 
@@ -188,10 +198,10 @@
             <div class="delay-value" id="lastDelay">---</div>
         </div>
 
-        <button id="playBtn">🔊 PLAY SINGLE NOTE</button>
+        <button id="playBtn" disabled>🔊 PLAY SINGLE NOTE</button>
 
         <div class="status" id="status">
-            Ready
+            Initializing...
         </div>
 
         <div class="log-container">
@@ -218,17 +228,22 @@
         let audioCtx = null;
         let audioBuffer = null;
         let serverOffset = 0;
+        let isOffsetReady = false;
+        let isAudioReady = false;
         let isPlaying = false;
 
-        // First note from tuning_mode.json
+        // First note from tuning_mode.json - using forte flute (no warbles)
         const firstNote = {
             pitch: 'G4',
-            offset: 301.9,  // ms into MP3
+            offset: 301.9,  // ms into MP3 - this is a SEEK POSITION, not a delay
             duration: 371.5  // ms
         };
 
-        // MP3 URL, forte (f) flute, no warbles
+        // MP3 URL - forte flute, no warbles
         const MP3_URL = "https://static.wixstatic.com/mp3/9178d1_90075dcab43749b7a644df60ca7acc58.mp3";
+
+        // Jitter range
+        let maxJitter = 200;
 
         // ========== HELPER FUNCTIONS ==========
         function log(message) {
@@ -257,18 +272,30 @@
             selection.removeAllRanges();
         }
 
+        function checkReady() {
+            if (isOffsetReady && isAudioReady) {
+                document.getElementById('playBtn').disabled = false;
+                document.getElementById('readyStatus').innerHTML = '✅ System ready - Play button enabled';
+                log('✅ System ready - Play button enabled');
+            }
+        }
+
         // ========== FIREBASE LISTENERS ==========
-        // Clock sync
+        // Server time offset - wait for this before enabling play
         db.ref(".info/serverTimeOffset").on("value", snap => {
             serverOffset = snap.val() || 0;
+            isOffsetReady = true;
             log(`⏱️ Server offset: ${serverOffset}ms`);
+            checkReady();
         });
 
         // Connection status
         db.ref('.info/connected').on('value', snap => {
+            const connected = snap.val();
             const statusEl = document.getElementById('firebaseStatus');
             const textEl = document.getElementById('connectionText');
-            if (snap.val()) {
+
+            if (connected) {
                 statusEl.className = 'firebase-status connected';
                 textEl.innerText = 'Firebase Connected';
                 log('🔌 Firebase connected');
@@ -292,6 +319,7 @@
         async function loadMP3() {
             try {
                 document.getElementById('audioStatus').innerHTML = '⏳ Loading MP3 file...';
+                document.getElementById('status').innerHTML = 'Loading MP3...';
 
                 const response = await fetch(MP3_URL);
                 const arrayBuffer = await response.arrayBuffer();
@@ -299,18 +327,20 @@
                 audioCtx = new AudioContext();
                 audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
 
-                document.getElementById('audioStatus').innerHTML = '✅ MP3 loaded - ' +
-                    Math.round(audioBuffer.duration) + 's';
+                document.getElementById('audioStatus').innerHTML = '✅ MP3 loaded';
+                document.getElementById('status').innerHTML = 'MP3 loaded, waiting for offset...';
+                isAudioReady = true;
                 log('✅ MP3 loaded successfully');
+                checkReady();
 
             } catch (err) {
                 document.getElementById('audioStatus').innerHTML = '❌ Failed to load MP3';
+                document.getElementById('status').innerHTML = 'MP3 load failed';
                 log(`❌ MP3 load error: ${err.message}`);
             }
         }
 
         // ========== JITTER CONTROL ==========
-        let maxJitter = 200;
         document.getElementById('jitterSlider').addEventListener('input', (e) => {
             maxJitter = parseInt(e.target.value);
             document.getElementById('jitterValue').innerText = maxJitter + ' ms';
@@ -323,72 +353,121 @@
                 return;
             }
 
-            if (!audioBuffer) {
-                log('❌ MP3 not loaded yet');
+            if (!audioBuffer || !isOffsetReady) {
+                log('❌ System not ready yet');
                 return;
             }
 
             isPlaying = true;
+            document.getElementById('playBtn').disabled = true;
 
-            // Generate random jitter
+            // Generate random jitter - this is the ONLY thing that affects when the note plays
             const jitter = Math.floor(Math.random() * (maxJitter * 2 + 1)) - maxJitter;
 
-            // Calculate scheduled start time with 1 second buffer
+            // Get current Firebase-synced time
             const now = Date.now() + serverOffset;
-            const bufferMs = 1000;
+
+            // Add extra buffer to account for Firebase write latency (worst case 400ms)
+            // This ensures notePlayTime is always after the Firebase write completes
+            const firebaseWriteBuffer = 500; // ms
+            const bufferMs = 1000 + firebaseWriteBuffer;
             const scheduledWallTime = now + bufferMs; // When the sequence starts
 
-            // The note will play at: scheduledWallTime + firstNote.offset + jitter
-            const notePlayTime = scheduledWallTime + firstNote.offset + jitter;
+            // IMPORTANT: The note plays at scheduledWallTime + jitter
+            // The offset (302ms) is a SEEK POSITION within the MP3, not an additional delay
+            const notePlayTime = scheduledWallTime + jitter;  // No +offset here!
 
-            log('🎬 Sending GO signal with 1s buffer');
-            log(`📅 Sequence starting at ${new Date(scheduledWallTime).toLocaleTimeString()}.${String(scheduledWallTime % 1000).padStart(3, '0')}`);
+            log('🎬 ===== STARTING NEW TEST =====');
+            log(`🕐 Current Firebase time: ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
+            log(`📅 Sequence starting at: ${new Date(scheduledWallTime).toLocaleTimeString()}.${String(scheduledWallTime % 1000).padStart(3, '0')} (in ${bufferMs/1000}s)`);
             log(`🎲 Jitter: ${jitter > 0 ? '+' : ''}${jitter}ms`);
-            log(`🎯 Note scheduled at ${new Date(notePlayTime).toLocaleTimeString()}.${String(notePlayTime % 1000).padStart(3, '0')}`);
+            log(`🎯 Note scheduled at: ${new Date(notePlayTime).toLocaleTimeString()}.${String(notePlayTime % 1000).padStart(3, '0')}`);
+            log(`   (MP3 seek position: ${firstNote.offset}ms, duration: ${firstNote.duration}ms)`);
 
-            // Send GO signal to Firebase
+            // Send GO signal to Firebase with server timestamp
             await db.ref('zynth/single_note_test').set({
                 status: 'ACTIVE',
-                scheduledWallTime: scheduledWallTime,
+                serverTimestamp: firebase.database.ServerValue.TIMESTAMP,
+                conductorTime: now,
+                scheduledWallTime: scheduledWallTime,  // This is a Firebase-synced timestamp
                 note: {
                     index: 0,
                     pitch: firstNote.pitch,
-                    offset: firstNote.offset,
+                    offset: firstNote.offset,  // Seek position in MP3
                     duration: firstNote.duration,
-                    jitter: jitter,
-                    expectedPlayTime: notePlayTime
-                },
-                timestamp: now
+                    jitter: jitter
+                    // Note: expectedPlayTime is NOT sent - device will compute it
+                }
             });
+
+            log(`📤 GO signal sent to Firebase`);
 
             // Resume audio context if needed
             if (audioCtx.state === 'suspended') {
                 await audioCtx.resume();
             }
 
-            // Calculate delay until this note should play
-            const delayMs = Math.max(0, notePlayTime - (Date.now() + serverOffset));
+            // Calculate when to start playback using Web Audio API time
+            const nowAudio = audioCtx.currentTime;
+            const timeUntilStart = (notePlayTime - (Date.now() + serverOffset)) / 1000;
 
-            setTimeout(() => {
-                const source = audioCtx.createBufferSource();
-                source.buffer = audioBuffer;
-                source.connect(audioCtx.destination);
+            // If timeUntilStart is negative, we've already missed the slot - abort
+            if (timeUntilStart < 0) {
+                log(`❌ ERROR: Missed playback window by ${(-timeUntilStart * 1000).toFixed(0)}ms`);
+                isPlaying = false;
+                document.getElementById('playBtn').disabled = false;
+                return;
+            }
 
-                // Start from the correct offset in the MP3
-                source.start(0, firstNote.offset / 1000, firstNote.duration / 1000);
+            const scheduledAudioTime = nowAudio + timeUntilStart;
 
-                const actualPlayTime = Date.now() + serverOffset;
-                log(`🔊 Playing note at ${new Date(actualPlayTime).toLocaleTimeString()}.${String(actualPlayTime % 1000).padStart(3, '0')} (expected: ${new Date(notePlayTime).toLocaleTimeString()}.${String(notePlayTime % 1000).padStart(3, '0')})`);
+            log(`⏱️ Audio context now: ${nowAudio.toFixed(3)}s`);
+            log(`⏱️ Scheduled audio time: ${scheduledAudioTime.toFixed(3)}s`);
+            log(`⏱️ Delay until start: ${(timeUntilStart * 1000).toFixed(0)}ms`);
 
-                source.onended = () => {
-                    log(`✅ Note ended`);
-                    isPlaying = false;
+            // Schedule the note using Web Audio API's precise timing
+            const source = audioCtx.createBufferSource();
+            source.buffer = audioBuffer;
+            source.connect(audioCtx.destination);
 
-                    // Clear the test
-                    db.ref('zynth/single_note_test').remove();
+            // Start at the precise audio time, seeking to the correct offset in the MP3
+            source.start(scheduledAudioTime, firstNote.offset / 1000, firstNote.duration / 1000);
+
+            // Use a single source.onended callback for accurate timing
+            // No separate setTimeout - this avoids race conditions
+            source.onended = () => {
+                const endTime = Date.now() + serverOffset;
+                // Calculate actual start time based on scheduled audio time
+                const actualStartTime = notePlayTime; // Best estimate
+                const actualDuration = endTime - actualStartTime;
+
+                log(`✅ Note ended at ${new Date(endTime).toLocaleTimeString()}.${String(endTime % 1000).padStart(3, '0')}`);
+                log(`   Expected start was: ${new Date(notePlayTime).toLocaleTimeString()}.${String(notePlayTime % 1000).padStart(3, '0')}`);
+                log(`   Actual duration: ${actualDuration}ms (expected: ${firstNote.duration}ms)`);
+                log(`   Duration error: ${actualDuration - firstNote.duration}ms`);
+
+                isPlaying = false;
+                document.getElementById('playBtn').disabled = false;
+
+                // Clear the test
+                db.ref('zynth/single_note_test').remove();
+            };
+
+            // Also log when Web Audio thinks it started (via a separate callback)
+            if (typeof source.onstart === 'function') {
+                source.onstart = () => {
+                    const startTime = Date.now() + serverOffset;
+                    log(`🔊 Note ACTUALLY started at: ${new Date(startTime).toLocaleTimeString()}.${String(startTime % 1000).padStart(3, '0')}`);
+                    log(`   Scheduled was: ${new Date(notePlayTime).toLocaleTimeString()}.${String(notePlayTime % 1000).padStart(3, '0')}`);
+                    log(`   Playback delay: ${startTime - notePlayTime}ms`);
                 };
-
-            }, delayMs);
+            } else {
+                // Fallback for browsers without onstart
+                setTimeout(() => {
+                    const startTime = Date.now() + serverOffset;
+                    log(`🔊 Note estimated start: ${new Date(startTime).toLocaleTimeString()}.${String(startTime % 1000).padStart(3, '0')}`);
+                }, timeUntilStart * 1000);
+            }
         }
 
         // ========== INITIALIZATION ==========
@@ -400,8 +479,9 @@
             // Load MP3
             loadMP3();
 
-            log('🎵 Single MP3 Note Test with Feedback ready');
+            log('🎵 Zynth Conductor - Fully Corrected ready');
             log('🎯 First note: G4 at 302ms offset');
+            log('⏳ Waiting for server offset and MP3 load...');
         };
     </script>
 </body>

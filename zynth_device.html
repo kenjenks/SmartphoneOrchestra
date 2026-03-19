@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zynth Device - Single Note Detector with Feedback</title>
+    <title>Zynth Device - Fully Corrected</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <style>
@@ -132,7 +132,7 @@
     </style>
 </head>
 <body>
-    <h1>⏱️ Zynth Device - Single Note Detector with Feedback</h1>
+    <h1>⏱️ Zynth Device - Fully Corrected</h1>
 
     <div class="panel">
         <div style="display: flex; align-items: center; margin-bottom: 15px;">
@@ -159,8 +159,8 @@
                 <div class="meter-fill" id="energyMeter"></div>
             </div>
             <div style="display: flex; justify-content: space-between; margin-top: 5px;">
-                <span>Change: <span id="energyChange">0.00</span></span>
-                <span>Threshold: <span id="threshold">0.005</span></span>
+                <span>Energy Ratio: <span id="energyRatio">1.00</span></span>
+                <span>Threshold: <span id="threshold">0.10</span></span>
             </div>
         </div>
 
@@ -207,25 +207,25 @@
         let lastLogTime = 0;
         let currentAvgEnergy = 0;
         let ambientLogInterval = null;
+        let windowEntered = false;
 
         // Test sequence state
         let sequenceActive = false;
-        let scheduledWallTime = 0;
+        let sequenceStartWallTime = 0;  // When the sequence should start (Firebase time)
         let expectedNote = null;
         let detectedCount = 0;
 
         // Note tracking state
         let isNoteActive = false;
         let noteStartTime = 0;
-        let lastEnergy = 0;
+        let lastEnergy = 0.01; // Start with small non-zero value to prevent division issues
         let lastNoteTime = 0;
-        let energyHistory = [];
 
-        // Detection parameters - MUCH LOWER THRESHOLDS
-        const ENERGY_THRESHOLD = 0.2;
-        const MIN_CHANGE = 0.05;
-        const MIN_TIME_BETWEEN_NOTES = 2000;
-        const DETECTION_WINDOW_MS = 2000;  // 2 second window around expected time
+        // Detection parameters - use let (not const) so we can modify
+        let ENERGY_THRESHOLD = 0.10;     // Minimum energy to consider
+        let MIN_RATIO = 1.5;              // Need 50% increase to trigger
+        let MIN_TIME_BETWEEN_NOTES = 2000; // 2 seconds between notes
+        let DETECTION_WINDOW_MS = 3000;    // 3 second window (wider to catch drift)
 
         // FFT setup
         const FFT_SIZE = 2048;
@@ -285,20 +285,45 @@
         // Listen for test sequence from conductor
         db.ref('zynth/single_note_test').on('value', snap => {
             const sequence = snap.val();
+            const now = Date.now() + serverOffset;
+
             log(`🔥 Firebase update received: ${sequence ? 'ACTIVE' : 'CLEARED'}`);
 
             if (sequence && sequence.status === 'ACTIVE') {
+                // Store the scheduled wall time (when sequence starts)
+                // Use a different variable name to avoid collision
+                const startTime = sequence.scheduledWallTime;
+
+                // IMPORTANT: The note plays at startTime + jitter
+                // The offset is a SEEK POSITION in the MP3, not an additional delay
+                // Add a safety margin: if jitter is negative, expectedPlayTime could be before now
+                // We'll still listen, but log a warning
+                const expectedPlayTime = startTime + sequence.note.jitter;
+
+                const timeUntilStart = (startTime - now) / 1000;
+                const timeUntilNote = (expectedPlayTime - now) / 1000;
+
+                log(`🕐 Device current time: ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
+                log(`🕐 Sequence scheduled: ${new Date(startTime).toLocaleTimeString()}.${String(startTime % 1000).padStart(3, '0')}`);
+                log(`🕐 Time until start: ${timeUntilStart.toFixed(1)}s`);
+                log(`🎯 Expected play time: ${new Date(expectedPlayTime).toLocaleTimeString()}.${String(expectedPlayTime % 1000).padStart(3, '0')}`);
+                log(`   Time until note: ${timeUntilNote.toFixed(1)}s`);
+                log(`   (MP3 seek position: ${sequence.note.offset}ms)`);
+
+                if (expectedPlayTime < now) {
+                    log(`⚠️ WARNING: Expected play time is ${(now - expectedPlayTime).toFixed(0)}ms in the past!`);
+                    log(`   Detection window may be missed.`);
+                }
+
                 sequenceActive = true;
-                scheduledWallTime = sequence.scheduledWallTime;
-                expectedNote = sequence.note;
+                sequenceStartWallTime = startTime;
+                expectedNote = {
+                    ...sequence.note,
+                    expectedPlayTime: expectedPlayTime  // Device-computed
+                };
                 detectedCount = 0;
                 isNoteActive = false;
-
-                const startTimeStr = new Date(scheduledWallTime).toLocaleTimeString() +
-                    `.${String(scheduledWallTime % 1000).padStart(3, '0')}`;
-                log(`🎬 GO signal received - sequence starts at ${startTimeStr}`);
-                log(`📊 Expecting one note: ${expectedNote.pitch} at offset ${expectedNote.offset}ms (jitter: ${expectedNote.jitter > 0 ? '+' : ''}${expectedNote.jitter}ms)`);
-                log(`🎯 Expected play time: ${new Date(expectedNote.expectedPlayTime).toLocaleTimeString()}.${String(expectedNote.expectedPlayTime % 1000).padStart(3, '0')}`);
+                windowEntered = false; // Reset window flag for new sequence
 
             } else if (!sequence) {
                 sequenceActive = false;
@@ -341,7 +366,13 @@
                     }
                 }, 3000);
 
-                detectNote();
+                // Reset lastEnergy to avoid division by zero on first frame
+                lastEnergy = 0.01; // Small non-zero value to prevent Infinity ratio
+
+                // Start detection loop only if listening
+                if (!animationFrame) {
+                    detectNote();
+                }
 
             } catch (err) {
                 log(`❌ Mic error: ${err.message}`);
@@ -359,15 +390,21 @@
             }
             isListening = false;
             analyser = null;
+            // Cancel animation frame
+            if (animationFrame) {
+                cancelAnimationFrame(animationFrame);
+                animationFrame = null;
+            }
             document.getElementById('status').innerText = 'Ready';
             log('⏹️ Stopped');
         }
 
         // ========== NOTE DETECTION ==========
         function detectNote() {
+            // Only continue if still listening
             if (!isListening || !analyser) {
-                requestAnimationFrame(detectNote);
-                return;
+                animationFrame = null;
+                return; // Don't re-queue
             }
 
             const now = Date.now() + serverOffset;
@@ -395,14 +432,20 @@
             // Store current energy for ambient logging
             currentAvgEnergy = avgEnergy;
 
-            // Calculate energy change
-            const energyChange = avgEnergy - lastEnergy;
+            // Calculate energy ratio safely (avoid division by zero)
+            let energyRatio = 1.0;
+            if (lastEnergy > 0.001) {
+                energyRatio = avgEnergy / lastEnergy;
+            } else if (avgEnergy > ENERGY_THRESHOLD) {
+                // If lastEnergy is very small, consider any significant energy as a spike
+                energyRatio = 2.0; // Trigger detection
+            }
 
             // Update displays
             document.getElementById('energyValue').innerText = avgEnergy.toFixed(4);
             document.getElementById('energyMeter').style.width = (avgEnergy * 100) + '%';
-            document.getElementById('energyChange').innerText = energyChange.toFixed(4);
-            document.getElementById('threshold').innerText = ENERGY_THRESHOLD.toFixed(3);
+            document.getElementById('energyRatio').innerText = energyRatio.toFixed(2);
+            document.getElementById('threshold').innerText = ENERGY_THRESHOLD.toFixed(2);
 
             // Look for onset during active sequence
             if (sequenceActive && expectedNote && !isNoteActive) {
@@ -410,14 +453,24 @@
 
                 // Only look for onsets around the expected time
                 if (Math.abs(now - expectedTime) < DETECTION_WINDOW_MS) {
+                    // Log when we enter the window (first time only)
+                    if (!windowEntered) {
+                        windowEntered = true;
+                        log(`🔍 ENTERED WINDOW at ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
+                        log(`   Expected: ${new Date(expectedTime).toLocaleTimeString()}.${String(expectedTime % 1000).padStart(3, '0')}`);
+                        log(`   Current energy: ${avgEnergy.toFixed(4)}, ratio: ${energyRatio.toFixed(2)}`);
+                    }
+
                     // Log energy during the window (once per second)
                     if (Math.floor(now/1000) !== Math.floor(lastLogTime/1000)) {
                         lastLogTime = now;
-                        log(`📊 Window energy: ${avgEnergy.toFixed(4)}, change: ${energyChange.toFixed(4)}`);
+                        log(`📊 Window energy: ${avgEnergy.toFixed(4)}, ratio: ${energyRatio.toFixed(2)}`);
                     }
 
-                    // WAS: if (avgEnergy > ENERGY_THRESHOLD && energyChange > MIN_CHANGE) {
-                    if (avgEnergy > ENERGY_THRESHOLD && (avgEnergy / lastEnergy) > 1.5) {
+                    // Look for sudden increase in energy
+                    if (avgEnergy > ENERGY_THRESHOLD && energyRatio > MIN_RATIO) {
+                        log(`📈 ENERGY SPIKE! ${avgEnergy.toFixed(4)} vs ${lastEnergy.toFixed(4)} (${(energyRatio*100-100).toFixed(1)}% increase)`);
+
                         // Check if enough time has passed since last note
                         if (now - lastNoteTime > MIN_TIME_BETWEEN_NOTES) {
                             // Note started!
@@ -435,7 +488,7 @@
 
                             log(`🔊 NOTE DETECTED at ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
                             log(`   Expected: ${new Date(expectedTime).toLocaleTimeString()}.${String(expectedTime % 1000).padStart(3, '0')}`);
-                            log(`   Delay: ${delay}ms, Energy: ${avgEnergy.toFixed(4)}, Change: ${energyChange.toFixed(4)}`);
+                            log(`   Delay: ${delay}ms, Energy: ${avgEnergy.toFixed(4)}, Ratio: ${energyRatio.toFixed(2)}`);
 
                             // Send feedback to conductor
                             db.ref('zynth/device_feedback').set({
@@ -448,6 +501,8 @@
                         }
                     }
                 }
+                // Note: we DON'T reset windowEntered here - it persists for the entire sequence
+                // It will be reset when a new sequence arrives
             }
 
             // Note ending
@@ -458,13 +513,14 @@
 
             lastEnergy = avgEnergy;
 
-            requestAnimationFrame(detectNote);
+            // Re-queue the next frame
+            animationFrame = requestAnimationFrame(detectNote);
         }
 
         // ========== INITIALIZATION ==========
         window.onload = () => {
-            log('⏱️ Single Note Detector with Feedback ready');
-            log(`⚡ Threshold: ${ENERGY_THRESHOLD}, min change: ${MIN_CHANGE}`);
+            log('⏱️ Zynth Device - Fully Corrected ready');
+            log(`⚡ Threshold: ${ENERGY_THRESHOLD}, min ratio: ${MIN_RATIO}`);
 
             // Set up button handlers
             document.getElementById('enableBtn').onclick = enableMicrophone;
