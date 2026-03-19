@@ -793,6 +793,7 @@
                     }
 
                     if (!baselineComplete) {
+                        log(`🕒 Baseline collection: ${now - baselineStartTime}ms elapsed, ${baselineSamples.length} samples`);
                         if (now - baselineStartTime < BASELINE_SAMPLES_MS) {
                             baselineSamples.push(avgEnergy);
                         } else {
