@@ -222,8 +222,8 @@
         let energyHistory = [];
 
         // Detection parameters - MUCH LOWER THRESHOLDS
-        const ENERGY_THRESHOLD = 0.005;  // Was 0.03 - much lower
-        const MIN_CHANGE = 0.002;         // Was 0.02 - much lower
+        const ENERGY_THRESHOLD = 0.2;
+        const MIN_CHANGE = 0.05;
         const MIN_TIME_BETWEEN_NOTES = 2000;
         const DETECTION_WINDOW_MS = 2000;  // 2 second window around expected time
 
@@ -416,7 +416,8 @@
                         log(`📊 Window energy: ${avgEnergy.toFixed(4)}, change: ${energyChange.toFixed(4)}`);
                     }
 
-                    if (avgEnergy > ENERGY_THRESHOLD && energyChange > MIN_CHANGE) {
+                    // WAS: if (avgEnergy > ENERGY_THRESHOLD && energyChange > MIN_CHANGE) {
+                    if (avgEnergy > ENERGY_THRESHOLD && (avgEnergy / lastEnergy) > 1.5) {
                         // Check if enough time has passed since last note
                         if (now - lastNoteTime > MIN_TIME_BETWEEN_NOTES) {
                             // Note started!
