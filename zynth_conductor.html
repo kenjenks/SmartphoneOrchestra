@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zynth Conductor - Hardware Primed</title>
+    <title>Zynth Conductor - MP3 Primed</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <style>
@@ -162,7 +162,7 @@
     </style>
 </head>
 <body>
-    <h1>🎵 Zynth Conductor - Hardware Primed</h1>
+    <h1>🎵 Zynth Conductor - MP3 Primed</h1>
 
     <div class="panel">
         <div style="display: flex; align-items: center; margin-bottom: 15px;">
@@ -281,36 +281,6 @@
             }
         }
 
-        // ========== HARDWARE PRIMING ==========
-        async function primeAudioHardware() {
-            if (!audioCtx || !audioBuffer) {
-                log('⚠️ Cannot prime - audio not ready');
-                return;
-            }
-
-            log('🔊 Priming audio hardware with silent playback...');
-
-            // Create a silent gain node
-            const silentGain = audioCtx.createGain();
-            silentGain.gain.value = 0;
-
-            // Create a short silent source
-            const primeSource = audioCtx.createBufferSource();
-            primeSource.buffer = audioBuffer;
-            primeSource.connect(silentGain).connect(audioCtx.destination);
-
-            // Play a tiny silent segment
-            const primeStartTime = audioCtx.currentTime + 0.1;
-            primeSource.start(primeStartTime, 0, 0.1);
-
-            // Wait for priming to complete
-            await new Promise(resolve => setTimeout(resolve, 300));
-
-            isPrimed = true;
-            log('✅ Audio hardware primed');
-            checkReady();
-        }
-
         // ========== FIREBASE LISTENERS ==========
         db.ref(".info/serverTimeOffset").on("value", snap => {
             serverOffset = snap.val() || 0;
@@ -360,7 +330,7 @@
                 isAudioReady = true;
                 log('✅ MP3 loaded successfully');
 
-                // Prime the hardware
+                // Prime the hardware using the actual MP3
                 await primeAudioHardware();
 
             } catch (err) {
@@ -368,6 +338,41 @@
                 document.getElementById('status').innerHTML = 'MP3 load failed';
                 log(`❌ MP3 load error: ${err.message}`);
             }
+        }
+
+        // ========== PROPER MP3-BASED HARDWARE PRIMING ==========
+        async function primeAudioHardware() {
+            if (!audioCtx || !audioBuffer) {
+                log('⚠️ Cannot prime - audio not ready');
+                return;
+            }
+
+            log('🔊 Priming audio hardware with silent MP3 playback...');
+
+            // Create a silent gain node
+            const silentGain = audioCtx.createGain();
+            silentGain.gain.value = 0; // Complete silence
+
+            // Create a source that uses the actual MP3 buffer
+            const primeSource = audioCtx.createBufferSource();
+            primeSource.buffer = audioBuffer;
+
+            // Connect through silent gain
+            primeSource.connect(silentGain).connect(audioCtx.destination);
+
+            // Play a tiny silent segment to wake up the hardware
+            // This uses the same code path as real playback
+            const primeStartTime = audioCtx.currentTime + 0.1;
+            primeSource.start(primeStartTime, 0, 0.1); // 100ms silent segment
+
+            log('⏱️ Prime scheduled at audio time: ' + primeStartTime.toFixed(3) + 's');
+
+            // Wait for priming to complete
+            await new Promise(resolve => setTimeout(resolve, 300));
+
+            isPrimed = true;
+            log('✅ Audio hardware primed with MP3');
+            checkReady();
         }
 
         // ========== JITTER CONTROL ==========
@@ -481,7 +486,7 @@
             document.getElementById('copyLogBtn').onclick = copyLog;
             loadMP3();
 
-            log('🎵 Zynth Conductor - Hardware Primed ready');
+            log('🎵 Zynth Conductor - MP3 Primed ready');
             log('🎯 First note: G4 at 302ms offset');
             log('⏳ Waiting for server offset, MP3 load, and hardware prime...');
         };

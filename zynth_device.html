@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zynth Device - Hardware Primed</title>
+    <title>Zynth Device - Fixed Detection</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <style>
@@ -132,7 +132,7 @@
     </style>
 </head>
 <body>
-    <h1>⏱️ Zynth Device - Hardware Primed</h1>
+    <h1>⏱️ Zynth Device - Fixed Detection</h1>
 
     <div class="panel">
         <div style="display: flex; align-items: center; margin-bottom: 15px;">
@@ -229,9 +229,10 @@
         let baselineComplete = false;
         let baselineStartTime = 0;
 
-        // Detection parameters
+        // Detection parameters - ASYMMETRIC WINDOW: 2 seconds before, 4 seconds after
         let MIN_TIME_BETWEEN_NOTES = 2000;
-        let DETECTION_WINDOW_MS = 3000;
+        let WINDOW_BEFORE_MS = 2000;  // Start listening 2 seconds before expected
+        let WINDOW_AFTER_MS = 4000;   // Keep listening 4 seconds after expected
         let BASELINE_SAMPLES_MS = 500;
         let BASELINE_THRESHOLD_MULTIPLIER = 1.5;
 
@@ -264,31 +265,6 @@
             }
 
             selection.removeAllRanges();
-        }
-
-        // ========== HARDWARE PRIMING ==========
-        async function primeAudioHardware() {
-            if (!audioCtx) {
-                log('⚠️ Cannot prime - audio context not ready');
-                return;
-            }
-
-            log('🔊 Priming audio hardware with silent tone...');
-
-            const oscillator = audioCtx.createOscillator();
-            const silentGain = audioCtx.createGain();
-
-            oscillator.frequency.value = 440;
-            silentGain.gain.value = 0;
-
-            oscillator.connect(silentGain).connect(audioCtx.destination);
-            oscillator.start();
-            oscillator.stop(audioCtx.currentTime + 0.1);
-
-            // Wait for priming to complete
-            await new Promise(resolve => setTimeout(resolve, 200));
-
-            log('✅ Audio hardware primed');
         }
 
         // ========== FIREBASE LISTENERS ==========
@@ -325,12 +301,15 @@
 
                 const timeUntilStart = (startTime - now) / 1000;
                 const timeUntilNote = (expectedPlayTime - now) / 1000;
+                const windowStart = expectedPlayTime - WINDOW_BEFORE_MS;
+                const windowEnd = expectedPlayTime + WINDOW_AFTER_MS;
 
                 log(`🕐 Device current time: ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
                 log(`🕐 Sequence scheduled: ${new Date(startTime).toLocaleTimeString()}.${String(startTime % 1000).padStart(3, '0')}`);
                 log(`🕐 Time until start: ${timeUntilStart.toFixed(1)}s`);
                 log(`🎯 Expected play time: ${new Date(expectedPlayTime).toLocaleTimeString()}.${String(expectedPlayTime % 1000).padStart(3, '0')}`);
                 log(`   Time until note: ${timeUntilNote.toFixed(1)}s`);
+                log(`   Window: ${new Date(windowStart).toLocaleTimeString()}.${String(windowStart % 1000).padStart(3, '0')} → ${new Date(windowEnd).toLocaleTimeString()}.${String(windowEnd % 1000).padStart(3, '0')}`);
                 log(`   (MP3 seek position: ${sequence.note.offset}ms)`);
 
                 if (expectedPlayTime < now) {
@@ -373,7 +352,6 @@
                 });
 
                 audioCtx = new AudioContext();
-                await primeAudioHardware(); // Prime immediately after creating context
 
                 const source = audioCtx.createMediaStreamSource(stream);
                 analyser = audioCtx.createAnalyser();
@@ -478,8 +456,8 @@
 
             if (sequenceActive && expectedNote && !isNoteActive) {
                 const expectedTime = expectedNote.expectedPlayTime;
-                const windowStart = expectedTime - DETECTION_WINDOW_MS/2;
-                const windowEnd = expectedTime + DETECTION_WINDOW_MS/2;
+                const windowStart = expectedTime - WINDOW_BEFORE_MS;
+                const windowEnd = expectedTime + WINDOW_AFTER_MS;
 
                 if (now >= windowStart && now <= windowEnd) {
                     if (!windowEntered) {
@@ -557,7 +535,7 @@
 
         // ========== INITIALIZATION ==========
         window.onload = () => {
-            log('⏱️ Zynth Device - Hardware Primed ready');
+            log('⏱️ Zynth Device - Fixed Detection ready');
 
             document.getElementById('enableBtn').onclick = enableMicrophone;
             document.getElementById('disableBtn').onclick = disableMicrophone;
