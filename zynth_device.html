@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zynth Device - Two Note Detector with Lookback</title>
+    <title>Zynth Device - Two Note Detector with Lookback (FIXED)</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <style>
@@ -213,7 +213,7 @@
     </style>
 </head>
 <body>
-    <h1>⏱️ Zynth Device - Two Note Detector with Lookback</h1>
+    <h1>⏱️ Zynth Device - Two Note Detector with Lookback (FIXED)</h1>
 
     <div class="panel">
         <div style="display: flex; align-items: center; margin-bottom: 15px;">
@@ -434,7 +434,7 @@
         let note0ActualTime = null;
         let note0ExpectedTime = null;
         let note1ActualTime = null;
-        let note1ExpectedTime = null;
+        let note1ExpectedTime = null;  // This must be let, not const
 
         // ========== SPECTRUM RECORDING ==========
         const SPECTRUM_HISTORY_SECONDS = 15; // Keep 15 seconds of history
@@ -494,6 +494,9 @@
         let WINDOW_AFTER_MS = 6000;
         let BASELINE_SAMPLES_MS = 1000;
         let LOOKBACK_MS = 500;
+
+        // Known total system delay from measurements (speaker + mic)
+        const KNOWN_TOTAL_DELAY_MS = 1800;
 
         // ========== FFT SETUP ==========
         const FFT_SIZE = 2048;
@@ -611,9 +614,12 @@
 
                 if (expectedNotes) {
                     expectedNotes.forEach((note, i) => {
-                        const windowStart = note.expectedPlayTime - WINDOW_BEFORE_MS;
-                        const windowEnd = note.expectedPlayTime + WINDOW_AFTER_MS;
+                        // Calculate detection time with known delay
+                        const expectedDetectionTime = note.expectedPlayTime + KNOWN_TOTAL_DELAY_MS;
+                        const windowStart = expectedDetectionTime - WINDOW_BEFORE_MS;
+                        const windowEnd = expectedDetectionTime + WINDOW_AFTER_MS;
                         log(`🎯 Note ${i} (${note.pitch}) at: ${new Date(note.expectedPlayTime).toLocaleTimeString()}.${String(note.expectedPlayTime % 1000).padStart(3, '0')}`);
+                        log(`   Detection expected at: ${new Date(expectedDetectionTime).toLocaleTimeString()}.${String(expectedDetectionTime % 1000).padStart(3, '0')} (+${KNOWN_TOTAL_DELAY_MS}ms delay)`);
                         log(`   Window: ${new Date(windowStart).toLocaleTimeString()}.${String(windowStart % 1000).padStart(3, '0')} → ${new Date(windowEnd).toLocaleTimeString()}.${String(windowEnd % 1000).padStart(3, '0')}`);
                     });
                 }
@@ -637,7 +643,7 @@
                 const stream = await navigator.mediaDevices.getUserMedia({
                     audio: {
                         echoCancellation: false,
-                        noiseSuppression: true,
+                        noiseSuppression: true,  // Enable to reduce background noise
                         autoGainControl: false,
                         sampleRate: 44100
                     }
@@ -662,7 +668,7 @@
                 if (ambientLogInterval) clearInterval(ambientLogInterval);
                 ambientLogInterval = setInterval(() => {
                     if (isListening && !sequenceActive) {
-                        log(`📊 Ambient energy: ${currentAvgEnergy.toFixed(4)} at ${currentDominantFreq}Hz`);
+                        log(`📊 Ambient energy: ${currentAvgEnergy.toFixed(4)} at ${Math.round(currentDominantFreq)}Hz`);
                     }
                 }, 3000);
 
@@ -769,14 +775,11 @@
 
             // Detect notes
             if (sequenceActive && expectedNotes && expectedNoteIndex < expectedNotes.length && !isNoteActive) {
-                // Known total delay from our tests (~1.8 seconds)
-                const KNOWN_TOTAL_DELAY_MS = 1800;
-
-                // Adjust expected time to account for the measured delay
+                // FIX BUG 1: Define currentNote first!
+                const currentNote = expectedNotes[expectedNoteIndex];
                 const expectedPlayTime = currentNote.expectedPlayTime;
-                // Already defined --- const KNOWN_TOTAL_DELAY_MS = 1800; // 1.8 seconds
 
-                // Calculate when we actually expect to detect the note
+                // Calculate when we actually expect to detect the note (with known system delay)
                 const expectedDetectionTime = expectedPlayTime + KNOWN_TOTAL_DELAY_MS;
 
                 // Tight window centered on expected detection time
@@ -784,7 +787,6 @@
                 const windowEnd = expectedDetectionTime + 500;   // 500ms after
 
                 if (now >= windowStart && now <= windowEnd) {
-                    log(`🔍 IN WINDOW at ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}, windowEntered=${windowEntered}`);
                     if (!windowEntered) {
                         windowEntered = true;
                         baselineStartTime = now;
@@ -794,6 +796,7 @@
                         if (currentNoteEl) currentNoteEl.innerText = currentNote.pitch;
                         log(`🔍 WINDOW ${expectedNoteIndex} at ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
                         log(`   Window: ${new Date(windowStart).toLocaleTimeString()}.${String(windowStart % 1000).padStart(3, '0')} → ${new Date(windowEnd).toLocaleTimeString()}.${String(windowEnd % 1000).padStart(3, '0')}`);
+                        log(`   Expected detection: ${new Date(expectedDetectionTime).toLocaleTimeString()}.${String(expectedDetectionTime % 1000).padStart(3, '0')}`);
                     }
 
                     if (!baselineComplete) {
@@ -824,15 +827,16 @@
                             lastNoteTime = now;
                             detectedCount++;
 
-                            const delay = now - expectedTime;
+                            // FIX BUG 2: Use expectedPlayTime, not expectedTime
+                            const delay = now - expectedPlayTime;
 
                             if (expectedNoteIndex === 0) {
                                 // Store note 0 timing
                                 note0ActualTime = now;
-                                note0ExpectedTime = expectedTime;
+                                note0ExpectedTime = expectedPlayTime;
 
                                 log(`🔊 NOTE 0 DETECTED: G4 at ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
-                                log(`   Delay: ${delay}ms`);
+                                log(`   Delay: ${delay}ms (from schedule + ${KNOWN_TOTAL_DELAY_MS}ms system delay)`);
 
                                 // Send feedback for note 0
                                 db.ref('zynth/device_feedback').set({
@@ -840,17 +844,17 @@
                                     pitch: 'G4',
                                     delay: delay,
                                     detectedAt: now,
-                                    expectedAt: expectedTime,
+                                    expectedAt: expectedPlayTime,
                                     timestamp: now
                                 });
 
                                 // Calculate when note 1 should be heard based on note 0's actual timing
                                 const note1Offset = 696.6 - 301.9; // 394.7ms gap between note starts
-                                const note1ExpectedTime = note0ActualTime + note1Offset;
-                                note1ExpectedTime = note1ExpectedTime; // Store for later use
+                                // FIX BUG 3: Don't use const - assign to outer let variable
+                                note1ExpectedTime = note0ActualTime + note1Offset;
 
                                 log(`📅 Note 1 expected at: ${new Date(note1ExpectedTime).toLocaleTimeString()}.${String(note1ExpectedTime % 1000).padStart(3, '0')}`);
-                                log(`   (from note 0 actual + ${note1Offset}ms gap)`);
+                                log(`   (from note 0 actual + ${note1Offset}ms gap + ${KNOWN_TOTAL_DELAY_MS}ms system delay)`);
 
                                 // Set up window for note 1
                                 expectedNoteIndex = 1;
@@ -865,10 +869,9 @@
                             } else if (expectedNoteIndex === 1) {
                                 // Store note 1 timing
                                 note1ActualTime = now;
-                                note1ExpectedTime = expectedTime;
 
                                 log(`🔊 NOTE 1 DETECTED: A4 at ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
-                                log(`   Delay: ${delay}ms`);
+                                log(`   Delay: ${delay}ms (from schedule + ${KNOWN_TOTAL_DELAY_MS}ms system delay)`);
 
                                 // Send feedback for note 1
                                 db.ref('zynth/device_feedback').set({
@@ -876,7 +879,7 @@
                                     pitch: 'A4',
                                     delay: delay,
                                     detectedAt: now,
-                                    expectedAt: expectedTime,
+                                    expectedAt: expectedPlayTime,
                                     timestamp: now
                                 });
 
@@ -925,7 +928,7 @@
                             if (noteCountEl) noteCountEl.innerText = `${detectedCount}/2`;
                             if (lastDelayEl) lastDelayEl.innerText = delay + ' ms';
 
-                            if (expectedNoteIndex >= expectedNotes.length) {
+                            if (expectedNoteIndex >= 2) {
                                 log('✅ All notes detected');
                                 const currentNoteEl = document.getElementById('currentNote');
                                 if (currentNoteEl) currentNoteEl.innerText = 'Complete';
@@ -1034,7 +1037,8 @@
 
         // ========== INITIALIZATION ==========
         window.onload = () => {
-            log('⏱️ Zynth Device - Two Note Detector with Lookback ready');
+            log('⏱️ Zynth Device - Two Note Detector with Lookback (FIXED) ready');
+            log(`⚙️ Known system delay: ${KNOWN_TOTAL_DELAY_MS}ms`);
 
             // Load saved settings
             loadSensitivitySettings();
