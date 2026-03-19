@@ -317,6 +317,13 @@
                     ...sequence.note,
                     expectedPlayTime: expectedPlayTime
                 };
+
+                const listenWindowStart = expectedPlayTime - DETECTION_WINDOW_MS/2;
+                const listenWindowEnd = expectedPlayTime + DETECTION_WINDOW_MS/2;
+                log(`📅 Detection window: ${new Date(listenWindowStart).toLocaleTimeString()}.${String(listenWindowStart % 1000).padStart(3, '0')} → ${new Date(listenWindowEnd).toLocaleTimeString()}.${String(listenWindowEnd % 1000).padStart(3, '0')}`);
+                log(`📅 Current time: ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
+                log(`📅 Time until window: ${((listenWindowStart - now)/1000).toFixed(1)}s`);
+
                 detectedCount = 0;
                 isNoteActive = false;
                 windowEntered = false;
