@@ -12,7 +12,7 @@ Survey Purge: During setup, you might do several "test walks." This button allow
 
 Database Health: Keeping the devices node empty when the show isn't running prevents Firebase from racking up unnecessary "Simultaneous Connection" charges.
 
-Seat Configuration: Upload seat_config.tsv to define seat positions for spatial audio calculations. Also computes neighbor map for distributed calibration.
+Seat Configuration: Upload seat_config.tsv to define seat positions for spatial audio calculations. Also computes neighbor map for distributed calibration using the section column from TSV.
 
 Tuning Mode Configuration: Upload tuning_mode.json for the piccolo "Jesu, Joy of Man's Desiring" calibration sequence.
 
@@ -20,7 +20,7 @@ Operational SOP for Admin:
 
 * Pre-Show:
   (1) Upload pillar_config.json with the current XY locations of the 4 pillars in meters from front left of house.
-  (2) Upload seat_config.tsv with all seat positions for spatial audio. Neighbor map auto-computed.
+  (2) Upload seat_config.tsv with all seat positions for spatial audio. Neighbor map auto-computed using section info.
   (3) Upload tuning_mode.json for the piccolo calibration sequence (if using).
   (4) Check Admin to ensure Pillars = 0 and Devices = 0 (a clean slate).
   (5) Upload visual_timeline.json, which schedules the audio and visual cues.
@@ -136,7 +136,7 @@ Operational SOP for Admin:
             </div>
 
             <div class="config-status">
-                <div class="status-title">NEIGHBOR MAP (2m radius)</div>
+                <div class="status-title">NEIGHBOR MAP (2m radius, same section only)</div>
                 <div id="neighbor-view" style="max-height: 150px; overflow-y: auto;">
                     <div style="color: #444; font-style: italic; font-size: 0.8rem;">Generated from seat upload</div>
                 </div>
@@ -315,12 +315,11 @@ Operational SOP for Admin:
             let html = "<table><tr><th>Seat</th><th>X</th><th>Y</th><th>Section</th></tr>";
             // Show first 10 seats as preview
             config.seats.slice(0, 10).forEach(s => {
-                const section = s.y < 15 ? 'Orchestra' : 'Balcony';
                 html += `<tr>
                     <td style="color:#00ffcc;">${s.id}</td>
                     <td>${s.x}</td>
                     <td>${s.y}</td>
-                    <td>${section}</td>
+                    <td>${s.section || 'Orchestra'}</td>
                 </tr>`;
             });
             if (config.seats.length > 10) {
@@ -337,7 +336,7 @@ Operational SOP for Admin:
             }
 
             const seats = Object.keys(config.neighborMap).slice(0, 8);
-            let html = "<table><tr><th>Seat</th><th>Neighbors</th><th>Pillars</th></tr>";
+            let html = "<table><tr><th>Seat</th><th>Neighbors (2m)</th><th>Pillars</th></tr>";
 
             seats.forEach(seatId => {
                 const entry = config.neighborMap[seatId];
@@ -529,10 +528,11 @@ Operational SOP for Admin:
                     const lines = text.split('\n').filter(line => line.trim());
                     const headers = lines[0].split('\t');
 
-                    // Find column indices (handle different header formats)
+                    // Find column indices
                     const idIdx = headers.findIndex(h => h.toLowerCase().includes('id') || h.toLowerCase().includes('seat'));
                     const xIdx = headers.findIndex(h => h.toLowerCase() === 'x');
                     const yIdx = headers.findIndex(h => h.toLowerCase() === 'y');
+                    const sectionIdx = headers.findIndex(h => h.toLowerCase() === 'section');
 
                     if (idIdx === -1 || xIdx === -1 || yIdx === -1) {
                         throw new Error("TSV must have 'seat_id' (or 'id'), 'x', and 'y' columns");
@@ -541,14 +541,15 @@ Operational SOP for Admin:
                     const seats = [];
                     for (let i = 1; i < lines.length; i++) {
                         const cols = lines[i].split('\t');
-                        if (cols.length <= Math.max(idIdx, xIdx, yIdx)) continue;
+                        if (cols.length <= Math.max(idIdx, xIdx, yIdx, sectionIdx)) continue;
 
                         const id = cols[idIdx].trim();
                         const x = parseFloat(cols[xIdx]);
                         const y = parseFloat(cols[yIdx]);
+                        const section = sectionIdx !== -1 ? cols[sectionIdx].trim() : 'Orchestra';
 
                         if (id && !isNaN(x) && !isNaN(y)) {
-                            seats.push({ id, x, y });
+                            seats.push({ id, x, y, section });
                         }
                     }
 
@@ -558,17 +559,17 @@ Operational SOP for Admin:
 
                     log(`Parsed ${seats.length} seats from TSV`);
 
+                    // Log section distribution
+                    const sections = [...new Set(seats.map(s => s.section))];
+                    log(`📊 Sections found: ${sections.join(', ')}`);
+
                     // Compute neighbor map for distributed calibration
-                    log("🗺️ Computing neighbor map (2m radius)...");
+                    log("🗺️ Computing neighbor map (2m radius, same section only)...");
                     const neighborMap = {};
 
                     // First, separate pillars from patron seats
                     const pillars = seats.filter(s => s.id.startsWith('PILLAR_'));
                     const patronSeats = seats.filter(s => !s.id.startsWith('PILLAR_'));
-
-                    // Determine section thresholds - use Y coordinate to separate orchestra from balcony
-                    // Assume orchestra is y < 15, balcony is y >= 15 (adjust based on actual theater)
-                    const ORCHESTRA_MAX_Y = 15;
 
                     for (const seat of patronSeats) {
                         // Find neighbors within 2m that are in the same section
@@ -576,10 +577,8 @@ Operational SOP for Admin:
                             .filter(other => {
                                 if (other.id === seat.id) return false; // Skip self
 
-                                // Check if same section (orchestra vs balcony)
-                                const sameSection = (seat.y < ORCHESTRA_MAX_Y && other.y < ORCHESTRA_MAX_Y) ||
-                                                   (seat.y >= ORCHESTRA_MAX_Y && other.y >= ORCHESTRA_MAX_Y);
-                                if (!sameSection) return false;
+                                // CRITICAL FIX: Use section from TSV, not hardcoded Y threshold
+                                if (other.section !== seat.section) return false;
 
                                 const dx = seat.x - other.x;
                                 const dy = seat.y - other.y;
@@ -597,7 +596,7 @@ Operational SOP for Admin:
                         };
                     }
 
-                    // Also create entries for pillars (they may need to know their neighbors too)
+                    // Also create entries for pillars
                     for (const pillar of pillars) {
                         // Pillars can have patron neighbors (but not other pillars in neighbor list)
                         const patronNeighbors = patronSeats
@@ -609,14 +608,24 @@ Operational SOP for Admin:
                             })
                             .map(s => s.id);
 
+                        // Log if pillars have no neighbors (expected in this venue)
+                        if (patronNeighbors.length === 0) {
+                            log(`ℹ️ Pillar ${pillar.id} has no patrons within 2m - this is expected as pillars are at corners`);
+                        }
+
                         neighborMap[pillar.id] = {
-                            neighbors: patronNeighbors, // Pillar's neighbors are patrons within 2m
-                            pillars: pillars.filter(p => p.id !== pillar.id).map(p => p.id) // Other pillars
+                            neighbors: patronNeighbors,
+                            pillars: pillars.filter(p => p.id !== pillar.id).map(p => p.id)
                         };
                     }
 
                     log(`✅ Generated neighbor map for ${Object.keys(neighborMap).length} seats`);
-                    log(`   Sample: ${patronSeats[0]?.id} has ${neighborMap[patronSeats[0]?.id]?.neighbors?.length || 0} neighbors`);
+
+                    // Show sample
+                    const sampleSeat = patronSeats[Math.floor(patronSeats.length / 2)];
+                    if (sampleSeat) {
+                        log(`   Sample: ${sampleSeat.id} (${sampleSeat.section}) has ${neighborMap[sampleSeat.id]?.neighbors?.length || 0} neighbors`);
+                    }
 
                     await db.ref('seat_config').set({
                         seats,
@@ -703,10 +712,10 @@ Operational SOP for Admin:
                     return;
                 }
 
-                // Convert to TSV
-                let tsv = "seat_id\tx\ty\n";
+                // Convert to TSV with section column
+                let tsv = "seat_id\tx\ty\tsection\n";
                 config.seats.forEach(seat => {
-                    tsv += `${seat.id}\t${seat.x}\t${seat.y}\n`;
+                    tsv += `${seat.id}\t${seat.x}\t${seat.y}\t${seat.section || 'Orchestra'}\n`;
                 });
 
                 const blob = new Blob([tsv], { type: 'text/tab-separated-values' });
@@ -715,7 +724,7 @@ Operational SOP for Admin:
                 a.href = url;
                 a.download = `seat_config_${Date.now()}.tsv`;
                 a.click();
-                log("ACTION: Seat configuration downloaded.");
+                log("ACTION: Seat configuration downloaded (includes section column).");
             } catch (e) { log(`ERROR: Download failed: ${e.message}`); }
         }
 
