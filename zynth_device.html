@@ -774,11 +774,14 @@
 
                 // Adjust expected time to account for the measured delay
                 const expectedPlayTime = currentNote.expectedPlayTime;
-                const expectedArrivalTime = expectedPlayTime + KNOWN_TOTAL_DELAY_MS;
+                const KNOWN_TOTAL_DELAY_MS = 1800; // 1.8 seconds
 
-                // Tight window centered on expected arrival
-                const windowStart = expectedArrivalTime - 500; // 500ms before
-                const windowEnd = expectedArrivalTime + 500;   // 500ms after
+                // Calculate when we actually expect to detect the note
+                const expectedDetectionTime = expectedPlayTime + KNOWN_TOTAL_DELAY_MS;
+
+                // Tight window centered on expected detection time
+                const windowStart = expectedDetectionTime - 500; // 500ms before
+                const windowEnd = expectedDetectionTime + 500;   // 500ms after
 
                 if (now >= windowStart && now <= windowEnd) {
                     if (!windowEntered) {
