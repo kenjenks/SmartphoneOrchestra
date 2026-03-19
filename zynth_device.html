@@ -289,55 +289,26 @@
         // Listen for test sequence from conductor
         db.ref('zynth/single_note_test').on('value', snap => {
             const sequence = snap.val();
-            const now = Date.now() + serverOffset;
-
-            log(`🔥 Firebase update received: ${sequence ? 'ACTIVE' : 'CLEARED'}`);
 
             if (sequence && sequence.status === 'ACTIVE') {
-                const startTime = sequence.scheduledWallTime;
-                const expectedPlayTime = startTime + sequence.note.jitter;
+                // Use the server timestamp as the absolute reference
+                const serverTime = sequence.serverTimestamp;
+                const scheduledWallTime = sequence.scheduledWallTime;
 
-                const timeUntilStart = (startTime - now) / 1000;
-                const timeUntilNote = (expectedPlayTime - now) / 1000;
+                // Calculate expected play time using the same formula as conductor
+                const expectedPlayTime = scheduledWallTime + sequence.note.jitter;
 
-                log(`🕐 Device current time: ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
-                log(`🕐 Sequence scheduled: ${new Date(startTime).toLocaleTimeString()}.${String(startTime % 1000).padStart(3, '0')}`);
-                log(`🕐 Time until start: ${timeUntilStart.toFixed(1)}s`);
-                log(`🎯 Expected play time: ${new Date(expectedPlayTime).toLocaleTimeString()}.${String(expectedPlayTime % 1000).padStart(3, '0')}`);
-                log(`   Time until note: ${timeUntilNote.toFixed(1)}s`);
-                log(`   (MP3 seek position: ${sequence.note.offset}ms)`);
+                // Now compute window relative to THIS device's current time
+                const now = Date.now() + serverOffset;
 
-                if (expectedPlayTime < now) {
-                    log(`⚠️ WARNING: Expected play time is ${(now - expectedPlayTime).toFixed(0)}ms in the past!`);
-                }
+                // Log everything for debugging
+                log(`🕐 Server timestamp: ${new Date(serverTime).toLocaleTimeString()}.${String(serverTime % 1000).padStart(3, '0')}`);
+                log(`🕐 Scheduled start: ${new Date(scheduledWallTime).toLocaleTimeString()}.${String(scheduledWallTime % 1000).padStart(3, '0')}`);
+                log(`🕐 Expected play: ${new Date(expectedPlayTime).toLocaleTimeString()}.${String(expectedPlayTime % 1000).padStart(3, '0')}`);
+                log(`🕐 Device now: ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
+                log(`🕐 Difference: ${(expectedPlayTime - now).toFixed(0)}ms`);
 
-                sequenceActive = true;
-                sequenceStartWallTime = startTime;
-                expectedNote = {
-                    ...sequence.note,
-                    expectedPlayTime: expectedPlayTime
-                };
-
-                const listenWindowStart = expectedPlayTime - DETECTION_WINDOW_MS/2;
-                const listenWindowEnd = expectedPlayTime + DETECTION_WINDOW_MS/2;
-                log(`📅 Detection window: ${new Date(listenWindowStart).toLocaleTimeString()}.${String(listenWindowStart % 1000).padStart(3, '0')} → ${new Date(listenWindowEnd).toLocaleTimeString()}.${String(listenWindowEnd % 1000).padStart(3, '0')}`);
-                log(`📅 Current time: ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
-                log(`📅 Time until window: ${((listenWindowStart - now)/1000).toFixed(1)}s`);
-
-                detectedCount = 0;
-                isNoteActive = false;
-                windowEntered = false;
-
-                // Reset baseline for new sequence
-                baselineEnergy = 0;
-                baselineSamples = [];
-                baselineComplete = false;
-                baselineStartTime = 0;
-
-            } else if (!sequence) {
-                sequenceActive = false;
-                expectedNote = null;
-                log('⏹️ Sequence ended');
+                // ... rest of the code
             }
         });
 
