@@ -378,6 +378,7 @@
 
         // ========== NOTE DETECTION ==========
         function detectNote() {
+            console.log('🔍 detectNote running', { isListening, hasAnalyser: !!analyser });
             if (!isListening || !analyser) {
                 animationFrame = null;
                 return;
