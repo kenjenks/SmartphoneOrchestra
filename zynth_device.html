@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zynth Device - Baseline Adaptation (FIXED)</title>
+    <title>Zynth Device - Hardware Primed</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <style>
@@ -132,7 +132,7 @@
     </style>
 </head>
 <body>
-    <h1>⏱️ Zynth Device - Baseline Adaptation (FIXED)</h1>
+    <h1>⏱️ Zynth Device - Hardware Primed</h1>
 
     <div class="panel">
         <div style="display: flex; align-items: center; margin-bottom: 15px;">
@@ -209,6 +209,7 @@
         let ambientLogInterval = null;
         let windowEntered = false;
         let lastHeartbeat = 0;
+        let lastFrameTime = 0;
 
         // Test sequence state
         let sequenceActive = false;
@@ -265,6 +266,31 @@
             selection.removeAllRanges();
         }
 
+        // ========== HARDWARE PRIMING ==========
+        async function primeAudioHardware() {
+            if (!audioCtx) {
+                log('⚠️ Cannot prime - audio context not ready');
+                return;
+            }
+
+            log('🔊 Priming audio hardware with silent tone...');
+
+            const oscillator = audioCtx.createOscillator();
+            const silentGain = audioCtx.createGain();
+
+            oscillator.frequency.value = 440;
+            silentGain.gain.value = 0;
+
+            oscillator.connect(silentGain).connect(audioCtx.destination);
+            oscillator.start();
+            oscillator.stop(audioCtx.currentTime + 0.1);
+
+            // Wait for priming to complete
+            await new Promise(resolve => setTimeout(resolve, 200));
+
+            log('✅ Audio hardware primed');
+        }
+
         // ========== FIREBASE LISTENERS ==========
         db.ref('.info/connected').on('value', snap => {
             const connected = snap.val();
@@ -287,7 +313,6 @@
             log(`⏱️ Server offset: ${serverOffset}ms`);
         });
 
-        // Listen for test sequence from conductor
         db.ref('zynth/single_note_test').on('value', snap => {
             const sequence = snap.val();
             const now = Date.now() + serverOffset;
@@ -312,7 +337,7 @@
                     log(`⚠️ WARNING: Expected play time is ${(now - expectedPlayTime).toFixed(0)}ms in the past!`);
                 }
 
-                // ========== CRITICAL FIX: Set all sequence state variables ==========
+                // Set sequence state
                 sequenceActive = true;
                 sequenceStartWallTime = startTime;
                 expectedNote = {
@@ -326,7 +351,6 @@
                 baselineSamples = [];
                 baselineComplete = false;
 
-                // Log that sequence is now active
                 log(`✅ Sequence ACTIVE - ready to detect`);
 
             } else if (!sequence) {
@@ -349,6 +373,8 @@
                 });
 
                 audioCtx = new AudioContext();
+                await primeAudioHardware(); // Prime immediately after creating context
+
                 const source = audioCtx.createMediaStreamSource(stream);
                 analyser = audioCtx.createAnalyser();
                 analyser.fftSize = FFT_SIZE;
@@ -362,7 +388,6 @@
                 document.getElementById('status').innerText = 'Listening';
                 log('✅ Mic enabled - waiting for single note test');
 
-                // Start ambient energy logging
                 if (ambientLogInterval) clearInterval(ambientLogInterval);
                 ambientLogInterval = setInterval(() => {
                     if (isListening && !sequenceActive) {
@@ -402,7 +427,17 @@
 
         // ========== NOTE DETECTION ==========
         function detectNote() {
-            // Heartbeat to prove loop is running
+            // Performance monitoring
+            const loopStart = performance.now();
+            if (lastFrameTime) {
+                const frameGap = loopStart - lastFrameTime;
+                if (frameGap > 100) {
+                    console.warn(`⚠️ Slow detection loop: ${frameGap.toFixed(0)}ms between frames`);
+                }
+            }
+            lastFrameTime = loopStart;
+
+            // Heartbeat
             if (Math.floor(Date.now()/1000) !== Math.floor(lastHeartbeat/1000)) {
                 lastHeartbeat = Date.now();
                 console.log('💓 detectNote heartbeat', { isListening, sequenceActive });
@@ -415,7 +450,6 @@
 
             const now = Date.now() + serverOffset;
 
-            // Get frequency data
             const bufferLength = analyser.frequencyBinCount;
             const dataArray = new Uint8Array(bufferLength);
             analyser.getByteFrequencyData(dataArray);
@@ -425,7 +459,6 @@
             const minBin = Math.floor(FLUTE_RANGE.min / nyquist * bufferLength);
             const maxBin = Math.ceil(FLUTE_RANGE.max / nyquist * bufferLength);
 
-            // Calculate average energy in flute range
             let totalEnergy = 0;
             let binCount = 0;
             for (let i = minBin; i < maxBin && i < bufferLength; i++) {
@@ -436,7 +469,6 @@
 
             currentAvgEnergy = avgEnergy;
 
-            // Update displays
             document.getElementById('energyValue').innerText = avgEnergy.toFixed(4);
             document.getElementById('energyMeter').style.width = (avgEnergy * 100) + '%';
             document.getElementById('baselineValue').innerText = baselineEnergy.toFixed(4);
@@ -444,17 +476,12 @@
             let ratioToBaseline = baselineEnergy > 0 ? avgEnergy / baselineEnergy : 1.0;
             document.getElementById('energyRatio').innerText = ratioToBaseline.toFixed(2);
 
-            // Look for onset during active sequence
             if (sequenceActive && expectedNote && !isNoteActive) {
                 const expectedTime = expectedNote.expectedPlayTime;
-
-                // Define fixed window boundaries centered on expected time
                 const windowStart = expectedTime - DETECTION_WINDOW_MS/2;
                 const windowEnd = expectedTime + DETECTION_WINDOW_MS/2;
 
-                // Check if we're inside the window using fixed boundaries
                 if (now >= windowStart && now <= windowEnd) {
-                    // Log when we enter the window (first time only)
                     if (!windowEntered) {
                         windowEntered = true;
                         baselineStartTime = now;
@@ -466,12 +493,10 @@
                         log(`   Starting baseline measurement...`);
                     }
 
-                    // Measure baseline for first 500ms
                     if (!baselineComplete) {
                         if (now - baselineStartTime < BASELINE_SAMPLES_MS) {
                             baselineSamples.push(avgEnergy);
                         } else {
-                            // Calculate baseline as median of samples
                             if (baselineSamples.length > 0) {
                                 baselineSamples.sort((a, b) => a - b);
                                 baselineEnergy = baselineSamples[Math.floor(baselineSamples.length / 2)];
@@ -481,18 +506,15 @@
                         }
                     }
 
-                    // Log energy occasionally for debugging
                     if (Math.floor(now/1000) !== Math.floor(lastLogTime/1000)) {
                         lastLogTime = now;
                         log(`📊 Window energy: ${avgEnergy.toFixed(4)}, baseline ratio: ${ratioToBaseline.toFixed(2)}`);
                     }
 
-                    // Once baseline is established, look for energy above threshold
                     if (baselineComplete && ratioToBaseline > BASELINE_THRESHOLD_MULTIPLIER) {
                         log(`📈 ENERGY SPIKE! ${avgEnergy.toFixed(4)} (${(ratioToBaseline*100-100).toFixed(1)}% above baseline)`);
 
                         if (now - lastNoteTime > MIN_TIME_BETWEEN_NOTES) {
-                            // Note started!
                             isNoteActive = true;
                             noteStartTime = now;
                             lastNoteTime = now;
@@ -509,7 +531,6 @@
                             log(`   Expected: ${new Date(expectedTime).toLocaleTimeString()}.${String(expectedTime % 1000).padStart(3, '0')}`);
                             log(`   Delay: ${delay}ms, Energy: ${avgEnergy.toFixed(4)}, Baseline: ${baselineEnergy.toFixed(4)}`);
 
-                            // Send feedback to conductor
                             db.ref('zynth/device_feedback').set({
                                 delay: delay,
                                 detectedAt: now,
@@ -520,13 +541,11 @@
                         }
                     }
                 } else if (windowEntered) {
-                    // We just exited the window
                     windowEntered = false;
                     log(`🚪 EXITED WINDOW at ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
                 }
             }
 
-            // Note ending
             if (isNoteActive && avgEnergy < baselineEnergy * 0.5) {
                 isNoteActive = false;
                 log(`✅ Note ended - duration: ${now - noteStartTime}ms`);
@@ -538,7 +557,7 @@
 
         // ========== INITIALIZATION ==========
         window.onload = () => {
-            log('⏱️ Zynth Device - Baseline Adaptation (FIXED) ready');
+            log('⏱️ Zynth Device - Hardware Primed ready');
 
             document.getElementById('enableBtn').onclick = enableMicrophone;
             document.getElementById('disableBtn').onclick = disableMicrophone;
