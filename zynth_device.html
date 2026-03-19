@@ -400,110 +400,133 @@
 
         // ========== NOTE DETECTION ==========
         function detectNote() {
-            if (!isListening || !analyser) {
-                animationFrame = null;
-                return;
-            }
+        if (!isListening || !analyser) {
+            animationFrame = null;
+            return;
+        }
 
-            const now = Date.now() + serverOffset;
+        const now = Date.now() + serverOffset;
 
-            // Get frequency data
-            const bufferLength = analyser.frequencyBinCount;
-            const dataArray = new Uint8Array(bufferLength);
-            analyser.getByteFrequencyData(dataArray);
+        // Get frequency data
+        const bufferLength = analyser.frequencyBinCount;
+        const dataArray = new Uint8Array(bufferLength);
+        analyser.getByteFrequencyData(dataArray);
 
-            const nyquist = audioCtx.sampleRate / 2;
+        const nyquist = audioCtx.sampleRate / 2;
 
-            const minBin = Math.floor(FLUTE_RANGE.min / nyquist * bufferLength);
-            const maxBin = Math.ceil(FLUTE_RANGE.max / nyquist * bufferLength);
+        const minBin = Math.floor(FLUTE_RANGE.min / nyquist * bufferLength);
+        const maxBin = Math.ceil(FLUTE_RANGE.max / nyquist * bufferLength);
 
-            let totalEnergy = 0;
-            let binCount = 0;
-            for (let i = minBin; i < maxBin && i < bufferLength; i++) {
-                totalEnergy += dataArray[i] / 255;
-                binCount++;
-            }
-            const avgEnergy = binCount > 0 ? totalEnergy / binCount : 0;
+        // Calculate average energy in flute range
+        let totalEnergy = 0;
+        let binCount = 0;
+        for (let i = minBin; i < maxBin && i < bufferLength; i++) {
+            totalEnergy += dataArray[i] / 255;
+            binCount++;
+        }
+        const avgEnergy = binCount > 0 ? totalEnergy / binCount : 0;
 
-            currentAvgEnergy = avgEnergy;
+        currentAvgEnergy = avgEnergy;
 
-            // Update displays
-            document.getElementById('energyValue').innerText = avgEnergy.toFixed(4);
-            document.getElementById('energyMeter').style.width = (avgEnergy * 100) + '%';
-            document.getElementById('baselineValue').innerText = baselineEnergy.toFixed(4);
+        // Update displays
+        document.getElementById('energyValue').innerText = avgEnergy.toFixed(4);
+        document.getElementById('energyMeter').style.width = (avgEnergy * 100) + '%';
+        document.getElementById('baselineValue').innerText = baselineEnergy.toFixed(4);
 
-            let ratioToBaseline = baselineEnergy > 0 ? avgEnergy / baselineEnergy : 1.0;
-            document.getElementById('energyRatio').innerText = ratioToBaseline.toFixed(2);
+        let ratioToBaseline = baselineEnergy > 0 ? avgEnergy / baselineEnergy : 1.0;
+        document.getElementById('energyRatio').innerText = ratioToBaseline.toFixed(2);
 
-            // Look for onset during active sequence
-            if (sequenceActive && expectedNote && !isNoteActive) {
-                const expectedTime = expectedNote.expectedPlayTime;
+        // Look for onset during active sequence
+        if (sequenceActive && expectedNote && !isNoteActive) {
+            const expectedTime = expectedNote.expectedPlayTime;
 
-                if (Math.abs(now - expectedTime) < DETECTION_WINDOW_MS) {
-                    // Log when we enter the window
-                    if (!windowEntered) {
-                        windowEntered = true;
-                        baselineStartTime = now;
-                        baselineSamples = [];
-                        baselineComplete = false;
-                        log(`🔍 ENTERED WINDOW at ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
-                        log(`   Expected: ${new Date(expectedTime).toLocaleTimeString()}.${String(expectedTime % 1000).padStart(3, '0')}`);
-                        log(`   Starting baseline measurement...`);
-                    }
+            // Define fixed window boundaries centered on expected time
+            const windowStart = expectedTime - DETECTION_WINDOW_MS/2;
+            const windowEnd = expectedTime + DETECTION_WINDOW_MS/2;
 
-                    // Measure baseline for first 500ms
-                    if (!baselineComplete) {
-                        if (now - baselineStartTime < BASELINE_SAMPLES_MS) {
-                            baselineSamples.push(avgEnergy);
-                        } else {
-                            // Calculate baseline as median of samples
-                            if (baselineSamples.length > 0) {
-                                baselineSamples.sort((a, b) => a - b);
-                                baselineEnergy = baselineSamples[Math.floor(baselineSamples.length / 2)];
-                                baselineComplete = true;
-                                log(`📊 Baseline established: ${baselineEnergy.toFixed(4)} (${baselineSamples.length} samples)`);
-                            }
-                        }
-                    }
+            // Check if we're inside the window using fixed boundaries
+            if (now >= windowStart && now <= windowEnd) {
+                // Log when we enter the window (first time only)
+                if (!windowEntered) {
+                    windowEntered = true;
+                    baselineStartTime = now;
+                    baselineSamples = [];
+                    baselineComplete = false;
+                    log(`🔍 ENTERED WINDOW at ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
+                    log(`   Window: ${new Date(windowStart).toLocaleTimeString()}.${String(windowStart % 1000).padStart(3, '0')} → ${new Date(windowEnd).toLocaleTimeString()}.${String(windowEnd % 1000).padStart(3, '0')}`);
+                    log(`   Expected: ${new Date(expectedTime).toLocaleTimeString()}.${String(expectedTime % 1000).padStart(3, '0')}`);
+                    log(`   Starting baseline measurement...`);
+                }
 
-                    // Log energy occasionally for debugging
-                    if (Math.floor(now/1000) !== Math.floor(lastLogTime/1000)) {
-                        lastLogTime = now;
-                        log(`📊 Window energy: ${avgEnergy.toFixed(4)}, baseline ratio: ${ratioToBaseline.toFixed(2)}`);
-                    }
-
-                    // Once baseline is established, look for energy above threshold
-                    if (baselineComplete && ratioToBaseline > BASELINE_THRESHOLD_MULTIPLIER) {
-                        log(`📈 ENERGY SPIKE! ${avgEnergy.toFixed(4)} (${(ratioToBaseline*100-100).toFixed(1)}% above baseline)`);
-
-                        if (now - lastNoteTime > MIN_TIME_BETWEEN_NOTES) {
-                            isNoteActive = true;
-                            noteStartTime = now;
-                            lastNoteTime = now;
-                            detectedCount++;
-
-                            const delay = now - expectedTime;
-
-                            document.getElementById('lastOnset').innerText =
-                                new Date(now).toLocaleTimeString() + `.${String(now % 1000).padStart(3, '0')}`;
-                            document.getElementById('noteCount').innerText = detectedCount;
-                            document.getElementById('lastDelay').innerText = delay + ' ms';
-
-                            log(`🔊 NOTE DETECTED at ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
-                            log(`   Expected: ${new Date(expectedTime).toLocaleTimeString()}.${String(expectedTime % 1000).padStart(3, '0')}`);
-                            log(`   Delay: ${delay}ms, Energy: ${avgEnergy.toFixed(4)}, Baseline: ${baselineEnergy.toFixed(4)}`);
-
-                            db.ref('zynth/device_feedback').set({
-                                delay: delay,
-                                detectedAt: now,
-                                expectedAt: expectedTime,
-                                note: expectedNote.pitch,
-                                timestamp: now
-                            });
+                // Measure baseline for first 500ms
+                if (!baselineComplete) {
+                    if (now - baselineStartTime < BASELINE_SAMPLES_MS) {
+                        baselineSamples.push(avgEnergy);
+                    } else {
+                        // Calculate baseline as median of samples
+                        if (baselineSamples.length > 0) {
+                            baselineSamples.sort((a, b) => a - b);
+                            baselineEnergy = baselineSamples[Math.floor(baselineSamples.length / 2)];
+                            baselineComplete = true;
+                            log(`📊 Baseline established: ${baselineEnergy.toFixed(4)} (${baselineSamples.length} samples)`);
                         }
                     }
                 }
+
+                // Log energy occasionally for debugging
+                if (Math.floor(now/1000) !== Math.floor(lastLogTime/1000)) {
+                    lastLogTime = now;
+                    log(`📊 Window energy: ${avgEnergy.toFixed(4)}, baseline ratio: ${ratioToBaseline.toFixed(2)}`);
+                }
+
+                // Once baseline is established, look for energy above threshold
+                if (baselineComplete && ratioToBaseline > BASELINE_THRESHOLD_MULTIPLIER) {
+                    log(`📈 ENERGY SPIKE! ${avgEnergy.toFixed(4)} (${(ratioToBaseline*100-100).toFixed(1)}% above baseline)`);
+
+                    if (now - lastNoteTime > MIN_TIME_BETWEEN_NOTES) {
+                        // Note started!
+                        isNoteActive = true;
+                        noteStartTime = now;
+                        lastNoteTime = now;
+                        detectedCount++;
+
+                        const delay = now - expectedTime;
+
+                        document.getElementById('lastOnset').innerText =
+                            new Date(now).toLocaleTimeString() + `.${String(now % 1000).padStart(3, '0')}`;
+                        document.getElementById('noteCount').innerText = detectedCount;
+                        document.getElementById('lastDelay').innerText = delay + ' ms';
+
+                        log(`🔊 NOTE DETECTED at ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
+                        log(`   Expected: ${new Date(expectedTime).toLocaleTimeString()}.${String(expectedTime % 1000).padStart(3, '0')}`);
+                        log(`   Delay: ${delay}ms, Energy: ${avgEnergy.toFixed(4)}, Baseline: ${baselineEnergy.toFixed(4)}`);
+
+                        // Send feedback to conductor
+                        db.ref('zynth/device_feedback').set({
+                            delay: delay,
+                            detectedAt: now,
+                            expectedAt: expectedTime,
+                            note: expectedNote.pitch,
+                            timestamp: now
+                        });
+                    }
+                }
+            } else if (windowEntered) {
+                // We just exited the window
+                windowEntered = false;
+                log(`🚪 EXITED WINDOW at ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
             }
+        }
+
+        // Note ending
+        if (isNoteActive && avgEnergy < baselineEnergy * 0.5) {
+            isNoteActive = false;
+            log(`✅ Note ended - duration: ${now - noteStartTime}ms`);
+        }
+
+        lastEnergy = avgEnergy;
+        animationFrame = requestAnimationFrame(detectNote);
+    }
 
             if (isNoteActive && avgEnergy < baselineEnergy * 0.5) {
                 isNoteActive = false;
