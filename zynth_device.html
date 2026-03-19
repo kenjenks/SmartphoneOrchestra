@@ -784,6 +784,7 @@
                 const windowEnd = expectedDetectionTime + 500;   // 500ms after
 
                 if (now >= windowStart && now <= windowEnd) {
+                    log(`🔍 IN WINDOW at ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}, windowEntered=${windowEntered}`);
                     if (!windowEntered) {
                         windowEntered = true;
                         baselineStartTime = now;
