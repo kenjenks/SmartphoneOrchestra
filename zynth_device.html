@@ -774,7 +774,7 @@
 
                 // Adjust expected time to account for the measured delay
                 const expectedPlayTime = currentNote.expectedPlayTime;
-                const KNOWN_TOTAL_DELAY_MS = 1800; // 1.8 seconds
+                // Already defined --- const KNOWN_TOTAL_DELAY_MS = 1800; // 1.8 seconds
 
                 // Calculate when we actually expect to detect the note
                 const expectedDetectionTime = expectedPlayTime + KNOWN_TOTAL_DELAY_MS;
