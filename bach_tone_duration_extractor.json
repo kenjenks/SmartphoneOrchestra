@@ -1,0 +1,64 @@
+{
+  "_comment": "================================================================",
+  "_comment1": "BACH TONE DURATION EXTRACTOR CONFIGURATION",
+  "_comment2": "Edit the values below to configure the extractor for your song",
+  "_comment3": "================================================================",
+  
+  "paths": {
+    "base_dir": "C:\\\\Users\\\\ken\\\\Documents\\\\Ken\\\\Fiction\\\\HMP_SW\\\\Script_Analysis_and_Production\\\\SmartphoneOrchestra stuff\\\\Jesu Joy",
+    "input_musicxml": "Tuning-Jesu - Stacatto - Piccolo.musicxml",
+    "input_musicxml_pillars": "Tuning-Jesu - Stacatto - quad piano.musicxml",
+    "output_file": "tuning_mode.json"
+  },
+  
+  "tempo": {
+    "bpm": 70,
+    "_comment": "Tempo in beats per minute (from the score)"
+  },
+  
+  "time_signature": {
+    "beats_per_measure": 3,
+    "beat_unit": 4,
+    "_comment": "Time signature (e.g., 3/4 means 3 beats per measure, quarter note gets the beat)"
+  },
+  
+  "calibration": {
+    "window_measures": 2,
+    "_comment": "Number of measures each pillar plays alone for mic delay calibration"
+  },
+  
+  "pillar_order": [
+    "PILLAR_FL",
+    "PILLAR_FR",
+    "PILLAR_BR",
+    "PILLAR_BL"
+  ],
+  "_pillar_order_comment": "Order of pillars for calibration windows (clockwise from front left)",
+  
+  "pillar_mapping": {
+    "PILLAR_FL": "P7",
+    "PILLAR_FR": "P8",
+    "PILLAR_BR": "P10",
+    "PILLAR_BL": "P9"
+  },
+  "_pillar_mapping_comment": "Maps pillar IDs to MusicXML part prefixes (e.g., 'P7' matches 'P7-Staff1', 'P7-Staff2')",
+  
+  "urls": {
+    "flute": "https://static.wixstatic.com/mp3/9178d1_15f2dad109ba41678cc46d01123b1dc5.mp3",
+    "test_pulse": "https://static.wixstatic.com/mp3/9178d1_63e58ac50ec7434eba6785cd3291c227.mp3",
+    "pillars": {
+      "FL": "https://static.wixstatic.com/mp3/9178d1_62aad804441d4642af5079609e98f652.mp3",
+      "FR": "https://static.wixstatic.com/mp3/9178d1_0cbc0362a1694c02920f45fcbf2d5cbc.mp3",
+      "BL": "https://static.wixstatic.com/mp3/9178d1_1e3aa9b8711a40f6879f44eace692019.mp3",
+      "BR": "https://static.wixstatic.com/mp3/9178d1_37856d1295fb48bb9a18b0e3885ec8e1.mp3",
+      "ALL": "https://static.wixstatic.com/mp3/9178d1_e79d0f407e984ca29b8cd4e2d386ff1b.mp3"
+    },
+    "_comment": "URLs for audio assets on Wix CDN"
+  },
+  
+  "analysis_params": {
+    "method": "musicxml_only",
+    "use_audio_alignment": false,
+    "_comment": "Set use_audio_alignment to true if you want to align with recorded audio (experimental)"
+  }
+}
