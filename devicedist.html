@@ -593,16 +593,36 @@ devicedist.html: Feature List
             }
         }
 
-        // --- LOAD PILLAR POSITIONS ---
+        // --- LOAD PILLAR POSITIONS FROM SEAT_CONFIG ---
         async function loadPillarPositions() {
             try {
-                const snap = await db.ref('pillar_config/pillars').once('value');
-                const pillars = snap.val();
-                if (pillars && Array.isArray(pillars)) {
-                    pillars.forEach(p => {
-                        pillarPositions[p.id] = { x: p.x, y: p.y };
+                const seatsSnap = await db.ref('seat_config/seats').once('value');
+                const seatsData = seatsSnap.val();
+
+                if (seatsData) {
+                    // Handle both object format (keyed by ID) and array format
+                    if (Array.isArray(seatsData)) {
+                        seatsData.forEach(seat => {
+                            if (seat.id && seat.id.startsWith('PILLAR_')) {
+                                pillarPositions[seat.id] = { x: seat.x, y: seat.y };
+                            }
+                        });
+                    } else {
+                        Object.entries(seatsData).forEach(([id, data]) => {
+                            if (id.startsWith('PILLAR_')) {
+                                pillarPositions[id] = { x: data.x, y: data.y };
+                            }
+                        });
+                    }
+
+                    log(`📌 Loaded ${Object.keys(pillarPositions).length} pillar positions from seat_config`);
+
+                    // Log the positions for verification
+                    Object.entries(pillarPositions).forEach(([id, pos]) => {
+                        log(`   ${id}: (${pos.x}, ${pos.y})`);
                     });
-                    log(`📌 Loaded ${Object.keys(pillarPositions).length} pillar positions`);
+                } else {
+                    log("⚠️ No seat_config data found for pillar positions");
                 }
             } catch (e) {
                 log(`⚠️ Could not load pillar positions: ${e.message}`);
