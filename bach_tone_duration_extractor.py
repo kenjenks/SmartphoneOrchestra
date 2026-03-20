@@ -62,11 +62,18 @@ class BachToneExtractor:
         # Pillar order for calibration windows
         self.pillar_order = config["pillar_order"]
 
-        # Pillar mapping (MusicXML part prefixes to pillar IDs)
-        self.pillar_mapping = {v: k for k, v in config["pillar_mapping"].items()}
+        # Pillar mapping (MusicXML part IDs to pillar IDs)
+        # FIXED: Use pillar_musicxml_mapping from config
+        self.pillar_mapping = config["pillar_musicxml_mapping"]
+
+        # Also create reverse mapping for lookup by part ID
+        self.part_id_to_pillar = {v: k for k, v in self.pillar_mapping.items()}
 
         # URLs for assets
         self.urls = config["urls"]
+
+        # Window start measures (default to [1, 3, 5, 7] if not in config)
+        self.window_start_measures = config.get("window_start_measures", [1, 3, 5, 7])
 
         # Calculate durations
         self.quarter_duration_ms = 60000 / self.tempo_bpm
@@ -77,6 +84,7 @@ class BachToneExtractor:
         print(f"   Time signature: {self.beats_per_measure}/{self.beat_unit}")
         print(f"   Measure duration: {self.measure_duration_ms:.1f}ms")
         print(f"   Window duration: {self.window_measures * self.measure_duration_ms:.1f}ms")
+        print(f"   Pillar mapping: {self.pillar_mapping}")
 
     def parse_piccolo_musicxml(self):
         """Extract perfect note sequence from piccolo MusicXML."""
@@ -175,11 +183,13 @@ class BachToneExtractor:
         """
         Extract pillar notes from quad piano MusicXML.
 
-        Each pillar plays alone during its designated window:
-        - Window 0: PILLAR_FL (measures 1-2)
-        - Window 1: PILLAR_FR (measures 3-4)
-        - Window 2: PILLAR_BR (measures 5-6)
-        - Window 3: PILLAR_BL (measures 7-8)
+        Uses pillar_musicxml_mapping from config to map MusicXML part IDs to pillar IDs.
+        Uses window_start_measures from config to define calibration windows.
+
+        Returns:
+            - pillar_notes: list of dicts with pillar_id, index, measure, ms_offset, duration_ms, pitch, pulse_ms
+            - pillar_cal_windows: list of dicts with pillar_id, start_ms, end_ms (2-measure windows)
+            - total_duration_ms: total duration of all pillar notes
         """
         print(f"\n🎹 Loading pillar MusicXML: {self.pillars_path}")
 
@@ -187,7 +197,26 @@ class BachToneExtractor:
             score = music21.converter.parse(self.pillars_path)
         except Exception as e:
             print(f"❌ Error parsing pillar MusicXML: {e}")
-            return None, None
+            return None, None, 0
+
+        # Get time signature
+        time_sig = None
+        for part in score.parts:
+            for ts in part.flatten().getElementsByClass(music21.meter.TimeSignature):
+                time_sig = (ts.numerator, ts.denominator)
+                break
+            if time_sig:
+                break
+
+        if not time_sig:
+            time_sig = (3, 4)
+            print("   ⚠️ No time signature found, assuming 3/4")
+
+        print(f"   Time signature: {time_sig[0]}/{time_sig[1]}")
+
+        # Calculate beat duration in ms
+        quarter_duration_ms = 60000 / self.tempo_bpm
+        measure_duration_ms = time_sig[0] * quarter_duration_ms
 
         # Collect all pillar notes, grouped by pillar
         pillar_notes_by_id = {pid: [] for pid in self.pillar_order}
@@ -197,16 +226,13 @@ class BachToneExtractor:
             part_id = part.id
             print(f"\n   Processing part: {part_id}")
 
-            # Check if this part belongs to one of our pillars
-            pillar_id = None
-            for prefix, pid in self.pillar_mapping.items():
-                if part_id.startswith(prefix):
-                    pillar_id = pid
-                    break
-
-            if not pillar_id:
+            # Check if this part is one of our pillar parts
+            if part_id not in self.part_id_to_pillar:
+                # Skip non-pillar parts
                 print(f"      ⚠️ Skipping part {part_id} - not mapped to a pillar")
                 continue
+
+            pillar_id = self.part_id_to_pillar[part_id]
 
             notes_in_part = []
             current_offset_q = 0.0
@@ -226,13 +252,13 @@ class BachToneExtractor:
                     duration_q = element.duration.quarterLength
 
                     # Calculate time in ms
-                    ms_offset = current_offset_q * self.quarter_duration_ms
-                    duration_ms = duration_q * self.quarter_duration_ms
+                    ms_offset = current_offset_q * quarter_duration_ms
+                    duration_ms = duration_q * quarter_duration_ms
                     pulse_ms = ms_offset + (duration_ms / 2)
 
                     note_data = {
                         "pillar_id": pillar_id,
-                        "index": None,
+                        "index": None,  # Will set later after sorting
                         "measure": measure,
                         "ms_offset": round(ms_offset, 1),
                         "duration_ms": round(duration_ms, 1),
@@ -257,6 +283,7 @@ class BachToneExtractor:
         all_pillar_notes = []
         for pillar_id in self.pillar_order:
             notes = pillar_notes_by_id.get(pillar_id, [])
+            # Sort by measure number to ensure correct order
             notes.sort(key=lambda x: x['measure'])
 
             for note in notes:
@@ -265,20 +292,26 @@ class BachToneExtractor:
 
             print(f"\n   {pillar_id}: {len(notes)} notes extracted")
             if notes:
-                print(f"      First note: {notes[0]['pitch']} at {notes[0]['ms_offset']:.1f}ms (measure {notes[0]['measure']})")
-                print(f"      Last note: {notes[-1]['pitch']} at {notes[-1]['ms_offset']:.1f}ms (measure {notes[-1]['measure']})")
+                print(
+                    f"      First note: {notes[0]['pitch']} at {notes[0]['ms_offset']:.1f}ms (measure {notes[0]['measure']})")
+                print(
+                    f"      Last note: {notes[-1]['pitch']} at {notes[-1]['ms_offset']:.1f}ms (measure {notes[-1]['measure']})")
 
-        # Create calibration windows (based on measure numbers)
+        # Create calibration windows (2 measures each, using window_start_measures from config)
         pillar_windows = []
 
         for i, pillar_id in enumerate(self.pillar_order):
-            # Window i covers measures (i*window_measures + 1) to ((i+1)*window_measures)
-            start_measure = i * self.window_measures + 1
-            end_measure = (i + 1) * self.window_measures
+            if i < len(self.window_start_measures):
+                start_measure = self.window_start_measures[i]
+            else:
+                # Fallback: calculate based on index
+                start_measure = i * self.window_measures + 1
+
+            end_measure = start_measure + self.window_measures - 1
 
             # Calculate time in ms
-            start_ms = (start_measure - 1) * self.measure_duration_ms
-            end_ms = end_measure * self.measure_duration_ms
+            start_ms = (start_measure - 1) * measure_duration_ms
+            end_ms = end_measure * measure_duration_ms
 
             # Count how many notes this pillar actually has in its window
             pillar_notes = pillar_notes_by_id.get(pillar_id, [])
@@ -293,20 +326,20 @@ class BachToneExtractor:
                 "note_count": len(window_notes)
             })
 
-            if len(window_notes) == 0:
-                print(f"\n   ⚠️ {pillar_id} has NO notes in measures {start_measure}-{end_measure} (silent window)")
-            else:
-                print(f"\n   {pillar_id}: {len(window_notes)} notes in measures {start_measure}-{end_measure}")
-
+            print(f"\n   {pillar_id}: {len(window_notes)} notes in measures {start_measure}-{end_measure}")
             print(f"      Window: {start_ms:.1f}ms → {end_ms:.1f}ms")
 
-        # Calculate total duration
-        total_duration_ms = len(self.pillar_order) * self.window_measures * self.measure_duration_ms
+        # Calculate total duration from the last window
+        if pillar_windows:
+            last_window = pillar_windows[-1]
+            total_duration_ms = last_window["end_ms"]
+        else:
+            total_duration_ms = len(self.pillar_order) * self.window_measures * measure_duration_ms
 
         print(f"\n✅ Extracted {len(all_pillar_notes)} total pillar notes")
-        print(f"   Total duration: {total_duration_ms/1000:.2f}s")
+        print(f"   Total duration: {total_duration_ms / 1000:.2f}s")
 
-        return all_pillar_notes, pillar_windows
+        return all_pillar_notes, pillar_windows, total_duration_ms
 
     def create_manifest(self, piccolo_timeline, pillar_notes, pillar_windows):
         """Create the final tuning_mode.json manifest."""
@@ -404,7 +437,7 @@ class BachToneExtractor:
 
         # Extract pillar notes (if file exists)
         if os.path.exists(self.pillars_path):
-            pillar_notes, pillar_windows = self.extract_pillar_notes()
+            pillar_notes, pillar_windows, _ = self.extract_pillar_notes()
         else:
             print(f"\n⚠️ Pillar MusicXML not found: {self.pillars_path}")
             pillar_notes = None

@@ -35,13 +35,16 @@
   ],
   "_pillar_order_comment": "Order of pillars for calibration windows (clockwise from front left)",
   
-  "pillar_mapping": {
+  "pillar_musicxml_mapping": {
     "PILLAR_FL": "P7",
     "PILLAR_FR": "P8",
-    "PILLAR_BR": "P10",
-    "PILLAR_BL": "P9"
+    "PILLAR_BR": "P9",
+    "PILLAR_BL": "P10"
   },
-  "_pillar_mapping_comment": "Maps pillar IDs to MusicXML part prefixes (e.g., 'P7' matches 'P7-Staff1', 'P7-Staff2')",
+  "_pillar_musicxml_mapping_comment": "Maps pillar IDs to MusicXML part IDs (the part name in the score-partwise/part-list)",
+  
+  "window_start_measures": [1, 3, 5, 7],
+  "_window_start_measures_comment": "Starting measure numbers for each pillar's calibration window (2 measures each, in pillar_order sequence)",
   
   "urls": {
     "flute": "https://static.wixstatic.com/mp3/9178d1_15f2dad109ba41678cc46d01123b1dc5.mp3",
