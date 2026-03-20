@@ -1,27 +1,22 @@
 """
 bach_tone_duration_extractor.py
 
-Uses both MusicXML (for perfect note structure) and MP3 (for performance timing)
-to create the most accurate tuning_mode.json possible.
+Extracts note timing from MusicXML for both piccolo and pillar parts.
+Uses fixed tempo (70 BPM) from the score for perfect synchronization.
 
 This version:
-- Parses MusicXML to get exact note sequence (pitches, durations)
-- Loads MP3 and detects onsets for performance timing
-- Aligns each MusicXML note to an audio onset
-- EXTRACTS PILLAR NOTES from quad piano MusicXML for mic delay calibration
-- Result: Perfect notes with performance timing, no warbles/modulations
-
-Also parses piano notes to generate quad piano note timing for tuning Phase 1, where the devices listen to the pillars for mic delay cal.
+- Parses piccolo MusicXML to get exact note sequence (pitches, durations, offsets)
+- Parses quad piano MusicXML to extract pillar notes for Phase 1 mic calibration
+- Creates tuning_mode.json with perfect timing from the score
+- No audio alignment needed - devices play at the correct tempo
 
 REQUIREMENTS
 ------------
-pip install librosa music21 numpy
+pip install music21
 """
 
 import os
 import json
-import numpy as np
-import librosa
 import music21
 from datetime import datetime
 
@@ -33,15 +28,17 @@ from datetime import datetime
 BASE_DIR = r"C:\\Users\\ken\\Documents\\Ken\\Fiction\\HMP_SW\\Script_Analysis_and_Production\\SmartphoneOrchestra stuff\\Jesu Joy"
 
 # Input files
-INPUT_MP3 = os.path.join(BASE_DIR, "Tuning-Jesu - Stacatto-Piccolo_in_C.mp3")
 INPUT_MUSICXML = os.path.join(BASE_DIR, "Tuning-Jesu - Stacatto - Piccolo.musicxml")
-INPUT_MUSICXML_PILLARS = os.path.join(BASE_DIR, "Tuning-Jesu - Stacatto - quad piano.musicxml")  # NEW: Quad piano file
+INPUT_MUSICXML_PILLARS = os.path.join(BASE_DIR, "Tuning-Jesu - Stacatto - quad piano.musicxml")
+
+# Tempo from MusicXML (70 BPM for Jesu, Joy of Man's Desiring)
+TEMPO_BPM = 70
 
 # --- WIX CDN ASSET URLS ---
 WIX_AUDIO_BASE = "https://static.wixstatic.com/mp3/"
 
 # Update these with your actual uploaded filenames
-FLUTE_URL      = "9178d1_15f2dad109ba41678cc46d01123b1dc5.mp3"  # Replace with actual filename after uploading
+FLUTE_URL = "9178d1_15f2dad109ba41678cc46d01123b1dc5.mp3"
 TEST_PULSE_URL = "9178d1_63e58ac50ec7434eba6785cd3291c227.mp3"
 
 PILLAR_URLS = {
@@ -52,35 +49,12 @@ PILLAR_URLS = {
 }
 
 # ---------------------------------------------------------------------------
-# ANALYSIS PARAMETERS
-# ---------------------------------------------------------------------------
-
-# Audio sample rate
-SR = 22050
-
-# Hop length for onset detection (higher = faster but less precise)
-HOP_LENGTH = 512
-
-# Onset detection parameters
-ONSET_THRESHOLD = 0.05      # Lower = more sensitive
-ONSET_BACKTRACK = True       # Backtrack to nearest local minimum
-
-# Minimum gap between notes (if less than this, merge them)
-MIN_GAP_MS = 30
-
-# Frequency range for piccolo (C5 to C7)
-FMIN = librosa.note_to_hz("C5")      # ~523 Hz
-FMAX = librosa.note_to_hz("C7")      # ~2093 Hz
-
-# Tempo from MusicXML (70 BPM for Jesu)
-TEMPO_BPM = 70
-
-# ---------------------------------------------------------------------------
 # PITCH UTILITIES
 # ---------------------------------------------------------------------------
 
 _SHARP_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 _FLAT_OVERRIDE = {10: "Bb", 3: "Eb", 8: "Ab", 1: "Db", 6: "Gb"}
+
 
 def midi_to_note_name(midi_val: int) -> str:
     """Convert a rounded MIDI note number to a pitch string."""
@@ -88,23 +62,20 @@ def midi_to_note_name(midi_val: int) -> str:
     oct_ = midi_val // 12 - 1
     return f"{_FLAT_OVERRIDE.get(pc, _SHARP_NAMES[pc])}{oct_}"
 
-def note_name_to_midi(note_name: str) -> int:
-    """Convert a note name (e.g., 'C5') to MIDI number."""
-    return music21.pitch.Pitch(note_name).midi
 
 # ---------------------------------------------------------------------------
-# PARSE MUSICXML (PICCOLO)
+# PARSE PICCOLO MUSICXML
 # ---------------------------------------------------------------------------
 
-def parse_musicxml(xml_path: str) -> tuple:
+def parse_piccolo_musicxml(xml_path: str) -> tuple:
     """
-    Extract perfect note sequence from MusicXML.
+    Extract perfect note sequence from piccolo MusicXML.
     Returns:
         - notes: list of dicts with pitch, duration_q, offset_q
         - total_quarters: total duration in quarter notes
         - time_signature: tuple of (numerator, denominator)
     """
-    print(f"📄 Loading MusicXML: {xml_path}")
+    print(f"📄 Loading piccolo MusicXML: {xml_path}")
 
     try:
         score = music21.converter.parse(xml_path)
@@ -112,7 +83,7 @@ def parse_musicxml(xml_path: str) -> tuple:
         print(f"❌ Error parsing MusicXML: {e}")
         return None, None, None
 
-    # Get the first part (assuming it's the piccolo)
+    # Get the first part (the piccolo)
     if len(score.parts) > 0:
         part = score.parts[0]
     else:
@@ -126,8 +97,8 @@ def parse_musicxml(xml_path: str) -> tuple:
         break
 
     if not time_sig:
-        time_sig = (4, 4)  # Default to 4/4
-        print("   ⚠️ No time signature found, assuming 4/4")
+        time_sig = (3, 4)  # Jesu is in 3/4
+        print("   ⚠️ No time signature found, assuming 3/4")
 
     print(f"   Time signature: {time_sig[0]}/{time_sig[1]}")
 
@@ -158,14 +129,81 @@ def parse_musicxml(xml_path: str) -> tuple:
 
     return notes, current_offset, time_sig
 
+
 # ---------------------------------------------------------------------------
-# EXTRACT PILLAR NOTES FROM QUAD PIANO MUSICXML (NEW)
+# CREATE TIMELINE FROM MUSICXML (FIXED TEMPO)
+# ---------------------------------------------------------------------------
+
+def create_timeline_from_musicxml(xml_notes, time_sig):
+    """
+    Create timeline directly from MusicXML using fixed tempo.
+    This ensures exact note timing matches the musical score.
+    """
+    if xml_notes is None:
+        return None, 0, 0
+
+    print(f"\n📝 Creating timeline from MusicXML (tempo: {TEMPO_BPM} BPM)")
+
+    # Calculate beat duration in ms
+    quarter_duration_ms = 60000 / TEMPO_BPM
+
+    # Build timeline
+    timeline = []
+    total_duration_ms = 0
+
+    for i, xml_note in enumerate(xml_notes):
+        # Time in ms from quarter note offset
+        offset_ms = xml_note['offset_q'] * quarter_duration_ms
+        duration_ms = xml_note['duration_q'] * quarter_duration_ms
+
+        # Calculate pulse at center of note
+        pulse_ms = offset_ms + (duration_ms / 2)
+
+        # Calculate measure number (3/4 time signature: each measure is 3 quarter notes)
+        beats_per_measure = time_sig[0]
+        measure = int(xml_note['offset_q'] / beats_per_measure) + 1
+
+        timeline.append({
+            "id": f"m{measure}_n{i}",
+            "index": i,
+            "measure": measure,
+            "ms_offset": round(offset_ms, 1),
+            "duration_ms": round(duration_ms, 1),
+            "pulse_ms": round(pulse_ms, 1),
+            "pitch": xml_note['pitch'],
+            "midi": xml_note['midi'],
+            "has_fsk": False,
+        })
+
+        total_duration_ms = max(total_duration_ms, offset_ms + duration_ms)
+
+    print(f"   Created {len(timeline)} notes from MusicXML")
+    print(f"   Total duration: {total_duration_ms / 1000:.2f}s at {TEMPO_BPM} BPM")
+
+    # Show first few notes
+    print("\n   First few notes:")
+    for i, note in enumerate(timeline[:5]):
+        print(f"     {i}: {note['pitch']} at {note['ms_offset']:.1f}ms, duration {note['duration_ms']:.1f}ms")
+
+    return timeline, quarter_duration_ms, TEMPO_BPM
+
+
+# ---------------------------------------------------------------------------
+# EXTRACT PILLAR NOTES FROM QUAD PIANO MUSICXML
 # ---------------------------------------------------------------------------
 
 def extract_pillar_notes(xml_path: str) -> tuple:
     """
     Extract pillar notes from quad piano MusicXML.
-    Maps parts: P7→PILLAR_FL, P8→PILLAR_FR, P10→PILLAR_BR, P9→PILLAR_BL
+
+    Mapping based on MuseScore staff names:
+    - P7 (Piano FL) → PILLAR_FL (measures 1-2)
+    - P8 (Piano FR) → PILLAR_FR (measures 3-4)
+    - P9 (Piano BL) → PILLAR_BL (measures 5-6)
+    - P10 (Piano BR) → PILLAR_BR (measures 7-8)
+
+    Note: The parts are named like "P7-Staff1" and "P7-Staff2" (treble and bass clef)
+    We combine both staves for each part.
 
     Returns:
         - pillar_notes: list of dicts with pillar_id, index, measure, ms_offset, duration_ms, pitch, pulse_ms
@@ -180,19 +218,18 @@ def extract_pillar_notes(xml_path: str) -> tuple:
         print(f"❌ Error parsing pillar MusicXML: {e}")
         return None, None, 0
 
-    # Map part IDs to pillar IDs (clockwise: FL, FR, BR, BL)
-    # Based on your MusicXML: P7=FL, P8=FR, P10=BR, P9=BL
-    PART_TO_PILLAR = {
-        "P7": "PILLAR_FL",
-        "P8": "PILLAR_FR",
-        "P10": "PILLAR_BR",
-        "P9": "PILLAR_BL"
+    # Map part name prefixes to pillar IDs
+    PART_PREFIX_TO_PILLAR = {
+        "P7": "PILLAR_FL",  # Piano FL (measures 1-2)
+        "P8": "PILLAR_FR",  # Piano FR (measures 3-4)
+        "P9": "PILLAR_BL",  # Piano BL (measures 5-6)
+        "P10": "PILLAR_BR",  # Piano BR (measures 7-8)
     }
 
-    # Also track order for windows (clockwise)
+    # Order for calibration windows (clockwise from front left)
     PILLAR_ORDER = ["PILLAR_FL", "PILLAR_FR", "PILLAR_BR", "PILLAR_BL"]
 
-    # Get time signature (should be 3/4 for Jesu)
+    # Get time signature
     time_sig = None
     for part in score.parts:
         for ts in part.flatten().getElementsByClass(music21.meter.TimeSignature):
@@ -202,43 +239,42 @@ def extract_pillar_notes(xml_path: str) -> tuple:
             break
 
     if not time_sig:
-        time_sig = (3, 4)  # Jesu is in 3/4
+        time_sig = (3, 4)
         print("   ⚠️ No time signature found, assuming 3/4")
 
     print(f"   Time signature: {time_sig[0]}/{time_sig[1]}")
 
     # Calculate beat duration in ms
     quarter_duration_ms = 60000 / TEMPO_BPM
-    beat_duration_ms = quarter_duration_ms * (4 / time_sig[1])  # Adjust for time signature
 
-    # Collect all pillar notes
-    all_pillar_notes = []
-    pillar_windows = []
+    # Collect all pillar notes, grouped by pillar
+    pillar_notes_by_id = {pid: [] for pid in PART_PREFIX_TO_PILLAR.values()}
 
-    # Track cumulative offset for window calculation
-    total_duration_q = 0
-
+    # Process each part (including both staff1 and staff2)
     for part in score.parts:
         part_id = part.id
-        if part_id not in PART_TO_PILLAR:
-            print(f"   ⚠️ Skipping part {part_id} - not mapped to a pillar")
-            continue
+        print(f"\n   Processing part: {part_id}")
 
-        pillar_id = PART_TO_PILLAR[part_id]
-        print(f"\n   Processing {pillar_id} (part {part_id})...")
+        # Check if this part belongs to one of our pillar parts
+        pillar_id = None
+        for prefix, pid in PART_PREFIX_TO_PILLAR.items():
+            if part_id.startswith(prefix):
+                pillar_id = pid
+                break
+
+        if not pillar_id:
+            print(f"      ⚠️ Skipping part {part_id} - not mapped to a pillar")
+            continue
 
         notes_in_part = []
         current_offset_q = 0.0
-        measure_count = 0
-        last_measure = 0
+
+        print(f"      → {part_id} belongs to {pillar_id}")
 
         for element in part.flatten().notesAndRests:
             if element.isNote:
                 # Get measure number
                 measure = element.measureNumber
-                if measure != last_measure:
-                    measure_count += 1
-                    last_measure = measure
 
                 # Get pitch
                 pitch = element.pitch.nameWithOctave
@@ -252,51 +288,72 @@ def extract_pillar_notes(xml_path: str) -> tuple:
                 duration_ms = duration_q * quarter_duration_ms
                 pulse_ms = ms_offset + (duration_ms / 2)
 
-                notes_in_part.append({
+                note_data = {
                     "pillar_id": pillar_id,
-                    "index": len(all_pillar_notes),
+                    "index": None,  # Will set later after sorting
                     "measure": measure,
                     "ms_offset": round(ms_offset, 1),
                     "duration_ms": round(duration_ms, 1),
                     "pitch": pitch,
                     "midi": midi,
                     "pulse_ms": round(pulse_ms, 1)
-                })
+                }
 
-                all_pillar_notes.append(notes_in_part[-1])
+                notes_in_part.append(note_data)
 
             current_offset_q += element.duration.quarterLength
 
-        # Track total duration for this part
-        part_duration_q = current_offset_q
-        if part_duration_q > total_duration_q:
-            total_duration_q = part_duration_q
-
-        print(f"      Extracted {len(notes_in_part)} notes")
+        # Add notes to the pillar's list
         if notes_in_part:
-            print(f"      First note: {notes_in_part[0]['pitch']} at {notes_in_part[0]['ms_offset']:.1f}ms")
-            print(f"      Last note: {notes_in_part[-1]['pitch']} at {notes_in_part[-1]['ms_offset']:.1f}ms")
+            pillar_notes_by_id[pillar_id].extend(notes_in_part)
+            print(f"      Added {len(notes_in_part)} notes to {pillar_id}")
+        else:
+            print(f"      ⚠️ No notes found in {part_id}")
 
-    # Calculate total duration in ms
-    total_duration_ms = total_duration_q * quarter_duration_ms
-
-    # Create calibration windows (2 measures each, using the notes we extracted)
-    # Find start and end times for each pillar (first 2 measures of each part)
+    # Combine all pillar notes into a single list with global indices
+    all_pillar_notes = []
     for pillar_id in PILLAR_ORDER:
-        pillar_notes = [n for n in all_pillar_notes if n["pillar_id"] == pillar_id]
+        notes = pillar_notes_by_id.get(pillar_id, [])
+        # Sort by measure number to ensure correct order
+        notes.sort(key=lambda x: x['measure'])
+
+        for i, note in enumerate(notes):
+            note['index'] = len(all_pillar_notes)
+            all_pillar_notes.append(note)
+
+        print(f"\n   {pillar_id}: {len(notes)} notes extracted")
+        if notes:
+            print(
+                f"      First note: {notes[0]['pitch']} at {notes[0]['ms_offset']:.1f}ms (measure {notes[0]['measure']})")
+            print(
+                f"      Last note: {notes[-1]['pitch']} at {notes[-1]['ms_offset']:.1f}ms (measure {notes[-1]['measure']})")
+
+    # Calculate total duration from the last note of the last pillar
+    total_duration_ms = 0
+    if all_pillar_notes:
+        last_note = all_pillar_notes[-1]
+        total_duration_ms = last_note["ms_offset"] + last_note["duration_ms"]
+
+    # Create calibration windows (2 measures each)
+    pillar_windows = []
+
+    for pillar_id in PILLAR_ORDER:
+        pillar_notes = pillar_notes_by_id.get(pillar_id, [])
         if not pillar_notes:
-            print(f"   ⚠️ No notes found for {pillar_id}")
+            print(f"\n   ⚠️ No notes found for {pillar_id} - skipping window")
             continue
 
-        # Find notes in measure 1 and 2
+        # Find notes in measures 1 and 2 (the solo sections)
         window_notes = [n for n in pillar_notes if n["measure"] <= 2]
+
         if window_notes:
             start_ms = min(n["ms_offset"] for n in window_notes)
             end_ms = max(n["ms_offset"] + n["duration_ms"] for n in window_notes)
         else:
-            # Fallback: use first few notes
+            # Fallback: use first few notes (first 2 measures worth)
+            measure_duration_ms = 3 * quarter_duration_ms
             start_ms = pillar_notes[0]["ms_offset"]
-            end_ms = pillar_notes[min(4, len(pillar_notes)-1)]["ms_offset"] + 500
+            end_ms = start_ms + (2 * measure_duration_ms)
 
         pillar_windows.append({
             "pillar_id": pillar_id,
@@ -307,184 +364,28 @@ def extract_pillar_notes(xml_path: str) -> tuple:
         print(f"\n   {pillar_id} calibration window: {start_ms:.1f}ms → {end_ms:.1f}ms")
 
     print(f"\n✅ Extracted {len(all_pillar_notes)} total pillar notes")
-    print(f"   Total duration: {total_duration_ms/1000:.2f}s")
+    print(f"   Total duration: {total_duration_ms / 1000:.2f}s")
 
     return all_pillar_notes, pillar_windows, total_duration_ms
 
-# ---------------------------------------------------------------------------
-# AUDIO ONSET DETECTION
-# ---------------------------------------------------------------------------
-
-def detect_audio_onsets(mp3_path: str) -> tuple:
-    """
-    Get performance timings from audio.
-    Returns:
-        - onset_times: list of onset times in seconds
-        - audio_duration: total duration in seconds
-        - onset_env: onset strength envelope (for debugging)
-    """
-    print(f"\n🎵 Loading audio: {mp3_path}")
-
-    try:
-        y, sr = librosa.load(mp3_path, sr=SR, mono=True)
-    except Exception as e:
-        print(f"❌ Error loading audio: {e}")
-        return None, None, None
-
-    audio_duration = len(y) / sr
-    print(f"   Duration: {audio_duration:.2f}s, SR: {sr} Hz")
-
-    print("   Computing onset strength...")
-
-    # Compute onset strength
-    onset_env = librosa.onset.onset_strength(
-        y=y,
-        sr=sr,
-        hop_length=HOP_LENGTH,
-        aggregate=np.median,
-        fmin=FMIN,
-        fmax=FMAX
-    )
-
-    print("   Detecting onsets...")
-
-    # Use peak picking with explicit threshold
-    onset_frames = librosa.util.peak_pick(
-        onset_env,
-        pre_max=3,
-        post_max=3,
-        pre_avg=5,
-        post_avg=5,
-        delta=ONSET_THRESHOLD,
-        wait=10
-    )
-
-    onset_times = librosa.frames_to_time(onset_frames, sr=sr, hop_length=HOP_LENGTH)
-
-    print(f"   Detected {len(onset_times)} onsets in audio")
-
-    # Show first few onsets
-    if len(onset_times) > 0:
-        print("\n   First few onsets (seconds):")
-        for i, t in enumerate(onset_times[:5]):
-            print(f"     {i}: {t:.3f}s")
-
-    return onset_times, audio_duration, onset_env
-
-# ---------------------------------------------------------------------------
-# HYBRID ALIGNMENT
-# ---------------------------------------------------------------------------
-
-def align_notes(xml_notes, onset_times, audio_duration, time_sig):
-    """
-    Match MusicXML notes to audio onsets.
-    Returns timeline of notes with performance timing.
-    """
-    if xml_notes is None or onset_times is None:
-        return None, 0, 0
-
-    print(f"\n🔄 Aligning {len(xml_notes)} MusicXML notes with {len(onset_times)} audio onsets...")
-
-    # Check if counts match reasonably
-    if abs(len(xml_notes) - len(onset_times)) > 5:
-        print(f"⚠️  Large mismatch: MusicXML={len(xml_notes)}, Audio={len(onset_times)}")
-        print("   This might indicate different arrangements or pickup notes.")
-        print("   Using the smaller count and hoping for the best.")
-
-        # Use the smaller count and warn
-        n = min(len(xml_notes), len(onset_times))
-        xml_notes = xml_notes[:n]
-        onset_times = onset_times[:n]
-        print(f"   Using first {n} notes")
-
-    # Calculate tempo from inter-onset intervals
-    if len(onset_times) > 1:
-        # Use first 10 onsets to estimate tempo
-        n_for_tempo = min(10, len(onset_times) - 1)
-        iois = np.diff(onset_times[:n_for_tempo + 1]) * 1000
-        beat_unit_ms = np.median(iois)
-        tempo = 60000 / beat_unit_ms
-
-        # Adjust for time signature
-        if time_sig[1] == 4:  # Quarter note beat
-            beats_per_measure = time_sig[0]
-        else:
-            beats_per_measure = time_sig[0] * (4 / time_sig[1])
-    else:
-        beat_unit_ms = 500
-        tempo = 120
-        beats_per_measure = time_sig[0]
-
-    print(f"\n📊 Estimated tempo: {tempo:.1f} BPM")
-    print(f"   Beat unit: {beat_unit_ms:.1f}ms")
-
-    # Build timeline
-    timeline = []
-
-    for i, (xml_note, onset) in enumerate(zip(xml_notes, onset_times)):
-        onset_ms = onset * 1000
-
-        # Estimate duration from next onset or end of piece
-        if i < len(onset_times) - 1:
-            next_onset = onset_times[i + 1] * 1000
-            duration_ms = next_onset - onset_ms
-        else:
-            duration_ms = (audio_duration - onset) * 1000
-
-        # Ensure duration is reasonable (between 30ms and 2s)
-        duration_ms = max(30, min(duration_ms, 2000))
-
-        # Calculate pulse at center of note
-        pulse_ms = int(round(onset_ms + duration_ms / 2))
-
-        # Calculate measure number (approximate)
-        measure = int(onset_ms / (beat_unit_ms * beats_per_measure)) + 1
-
-        timeline.append({
-            "id": f"m{measure}_n{i}",
-            "index": i,
-            "measure": measure,
-            "ms_offset": round(onset_ms, 1),
-            "duration_ms": round(duration_ms, 1),
-            "pulse_ms": pulse_ms,
-            "pitch": xml_note['pitch'],
-            "midi": xml_note['midi'],
-            "has_fsk": False,  # No FSK encoding in this version
-        })
-
-    # Verify alignment
-    print(f"\n✅ Created timeline with {len(timeline)} notes")
-
-    # Show first few notes
-    print("\n   First few aligned notes:")
-    for i, note in enumerate(timeline[:5]):
-        print(f"     {i}: {note['pitch']} at {note['ms_offset']:.1f}ms, duration {note['duration_ms']:.1f}ms")
-
-    return timeline, beat_unit_ms, tempo
 
 # ---------------------------------------------------------------------------
 # MAIN PIPELINE
 # ---------------------------------------------------------------------------
 
 def create_hybrid_manifest():
-    """Main pipeline: combine MusicXML and audio."""
+    """Main pipeline: extract MusicXML timing only."""
     print("=" * 60)
-    print("bach_tone_duration_extractor.py - Hybrid Mode")
+    print("bach_tone_duration_extractor.py - MusicXML Timing Mode")
     print("=" * 60)
-    print(f"\n🎯 Using both MusicXML and MP3 for perfect note timing")
+    print(f"\n🎯 Using MusicXML timing (fixed tempo: {TEMPO_BPM} BPM)")
     print(f"\n📁 Input files:")
-    print(f"   • Piccolo MP3:      {INPUT_MP3}")
     print(f"   • Piccolo MusicXML: {INPUT_MUSICXML}")
     print(f"   • Pillar MusicXML:  {INPUT_MUSICXML_PILLARS}")
 
     # Check if files exist
-    if not os.path.exists(INPUT_MP3):
-        print(f"\n❌ MP3 file not found: {INPUT_MP3}")
-        return None
-
     if not os.path.exists(INPUT_MUSICXML):
         print(f"\n❌ Piccolo MusicXML file not found: {INPUT_MUSICXML}")
-        print("   Falling back to audio-only mode...")
         return None
 
     if not os.path.exists(INPUT_MUSICXML_PILLARS):
@@ -494,60 +395,51 @@ def create_hybrid_manifest():
         pillar_windows = None
         pillar_total_duration = 0
     else:
-        # 1b. Extract pillar notes from quad piano MusicXML
+        # Extract pillar notes from quad piano MusicXML
         pillar_notes, pillar_windows, pillar_total_duration = extract_pillar_notes(INPUT_MUSICXML_PILLARS)
 
-    # 1a. Parse piccolo MusicXML for perfect note structure
-    xml_notes, xml_duration_q, time_sig = parse_musicxml(INPUT_MUSICXML)
+    # Parse piccolo MusicXML
+    xml_notes, xml_duration_q, time_sig = parse_piccolo_musicxml(INPUT_MUSICXML)
     if xml_notes is None:
         return None
 
-    # 2. Detect audio onsets for performance timing
-    onset_times, audio_duration, onset_env = detect_audio_onsets(INPUT_MP3)
-    if onset_times is None:
-        return None
-
-    # 3. Align them
-    notes_timeline, beat_unit_ms, tempo = align_notes(
-        xml_notes, onset_times, audio_duration, time_sig
-    )
+    # Create timeline from MusicXML only (no audio alignment)
+    notes_timeline, beat_unit_ms, tempo = create_timeline_from_musicxml(xml_notes, time_sig)
 
     if notes_timeline is None:
         return None
 
-    # 4. Calculate final duration
+    # Calculate final duration
     if notes_timeline:
         last_note = notes_timeline[-1]
         total_duration_ms = last_note["ms_offset"] + last_note["duration_ms"]
     else:
-        total_duration_ms = audio_duration * 1000
+        total_duration_ms = 0
 
-    # 5. Build manifest
+    # Build manifest
     flute_full_url = f"{WIX_AUDIO_BASE}{FLUTE_URL}"
     test_pulse_full_url = f"{WIX_AUDIO_BASE}{TEST_PULSE_URL}" if TEST_PULSE_URL else None
     pillar_full_urls = {pos: f"{WIX_AUDIO_BASE}{fn}" for pos, fn in PILLAR_URLS.items()}
 
     manifest = {
         "metadata": {
-            "source_audio": os.path.basename(INPUT_MP3),
             "source_musicxml": os.path.basename(INPUT_MUSICXML),
             "source_musicxml_pillars": os.path.basename(INPUT_MUSICXML_PILLARS) if INPUT_MUSICXML_PILLARS else None,
             "source_audio_url": flute_full_url,
             "test_pulse_url": test_pulse_full_url,
             **{f"source_audio_{pos}": url for pos, url in pillar_full_urls.items()},
-            "tempo": round(tempo, 2),
+            "tempo": TEMPO_BPM,
             "time_signature": f"{time_sig[0]}/{time_sig[1]}",
             "total_duration_ms": round(total_duration_ms, 1),
             "total_notes": len(notes_timeline),
             "total_measures": notes_timeline[-1]["measure"] if notes_timeline else 0,
-            "generated_by": "bach_tone_duration_extractor.py (MusicXML + audio hybrid)",
+            "generated_by": "bach_tone_duration_extractor.py (MusicXML timing only)",
             "generated_at": datetime.now().isoformat(),
             "asset_version": "1.0",
-            "asset_description": "Hybrid analysis: perfect notes from MusicXML, timing from staccato piccolo audio - NO WARBLES",
+            "asset_description": "Perfect timing from MusicXML at 70 BPM - no audio alignment",
             "analysis_params": {
-                "method": "hybrid_xml_audio",
-                "hop_length": HOP_LENGTH,
-                "onset_threshold": ONSET_THRESHOLD,
+                "method": "musicxml_only",
+                "tempo": TEMPO_BPM,
                 "beat_unit_ms": round(beat_unit_ms, 2),
             },
         },
@@ -559,10 +451,10 @@ def create_hybrid_manifest():
         },
         "performance": {
             "calibration_strategy": {
-                "method": "hybrid_xml_audio",
+                "method": "musicxml_timing",
                 "note_source": "MusicXML",
-                "timing_source": "Audio onsets",
-                "philosophy": "Perfect notes with performance timing - ideal for delay calibration"
+                "timing_source": "MusicXML (no audio)",
+                "philosophy": "Perfect score timing at original tempo"
             }
         }
     }
@@ -583,14 +475,13 @@ def create_hybrid_manifest():
     # Report
     print(f"\n✅ Manifest saved: {manifest_path}")
     print(f"\n📊 Statistics:")
-    print(f"   • Piccolo notes: {len(notes_timeline)}")
+    print(f"   • Piccolo notes: {len(notes_timeline)} (from MusicXML)")
     if pillar_notes:
         print(f"   • Pillar notes:  {len(pillar_notes)}")
-    print(f"   • Timing: from audio onsets")
-    print(f"   • Tempo: {tempo:.2f} BPM")
+    print(f"   • Tempo: {TEMPO_BPM} BPM (fixed)")
     print(f"   • Time signature: {time_sig[0]}/{time_sig[1]}")
     print(f"   • Beat unit: {beat_unit_ms:.2f}ms")
-    print(f"   • Total duration: {total_duration_ms/1000:.2f}s")
+    print(f"   • Total duration: {total_duration_ms / 1000:.2f}s")
 
     print(f"\n📦 Assets:")
     print(f"   • Flute:      {flute_full_url}")
@@ -616,15 +507,14 @@ def create_hybrid_manifest():
             print(f"   {w['pillar_id']:12s}: {w['start_ms']:.1f}ms → {w['end_ms']:.1f}ms")
 
     print(f"\n🎯 Next steps:")
-    print(f"   1. Upload your MP3 to Wix and update FLUTE_URL in this script")
-    print(f"   2. Run this script again to regenerate tuning_mode.json")
-    print(f"   3. Upload tuning_mode.json to Firebase using admin.html")
+    print(f"   1. Upload tuning_mode.json to Firebase using admin.html")
     print()
-    print("✅ The resulting tuning_mode.json contains NO warbles or modulations")
-    print("   - just pure, clean note timing data for accurate delay calibration.")
-    print("   - Also includes pillar note data for mic delay calibration phase.")
-    
+    print("✅ The resulting tuning_mode.json contains perfect timing from MusicXML")
+    print("   - No audio alignment needed - devices will play at 70 BPM")
+    print("   - Includes pillar note data for Phase 1 mic delay calibration")
+
     return manifest_path
+
 
 # ---------------------------------------------------------------------------
 # ENTRY POINT
