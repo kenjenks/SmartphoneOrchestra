@@ -470,885 +470,543 @@ devicedist.html: Feature List
     // SECTION 1 END ============================================================
 
     // SECTION 2 BEGIN ============================================================
-    // FIREBASE, IDENTITY, CLOCK SYNC, HEARTBEAT, ASSET PRELOAD
-    // ============================================================================
+// FIREBASE, IDENTITY, CLOCK SYNC, HEARTBEAT, ASSET PRELOAD
+// ============================================================================
 
-    // --- PROTECTED BLOCK: FIREBASE CONFIGURATION ---
-    const firebaseConfig = {
-        apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
-        authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
-        databaseURL: "https://smartphoneorchestra-dwt-default-rtdb.firebaseio.com/",
-        projectId: "smartphoneorchestra-dwt"
-    };
-    firebase.initializeApp(firebaseConfig);
-    const db = firebase.database();
+// ... (keep all existing code up to loadPiccoloAssetUrls) ...
 
-    // --- LOGGING FUNCTION ---
-    function log(message) {
-        console.log(`[${new Date().toLocaleTimeString()}] ${message}`);
-    }
+// --- TUNING SCHEDULE HANDLER (loads from tuning/current) ---
+function initTuningListener() {
+    db.ref('tuning/current').on('value', snap => {
+        const schedule = snap.val();
+        if (schedule && schedule.status === 'ACTIVE') {
+            calibrationMode = true;
+            currentTuningSchedule = schedule;
 
-    // --- CLOCK SYNCHRONIZATION ---
-    function syncClock() {
-        const offsetRef = db.ref(".info/serverTimeOffset");
-        offsetRef.on("value", snap => {
-            serverOffset = snap.val() || 0;
-            document.getElementById('sync-ind').className = 'indicator active';
-            log(`⏱️ Server offset: ${serverOffset}ms`);
-        });
-    }
+            // Store tuning start time
+            tuningStartTime = schedule.startTime;
 
-    // --- IDENTITY RESOLUTION ---
-    async function resolveIdentity() {
-        try {
-            const urlParams = new URLSearchParams(window.location.search);
-            const seatId = urlParams.get('seat');
+            // Store full note schedule for piccolo
+            if (schedule.schedule) {
+                noteSchedule = schedule.schedule.map(note => ({
+                    ...note,
+                    startMs: parseFloat(note.startMs),
+                    durationMs: parseFloat(note.durationMs)
+                }));
 
-            if (!seatId) {
-                log("No seat ID in URL, using default for testing");
-                mySeat = { id: 'G12', x: 7.75, y: 12.5, section: 'Orchestra' };
-                document.getElementById('id-ind').className = 'indicator syncing';
-                return true;
-            }
-
-            document.getElementById('seat-label').innerText = `Seat ${seatId} (loading...)`;
-
-            const seatsSnap = await db.ref('seat_config/seats').once('value');
-            const seatsData = seatsSnap.val();
-
-            if (seatsData && seatsData[seatId]) {
-                mySeat = {
-                    id: seatId,
-                    x: seatsData[seatId].x,
-                    y: seatsData[seatId].y,
-                    section: seatsData[seatId].section || 'Orchestra'
-                };
-                document.getElementById('seat-label').innerText = `Seat ${mySeat.id}`;
-                document.getElementById('id-ind').className = 'indicator active';
-                log(`✅ Resolved seat ${seatId} at (${mySeat.x}, ${mySeat.y}) in ${mySeat.section}`);
-                return true;
-            } else if (Array.isArray(seatsData)) {
-                const config = seatsData.find(s => s.id === seatId);
-                if (config) {
-                    mySeat = {
-                        id: config.id,
-                        x: config.x,
-                        y: config.y,
-                        section: config.section || 'Orchestra'
-                    };
-                    document.getElementById('seat-label').innerText = `Seat ${mySeat.id}`;
-                    document.getElementById('id-ind').className = 'indicator active';
-                    log(`✅ Resolved seat ${seatId} from array`);
-                    return true;
-                }
-            }
-
-            log(`❌ Seat ${seatId} not found`);
-            document.getElementById('id-ind').className = 'indicator error';
-            return false;
-
-        } catch (e) {
-            log(`❌ Identity Resolution Error: ${e.message}`);
-            document.getElementById('id-ind').className = 'indicator error';
-            return false;
-        }
-    }
-
-    // --- LOAD NEIGHBOR MAP ---
-    async function loadNeighborMap() {
-        if (!mySeat) return false;
-
-        try {
-            const neighborSnap = await db.ref(`seat_config/neighborMap/${mySeat.id}`).once('value');
-            const neighborData = neighborSnap.val();
-
-            if (neighborData) {
-                myNeighbors = neighborData.neighbors || [];
-                myPillars = neighborData.pillars || [];
-
-                // Combine into listening targets (neighbors + pillars)
-                allListeningTargets = [...myNeighbors, ...myPillars];
-
-                log(`📍 Neighbor map loaded for ${mySeat.id}`);
-                log(`   Neighbors (${myNeighbors.length}): ${myNeighbors.slice(0, 3).join(', ')}${myNeighbors.length > 3 ? '...' : ''}`);
-                log(`   Pillars (${myPillars.length}): ${myPillars.join(', ')}`);
-
-                document.getElementById('neighbor-ind').className = 'indicator active';
-                document.getElementById('debug-neighbors').innerText = myNeighbors.length;
-
-                return true;
-            } else {
-                log(`⚠️ No neighbor map entry for ${mySeat.id}`);
-                document.getElementById('neighbor-ind').className = 'indicator error';
-                return false;
-            }
-        } catch (e) {
-            log(`❌ Failed to load neighbor map: ${e.message}`);
-            document.getElementById('neighbor-ind').className = 'indicator error';
-            return false;
-        }
-    }
-
-    // --- LOAD PILLAR CONFIGURATION (positions and delay values) ---
-    async function loadPillarConfig() {
-        try {
-            const snap = await db.ref('pillar_config').once('value');
-            const data = snap.val();
-
-            if (!data || !data.pillars) {
-                log("⚠️ No pillar_config found - pillar calibration will use defaults");
-                return;
-            }
-
-            data.pillars.forEach(p => {
-                pillarConfig[p.id] = {
-                    id: p.id,
-                    label: p.label,
-                    x: p.x,
-                    y: p.y,
-                    speakerDelayMs: p.speakerDelayMs || 0,
-                    micDelayMs: p.micDelayMs || 0
-                };
-                // Also maintain legacy pillarPositions for backward compatibility
-                pillarPositions[p.id] = { x: p.x, y: p.y };
-            });
-
-            log(`📡 Loaded pillar config for ${Object.keys(pillarConfig).length} pillars`);
-            Object.entries(pillarConfig).forEach(([id, config]) => {
-                log(`   ${id}: speaker=${config.speakerDelayMs}ms, mic=${config.micDelayMs}ms at (${config.x}, ${config.y})`);
-            });
-
-        } catch (e) {
-            log(`⚠️ Failed to load pillar config: ${e.message}`);
-        }
-    }
-
-    // --- LOAD PICCOLO ASSET URLS from tuning_mode.json ---
-    async function loadPiccoloAssetUrls() {
-        try {
-            const tuningSnap = await db.ref('tuning_mode').once('value');
-            const tuningData = tuningSnap.val();
-
-            if (!tuningData) {
-                log("⚠️ No tuning_mode data found in Firebase");
-                return;
-            }
-
-            // Try to get URLs from the new assets structure first
-            if (tuningData.assets) {
-                if (tuningData.assets.piccolo) {
-                    PICCOLO_URL = tuningData.assets.piccolo;
-                    log(`🎵 Piccolo URL loaded: ${PICCOLO_URL.split('/').pop()}`);
-                }
-                if (tuningData.assets.test_pulse) {
-                    TEST_PULSE_URL = tuningData.assets.test_pulse;
-                    log(`🔊 Test pulse URL loaded: ${TEST_PULSE_URL.split('/').pop()}`);
-                }
-                if (tuningData.assets.pillars) {
-                    const pillars = tuningData.assets.pillars;
-                    if (pillars.FL) pillarUrls.FL = pillars.FL;
-                    if (pillars.FR) pillarUrls.FR = pillars.FR;
-                    if (pillars.BL) pillarUrls.BL = pillars.BL;
-                    if (pillars.BR) pillarUrls.BR = pillars.BR;
-                }
-            }
-
-            // Fallback to metadata structure
-            if (tuningData.metadata) {
-                if (!PICCOLO_URL && tuningData.metadata.source_audio_url) {
-                    PICCOLO_URL = tuningData.metadata.source_audio_url;
-                }
-                if (!TEST_PULSE_URL && tuningData.metadata.test_pulse_url) {
-                    TEST_PULSE_URL = tuningData.metadata.test_pulse_url;
-                }
-            }
-
-            if (PICCOLO_URL && !bufferCache[PICCOLO_URL]) {
-                preloadTuningAsset(PICCOLO_URL);
-            }
-
-        } catch (e) {
-            log(`❌ Failed to load piccolo asset URLs: ${e.message}`);
-        }
-    }
-
-    async function preloadTuningAsset(url) {
-        try {
-            const res = await fetch(url);
-            const arrayBuf = await res.arrayBuffer();
-            bufferCache[url] = await audioCtx.decodeAudioData(arrayBuf);
-            log(`✅ Preloaded tuning asset: ${url.split('/').pop()}`);
-        } catch (e) {
-            log(`❌ Failed to preload tuning asset: ${e.message}`);
-        }
-    }
-
-    // --- HEARTBEAT FUNCTIONS ---
-    function startHeartbeat() {
-        if (!mySeat) return;
-        if (heartbeatInterval) clearInterval(heartbeatInterval);
-        if (heartbeatTimer) clearTimeout(heartbeatTimer);
-        scheduleNextHeartbeat();
-        log(`💓 Heartbeat started for ${mySeat.id}`);
-    }
-
-    function scheduleNextHeartbeat() {
-        const jitter = Math.floor(Math.random() * HEARTBEAT_JITTER_MS) - (HEARTBEAT_JITTER_MS / 2);
-        const nextInterval = Math.max(1000, HEARTBEAT_BASE_INTERVAL_MS + jitter);
-
-        if (heartbeatTimer) clearTimeout(heartbeatTimer);
-
-        heartbeatTimer = setTimeout(() => {
-            sendHeartbeat();
-            scheduleNextHeartbeat();
-        }, nextInterval);
-    }
-
-    async function sendHeartbeat() {
-        if (!mySeat) return;
-
-        try {
-            const now = Date.now() + serverOffset;
-            await db.ref(`devices/${mySeat.id}`).update({
-                lastSeen: now,
-                status: isHappy ? 'HAPPY' : (calibrationMode ? 'CALIBRATING' : 'ACTIVE'),
-                x: mySeat.x,
-                y: mySeat.y,
-                speakerDelay: calibratedSpeakerDelay,
-                micDelay: myMicDelayMs,
-                neighborCount: myNeighbors.length,
-                estimatedDelay: Math.round(estimatedDeviceDelayMs),
-                adaptiveWindow: Math.round(adaptiveWindowMs),
-                phase1Complete: phase1Complete
-            });
-        } catch (e) {
-            log(`💔 Heartbeat failed: ${e.message}`);
-        }
-    }
-
-    function stopHeartbeat() {
-        if (heartbeatInterval) clearInterval(heartbeatInterval);
-        if (heartbeatTimer) clearTimeout(heartbeatTimer);
-        log(`💓 Heartbeat stopped for ${mySeat?.id}`);
-    }
-
-    // --- ASSET PRELOADING from Firebase show/movements ---
-    async function preloadAssets() {
-        document.getElementById('asset-progress').style.display = 'block';
-
-        try {
-            const movementsSnap = await db.ref('show/movements').once('value');
-            const movements = movementsSnap.val();
-
-            if (!movements || !movements.length) {
-                log("⚠️ No movements found in Firebase show/movements");
-                document.getElementById('asset-ind').className = 'indicator syncing';
-                document.getElementById('asset-progress').style.display = 'none';
-                return true;
-            }
-
-            const audioFiles = new Set();
-
-            movements.forEach(movement => {
-                (movement.cues || []).forEach(cue => {
-                    (cue.assets || []).forEach(asset => {
-                        if (asset.audio_url) {
-                            audioFiles.add(asset.audio_url);
-                        }
-                    });
+                expectedNoteMap.clear();
+                noteSchedule.forEach(note => {
+                    expectedNoteMap.set(note.noteIndex, note.deviceId);
                 });
-            });
 
-            totalAssetsToPreload = audioFiles.size;
-            preloadedCount = 0;
-
-            log(`📦 Preloading ${totalAssetsToPreload} audio assets from timeline`);
-
-            if (totalAssetsToPreload === 0) {
-                document.getElementById('asset-ind').className = 'indicator active';
-                document.getElementById('asset-progress').style.display = 'none';
-                return true;
-            }
-
-            const loadTasks = Array.from(audioFiles).map(async url => {
-                try {
-                    const res = await fetch(url);
-                    const arrayBuf = await res.arrayBuffer();
-                    bufferCache[url] = await audioCtx.decodeAudioData(arrayBuf);
-                    preloadedCount++;
-                    updatePreloadProgress();
-                } catch (e) {
-                    log(`❌ Failed to load ${url.split('/').pop()}: ${e.message}`);
-                    preloadedCount++;
-                    updatePreloadProgress();
-                }
-            });
-
-            await Promise.all(loadTasks);
-            document.getElementById('asset-ind').className = 'indicator active';
-            document.getElementById('asset-progress').style.display = 'none';
-            return true;
-
-        } catch (e) {
-            log(`❌ Asset Load Failure: ${e.message}`);
-            document.getElementById('asset-ind').className = 'indicator error';
-            document.getElementById('asset-progress').style.display = 'none';
-            return false;
-        }
-    }
-
-    function updatePreloadProgress() {
-        const percent = (preloadedCount / totalAssetsToPreload) * 100;
-        document.getElementById('asset-progress-fill').style.width = `${percent}%`;
-    }
-
-    // --- UTILITY FUNCTIONS ---
-    function calculateMedian(values) {
-        if (values.length === 0) return 0;
-        const sorted = [...values].sort((a, b) => a - b);
-        const mid = Math.floor(sorted.length / 2);
-        if (sorted.length % 2 === 0) {
-            return (sorted[mid - 1] + sorted[mid]) / 2;
-        } else {
-            return sorted[mid];
-        }
-    }
-
-    // SECTION 2 END ============================================================
-
-    // SECTION 3 BEGIN ============================================================
-    // TUNING SCHEDULER — NOTE DISTRIBUTION, PLAYBACK, RELAUNCH
-    // ============================================================================
-
-    // --- ADAPTIVE DELAY UPDATE (from zynth_device.html) ---
-    function updateEstimatedDelay(newDelay) {
-        // Store the measurement
-        delayMeasurements.push(newDelay);
-
-        // Keep last 15 measurements
-        if (delayMeasurements.length > 15) {
-            delayMeasurements.shift();
-        }
-
-        // Calculate new estimate as median of recent measurements
-        if (delayMeasurements.length >= 3) {
-            const sorted = [...delayMeasurements].sort((a, b) => a - b);
-            estimatedDeviceDelayMs = sorted[Math.floor(sorted.length / 2)];
-
-            log(`📊 Adaptive delay updated: ${Math.round(estimatedDeviceDelayMs)}ms (from ${delayMeasurements.length} samples)`);
-
-            // Adjust window size based on consistency
-            const recent = delayMeasurements.slice(-5);
-            const range = Math.max(...recent) - Math.min(...recent);
-            adaptiveWindowMs = Math.min(MAX_ADAPTIVE_WINDOW_MS, 500 + range * 1.5);
-            log(`   Adaptive window: ${Math.round(adaptiveWindowMs)}ms (based on ±${Math.round(range/2)}ms variation)`);
-        }
-
-        consecutiveMisses = 0; // Reset miss counter on successful detection
-    }
-
-    // --- SPECTRUM RECORDING (for lookback analysis) ---
-    function recordSpectrum(now, avgEnergy, dominantFreq) {
-        if (spectrumHistory.length === 0 || now - spectrumHistory[spectrumHistory.length-1].timestamp > 100) {
-            spectrumHistory.push({
-                timestamp: now,
-                energy: avgEnergy,
-                freq: dominantFreq
-            });
-
-            while (spectrumHistory.length > MAX_HISTORY_SAMPLES) {
-                spectrumHistory.shift();
-            }
-        }
-    }
-
-    // --- FIND NOTE IN HISTORY (for missed detections) ---
-    function findNoteInHistory(expectedTime, expectedFreq, toleranceMs, freqTolerance = 50) {
-        const windowStart = expectedTime - toleranceMs;
-        const windowEnd = expectedTime + toleranceMs;
-
-        let bestMatch = null;
-        let bestEnergy = 0;
-
-        for (let i = spectrumHistory.length - 1; i >= 0; i--) {
-            const sample = spectrumHistory[i];
-
-            if (sample.timestamp >= windowStart && sample.timestamp <= windowEnd) {
-                if (Math.abs(sample.freq - expectedFreq) < freqTolerance) {
-                    if (sample.energy > bestEnergy) {
-                        bestEnergy = sample.energy;
-                        bestMatch = sample;
-                    }
-                }
-            }
-        }
-
-        return bestMatch;
-    }
-
-    // --- MICROPHONE INITIALIZATION (for neighbor listening) ---
-    async function enableMicrophone() {
-        if (isMicActive) return true;
-
-        try {
-            log('🎤 Requesting microphone for neighbor listening...');
-
-            const stream = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                    echoCancellation: false,
-                    noiseSuppression: true,
-                    autoGainControl: false,
-                    sampleRate: 44100
-                },
-                video: false
-            });
-
-            micStream = stream;
-
-            if (!audioCtx) {
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            }
-
-            const source = audioCtx.createMediaStreamSource(stream);
-            analyser = audioCtx.createAnalyser();
-            analyser.fftSize = FFT_SIZE;
-            analyser.smoothingTimeConstant = 0.1; // Fast response for onset detection
-
-            source.connect(analyser);
-
-            sampleRate = audioCtx.sampleRate;
-
-            // Calculate frequency bins for piccolo range
-            const nyquist = sampleRate / 2;
-            binIndices.start = Math.floor(PICCOLO_MIN_FREQ / nyquist * (FFT_SIZE / 2));
-            binIndices.end = Math.ceil(PICCOLO_MAX_FREQ / nyquist * (FFT_SIZE / 2));
-
-            frequencyData = new Uint8Array(analyser.frequencyBinCount);
-            timeDomainData = new Float32Array(analyser.fftSize);
-
-            isMicActive = true;
-
-            // Show energy meter during tuning
-            document.getElementById('energy-meter').style.display = 'block';
-
-            log(`🎤 Microphone enabled for neighbor listening (${allListeningTargets.length} targets)`);
-            log(`   Piccolo band: ${PICCOLO_MIN_FREQ}-${PICCOLO_MAX_FREQ}Hz (bins ${binIndices.start}-${binIndices.end})`);
-
-            // Start the detection loop
-            requestAnimationFrame(detectNeighborNotes);
-
-            return true;
-
-        } catch (e) {
-            log(`❌ Failed to enable microphone: ${e.message}`);
-            return false;
-        }
-    }
-
-    function disableMicrophone() {
-        if (micStream) {
-            micStream.getTracks().forEach(track => track.stop());
-            micStream = null;
-        }
-        analyser = null;
-        isMicActive = false;
-        document.getElementById('energy-meter').style.display = 'none';
-        log("🎤 Microphone disabled");
-    }
-
-    // --- TUNING SCHEDULE HANDLER (loads from tuning/current) ---
-    function initTuningListener() {
-        db.ref('tuning/current').on('value', snap => {
-            const schedule = snap.val();
-            if (schedule && schedule.status === 'ACTIVE') {
-                calibrationMode = true;
-                currentTuningSchedule = schedule;
-
-                // Store tuning start time
-                tuningStartTime = schedule.startTime;
-
-                // Store full note schedule for piccolo
-                if (schedule.schedule) {
-                    noteSchedule = schedule.schedule.map(note => ({
+                assignedNotes = noteSchedule
+                    .filter(note => note.deviceId === mySeat.id)
+                    .map(note => ({
                         ...note,
                         startMs: parseFloat(note.startMs),
                         durationMs: parseFloat(note.durationMs)
                     }));
 
-                    expectedNoteMap.clear();
-                    noteSchedule.forEach(note => {
-                        expectedNoteMap.set(note.noteIndex, note.deviceId);
-                    });
+                log(`🎯 This device assigned ${assignedNotes.length} notes for tuning`);
+                log(`   Listening for notes from ${allListeningTargets.length} neighbors/pillars`);
 
-                    assignedNotes = noteSchedule
-                        .filter(note => note.deviceId === mySeat.id)
-                        .map(note => ({
-                            ...note,
-                            startMs: parseFloat(note.startMs),
-                            durationMs: parseFloat(note.durationMs)
-                        }));
+                document.getElementById('debug-listening-to').innerText = allListeningTargets.length;
+                document.getElementById('debug-measurements').innerText = noteSchedule.length;
+            }
 
-                    log(`🎯 This device assigned ${assignedNotes.length} notes for tuning`);
-                    log(`   Listening for notes from ${allListeningTargets.length} neighbors/pillars`);
+            // Load pillar notes from the schedule (if present) for Phase 1
+            if (schedule.pillar_notes && Array.isArray(schedule.pillar_notes)) {
+                pillarNoteSchedule = schedule.pillar_notes.map(note => ({
+                    ...note,
+                    ms_offset: parseFloat(note.ms_offset),
+                    duration_ms: parseFloat(note.duration_ms),
+                    pulse_ms: parseFloat(note.pulse_ms)
+                }));
+                log(`📡 Loaded ${pillarNoteSchedule.length} pillar notes from tuning schedule for mic delay calibration`);
+            } else {
+                log(`⚠️ No pillar_notes found in tuning schedule - Phase 1 mic calibration will be skipped`);
+            }
 
-                    document.getElementById('debug-listening-to').innerText = allListeningTargets.length;
-                    document.getElementById('debug-measurements').innerText = noteSchedule.length;
-                }
+            // Load pillar calibration windows (FIX: look at top level, not metadata)
+            if (schedule.pillar_cal_windows) {
+                pillarWindows = schedule.pillar_cal_windows;
+                log(`🎯 Loaded ${pillarWindows.length} pillar calibration windows`);
+                pillarWindows.forEach(w => {
+                    log(`   ${w.pillar_id}: ${w.start_ms}ms → ${w.end_ms}ms`);
+                });
+            } else {
+                log(`⚠️ No pillar_cal_windows found - Phase 1 mic calibration will use fallback`);
+                // Fallback: create windows based on timing of pillar notes
+                if (pillarNoteSchedule.length > 0) {
+                    const pillarIds = ['PILLAR_FL', 'PILLAR_FR', 'PILLAR_BR', 'PILLAR_BL'];
+                    let currentOffset = 0;
+                    const notesPerPillar = Math.floor(pillarNoteSchedule.length / 4);
 
-                // Load pillar notes from the schedule (if present) for Phase 1
-                if (schedule.pillar_notes && Array.isArray(schedule.pillar_notes)) {
-                    pillarNoteSchedule = schedule.pillar_notes.map(note => ({
-                        ...note,
-                        ms_offset: parseFloat(note.ms_offset),
-                        duration_ms: parseFloat(note.duration_ms),
-                        pulse_ms: parseFloat(note.pulse_ms)
-                    }));
-                    log(`📡 Loaded ${pillarNoteSchedule.length} pillar notes from tuning schedule for mic delay calibration`);
-                } else {
-                    log(`⚠️ No pillar_notes found in tuning schedule - Phase 1 mic calibration will be skipped`);
-                }
+                    for (let i = 0; i < pillarIds.length; i++) {
+                        const pillarId = pillarIds[i];
+                        const startIdx = i * notesPerPillar;
+                        const endIdx = Math.min(startIdx + notesPerPillar, pillarNoteSchedule.length - 1);
 
-                // Load pillar calibration windows from metadata
-                if (schedule.metadata && schedule.metadata.pillar_cal_windows) {
-                    pillarWindows = schedule.metadata.pillar_cal_windows;
-                    log(`🎯 Loaded ${pillarWindows.length} pillar calibration windows`);
-                    pillarWindows.forEach(w => {
-                        log(`   ${w.pillar_id}: ${w.start_ms}ms → ${w.end_ms}ms`);
-                    });
-                } else {
-                    log(`⚠️ No pillar_cal_windows found - Phase 1 mic calibration will use fallback`);
-                    // Fallback: create windows based on timing of pillar notes
-                    if (pillarNoteSchedule.length > 0) {
-                        const pillarIds = ['PILLAR_FL', 'PILLAR_FR', 'PILLAR_BR', 'PILLAR_BL'];
-                        let currentOffset = 0;
-                        const notesPerPillar = Math.floor(pillarNoteSchedule.length / 4);
-
-                        for (let i = 0; i < pillarIds.length; i++) {
-                            const pillarId = pillarIds[i];
-                            const startIdx = i * notesPerPillar;
-                            const endIdx = Math.min(startIdx + notesPerPillar, pillarNoteSchedule.length - 1);
-
-                            if (startIdx < pillarNoteSchedule.length) {
-                                const startMs = pillarNoteSchedule[startIdx].ms_offset;
-                                const endMs = pillarNoteSchedule[endIdx].ms_offset + 500;
-                                pillarWindows.push({ pillar_id: pillarId, start_ms: startMs, end_ms: endMs });
-                                log(`   Fallback window ${pillarId}: ${startMs}ms → ${endMs}ms`);
-                            }
+                        if (startIdx < pillarNoteSchedule.length) {
+                            const startMs = pillarNoteSchedule[startIdx].ms_offset;
+                            const endMs = pillarNoteSchedule[endIdx].ms_offset + 500;
+                            pillarWindows.push({ pillar_id: pillarId, start_ms: startMs, end_ms: endMs });
+                            log(`   Fallback window ${pillarId}: ${startMs}ms → ${endMs}ms`);
                         }
                     }
                 }
+            }
 
-                // Reset Phase 1 state
-                phase1Complete = false;
-                phase1WindowActive = true;
-                micDelaySamples = [];
-                myMicDelayMs = null;
-                currentPillarWindowIndex = 0;
+            // Reset Phase 1 state
+            phase1Complete = false;
+            phase1WindowActive = true;
+            micDelaySamples = [];
+            myMicDelayMs = null;
+            currentPillarWindowIndex = 0;
 
-                // Find the first pillar window that has notes
-                if (pillarWindows.length > 0 && pillarNoteSchedule.length > 0) {
-                    currentPillarWindow = pillarWindows[0];
-                    const windowStartAbs = tuningStartTime + currentPillarWindow.start_ms;
-                    const windowEndAbs = tuningStartTime + currentPillarWindow.end_ms;
-                    currentWindowEndTime = windowEndAbs;
-                    log(`🎤 Phase 1 window open: listening for ${currentPillarWindow.pillar_id} from ${(currentPillarWindow.start_ms/1000).toFixed(1)}s to ${(currentPillarWindow.end_ms/1000).toFixed(1)}s`);
-                    log(`   (${new Date(windowStartAbs).toLocaleTimeString()} → ${new Date(windowEndAbs).toLocaleTimeString()})`);
-                } else {
-                    log(`⚠️ No pillar windows available - Phase 1 mic calibration will be skipped`);
-                    phase1Complete = true; // Skip Phase 1
-                }
+            // Find the first pillar window that has notes
+            if (pillarWindows.length > 0 && pillarNoteSchedule.length > 0) {
+                currentPillarWindow = pillarWindows[0];
+                const windowStartAbs = tuningStartTime + currentPillarWindow.start_ms;
+                const windowEndAbs = tuningStartTime + currentPillarWindow.end_ms;
+                currentWindowEndTime = windowEndAbs;
+                log(`🎤 Phase 1 window open: listening for ${currentPillarWindow.pillar_id} from ${(currentPillarWindow.start_ms/1000).toFixed(1)}s to ${(currentPillarWindow.end_ms/1000).toFixed(1)}s`);
+                log(`   (${new Date(windowStartAbs).toLocaleTimeString()} → ${new Date(windowEndAbs).toLocaleTimeString()})`);
+            } else {
+                log(`⚠️ No pillar windows available - Phase 1 mic calibration will be skipped`);
+                phase1Complete = true; // Skip Phase 1
+            }
 
-                // Set timer to close phase 1 window after all pillars
-                if (pillarWindows.length > 0) {
-                    const lastWindow = pillarWindows[pillarWindows.length - 1];
-                    const phase1EndTime = tuningStartTime + lastWindow.end_ms;
-                    const phase1Duration = lastWindow.end_ms;
+            // Set timer to close phase 1 window after all pillars
+            if (pillarWindows.length > 0) {
+                const lastWindow = pillarWindows[pillarWindows.length - 1];
+                const phase1EndTime = tuningStartTime + lastWindow.end_ms;
+                const phase1Duration = lastWindow.end_ms;
 
-                    setTimeout(() => {
-                        if (phase1WindowActive && !phase1Complete) {
-                            phase1WindowActive = false;
-                            phase1Complete = true;
-                            if (micDelaySamples.length === 0) {
-                                myMicDelayMs = 0;
-                                log(`⚠️ Phase 1 window closed with no samples - using 0ms mic delay`);
-                            } else {
-                                // Calculate median if we have samples
-                                const sorted = [...micDelaySamples].sort((a, b) => a - b);
-                                myMicDelayMs = sorted[Math.floor(sorted.length / 2)];
-                                log(`🎤 Phase 1 complete: mic delay = ${myMicDelayMs.toFixed(1)}ms from ${micDelaySamples.length} samples`);
-                            }
-
-                            // Write to Firebase
-                            db.ref(`devices/${mySeat.id}/calibration`).update({
-                                micDelayMs: Math.round(myMicDelayMs || 0),
-                                micDelaySamples: micDelaySamples.length,
-                                micDelayDerivedAt: Date.now() + serverOffset
-                            });
-
-                            document.getElementById('debug-mic-delay').innerText = myMicDelayMs ? `${myMicDelayMs.toFixed(1)}ms` : '0ms (fallback)';
-                            document.getElementById('debug-phase1-samples').innerText = micDelaySamples.length;
+                setTimeout(() => {
+                    if (phase1WindowActive && !phase1Complete) {
+                        phase1WindowActive = false;
+                        phase1Complete = true;
+                        if (micDelaySamples.length === 0) {
+                            myMicDelayMs = 0;
+                            log(`⚠️ Phase 1 window closed with no samples - using 0ms mic delay`);
+                        } else {
+                            // Calculate median if we have samples
+                            const sorted = [...micDelaySamples].sort((a, b) => a - b);
+                            myMicDelayMs = sorted[Math.floor(sorted.length / 2)];
+                            log(`🎤 Phase 1 complete: mic delay = ${myMicDelayMs.toFixed(1)}ms from ${micDelaySamples.length} samples`);
                         }
-                    }, phase1Duration);
-                }
 
-                // Store piccolo URL
-                if (schedule.piccoloUrl) {
-                    PICCOLO_URL = schedule.piccoloUrl;
-                }
+                        // Write to Firebase
+                        db.ref(`devices/${mySeat.id}/calibration`).update({
+                            micDelayMs: Math.round(myMicDelayMs || 0),
+                            micDelaySamples: micDelaySamples.length,
+                            micDelayDerivedAt: Date.now() + serverOffset
+                        });
 
-                // Store pillar URLs
-                if (schedule.pillars) {
-                    pillarUrls = schedule.pillars;
-                }
-
-                // Enable microphone for neighbor listening
-                enableMicrophone();
-
-            } else {
-                calibrationMode = false;
-                currentTuningSchedule = null;
-                noteSchedule = [];
-                expectedNoteMap.clear();
-                phase1WindowActive = false;
-
-                // Disable microphone when tuning ends
-                disableMicrophone();
-
-                log("🎯 Tuning mode deactivated");
+                        document.getElementById('debug-mic-delay').innerText = myMicDelayMs ? `${myMicDelayMs.toFixed(1)}ms` : '0ms (fallback)';
+                        document.getElementById('debug-phase1-samples').innerText = micDelaySamples.length;
+                    }
+                }, phase1Duration);
             }
-        });
-    }
 
-    // --- PICCOLO PLAYBACK (scheduled note playback) ---
-    async function playTuningMovement(cue) {
-        log("🎵 Starting tuning movement with distributed calibration");
-
-        if (!PICCOLO_URL) {
-            log("❌ No piccolo URL available");
-            return;
-        }
-
-        const movementStartTime = cue.startTime || currentTuningSchedule?.startTime;
-
-        if (mySeat.id.startsWith('PILLAR_')) {
-            startPillarFabric(movementStartTime);
-            return;
-        }
-
-        if (assignedNotes.length === 0) {
-            log("No notes assigned to this device for tuning");
-            return;
-        }
-
-        if (!bufferCache[PICCOLO_URL]) {
-            try {
-                const res = await fetch(PICCOLO_URL);
-                const arrayBuf = await res.arrayBuffer();
-                bufferCache[PICCOLO_URL] = await audioCtx.decodeAudioData(arrayBuf);
-            } catch (e) {
-                log(`❌ Failed to load piccolo audio: ${e.message}`);
-                return;
+            // Store piccolo URL
+            if (schedule.piccoloUrl) {
+                PICCOLO_URL = schedule.piccoloUrl;
             }
-        }
 
-        const nowWall = Date.now() + serverOffset;
+            // FIX: DO NOT overwrite pillarUrls with schedule.pillars!
+            // pillarUrls is already correctly set by loadTuningAssetUrls() from tuning_mode.json.
+            // The schedule.pillars contains show movement URLs (performance MP3s), not tuning MP3s.
+            // Removing this block prevents the overwrite.
+            // if (schedule.pillars) {
+            //     pillarUrls = schedule.pillars;  // ← THIS WAS THE BUG - REMOVED
+            // }
 
-        const sortedNotes = [...assignedNotes].sort((a, b) => a.startMs - b.startMs);
+            // Enable microphone for neighbor listening
+            enableMicrophone();
 
-        // Group into continuous blocks
-        const blocks = [];
-        let currentBlock = {
-            startMs: sortedNotes[0].startMs,
-            endMs: sortedNotes[0].startMs + sortedNotes[0].durationMs,
-            notes: [sortedNotes[0]]
-        };
-
-        for (let i = 1; i < sortedNotes.length; i++) {
-            const note = sortedNotes[i];
-            const prevNote = sortedNotes[i-1];
-            const gap = note.startMs - (prevNote.startMs + prevNote.durationMs);
-
-            if (gap <= 50) {
-                currentBlock.endMs = note.startMs + note.durationMs;
-                currentBlock.notes.push(note);
-            } else {
-                blocks.push(currentBlock);
-                currentBlock = {
-                    startMs: note.startMs,
-                    endMs: note.startMs + note.durationMs,
-                    notes: [note]
-                };
-            }
-        }
-        blocks.push(currentBlock);
-
-        log(`📦 Scheduled ${blocks.length} continuous blocks for ${assignedNotes.length} notes`);
-
-        blocks.forEach(block => {
-            const blockStartWall = movementStartTime + block.startMs;
-            // Adjust for calibrated speaker delay (from Phase 2) and mic delay (from Phase 1)
-            const adjustedStartWall = blockStartWall - (calibratedSpeakerDelay || 0) - (myMicDelayMs || 0);
-            const delayMs = adjustedStartWall - nowWall;
-
-            if (delayMs > 0) {
-                const timeoutId = setTimeout(() => {
-                    playAudioBlock(PICCOLO_URL, block, movementStartTime);
-                    activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
-                }, delayMs);
-                activeTimeouts.push(timeoutId);
-            }
-        });
-    }
-
-    async function playAudioBlock(url, block, movementStartTime) {
-        const source = audioCtx.createBufferSource();
-        source.buffer = bufferCache[url];
-
-        const gainNode = audioCtx.createGain();
-        source.connect(gainNode).connect(audioCtx.destination);
-
-        const seekSeconds = block.startMs / 1000;
-        source.start(0, seekSeconds);
-
-        const now = audioCtx.currentTime;
-        const blockDuration = (block.endMs - block.startMs) / 1000;
-
-        gainNode.gain.setValueAtTime(0, now);
-        gainNode.gain.linearRampToValueAtTime(1.0, now + 0.03);
-        gainNode.gain.setValueAtTime(1.0, now + blockDuration - 0.04);
-        gainNode.gain.linearRampToValueAtTime(0, now + blockDuration);
-
-        log(`🔊 Playing block: ${(block.startMs/1000).toFixed(2)}s-${(block.endMs/1000).toFixed(2)}s (${block.notes.length} notes)`);
-    }
-
-    // --- PILLAR FABRIC PLAYBACK (continuous background music) ---
-    async function startPillarFabric(startTime) {
-        log(`🎻 Starting pillar fabric for ${mySeat.id}`);
-
-        // Get this pillar's position from pillarConfig
-        const pillar = pillarConfig[mySeat.id];
-        if (!pillar) {
-            log(`❌ No position found for ${mySeat.id} in pillarConfig`);
-            return;
-        }
-
-        // Get this pillar's URL (extract position code from seat ID)
-        const positionCode = mySeat.id.replace('PILLAR_', '');
-        const myUrl = pillarUrls[positionCode];
-
-        if (!myUrl) {
-            log(`❌ No URL found for ${mySeat.id} (position ${positionCode})`);
-            return;
-        }
-
-        log(`📌 ${mySeat.id} at (${pillar.x}, ${pillar.y})`);
-        log(`🔊 URL: ${myUrl.split('/').pop()}`);
-
-        const nowWall = Date.now() + serverOffset;
-
-        // Calculate warm-up time (500ms before start, play silently for 100ms)
-        const warmUpTime = startTime - WARMUP_ADVANCE_MS;
-        const warmUpDelay = warmUpTime - nowWall - (calibratedSpeakerDelay || 0) - (myMicDelayMs || 0);
-
-        // Calculate actual start time
-        const startDelay = startTime - nowWall - (calibratedSpeakerDelay || 0) - (myMicDelayMs || 0);
-
-        // Ensure the audio is loaded
-        if (!bufferCache[myUrl]) {
-            try {
-                log(`📦 Loading pillar audio: ${myUrl.split('/').pop()}`);
-                const res = await fetch(myUrl);
-                const arrayBuf = await res.arrayBuffer();
-                bufferCache[myUrl] = await audioCtx.decodeAudioData(arrayBuf);
-                log(`✅ Pillar audio loaded`);
-            } catch (e) {
-                log(`❌ Failed to load pillar audio: ${e.message}`);
-                return;
-            }
-        }
-
-        // SCHEDULE WARM-UP PULSE (100ms silent playback)
-        if (warmUpDelay > 0) {
-            const warmUpTimeoutId = setTimeout(() => {
-                try {
-                    const source = audioCtx.createBufferSource();
-                    source.buffer = bufferCache[myUrl];
-
-                    const gainNode = audioCtx.createGain();
-                    gainNode.gain.setValueAtTime(0, audioCtx.currentTime); // Silent
-
-                    source.connect(gainNode).connect(audioCtx.destination);
-                    source.start(0);
-
-                    // Stop after exactly 100ms
-                    source.stop(audioCtx.currentTime + (SILENT_WARMUP_MS / 1000));
-
-                    log(`🔇 Warm-up pulse for ${mySeat.id} at ${new Date().toLocaleTimeString()}`);
-                } catch (e) {
-                    log(`❌ Warm-up failed: ${e.message}`);
-                }
-
-                activeTimeouts = activeTimeouts.filter(id => id !== warmUpTimeoutId);
-            }, warmUpDelay);
-
-            activeTimeouts.push(warmUpTimeoutId);
-            log(`📅 ${mySeat.id} warm-up scheduled in ${Math.round(warmUpDelay)}ms`);
         } else {
-            log(`⚠️ Warm-up delay negative (${Math.round(warmUpDelay)}ms), skipping`);
+            calibrationMode = false;
+            currentTuningSchedule = null;
+            noteSchedule = [];
+            expectedNoteMap.clear();
+            phase1WindowActive = false;
+
+            // Disable microphone when tuning ends
+            disableMicrophone();
+
+            log("🎯 Tuning mode deactivated");
+        }
+    });
+}
+
+// SECTION 2 END ============================================================
+
+    // SECTION 3 BEGIN ============================================================
+// TUNING SCHEDULER — NOTE DISTRIBUTION, PLAYBACK, RELAUNCH
+// ============================================================================
+
+// --- ADAPTIVE DELAY UPDATE (from zynth_device.html) ---
+function updateEstimatedDelay(newDelay) {
+    // Store the measurement
+    delayMeasurements.push(newDelay);
+
+    // Keep last 15 measurements
+    if (delayMeasurements.length > 15) {
+        delayMeasurements.shift();
+    }
+
+    // Calculate new estimate as median of recent measurements
+    if (delayMeasurements.length >= 3) {
+        const sorted = [...delayMeasurements].sort((a, b) => a - b);
+        estimatedDeviceDelayMs = sorted[Math.floor(sorted.length / 2)];
+
+        log(`📊 Adaptive delay updated: ${Math.round(estimatedDeviceDelayMs)}ms (from ${delayMeasurements.length} samples)`);
+
+        // Adjust window size based on consistency
+        const recent = delayMeasurements.slice(-5);
+        const range = Math.max(...recent) - Math.min(...recent);
+        adaptiveWindowMs = Math.min(MAX_ADAPTIVE_WINDOW_MS, 500 + range * 1.5);
+        log(`   Adaptive window: ${Math.round(adaptiveWindowMs)}ms (based on ±${Math.round(range/2)}ms variation)`);
+    }
+
+    consecutiveMisses = 0; // Reset miss counter on successful detection
+}
+
+// --- SPECTRUM RECORDING (for lookback analysis) ---
+function recordSpectrum(now, avgEnergy, dominantFreq) {
+    if (spectrumHistory.length === 0 || now - spectrumHistory[spectrumHistory.length-1].timestamp > 100) {
+        spectrumHistory.push({
+            timestamp: now,
+            energy: avgEnergy,
+            freq: dominantFreq
+        });
+
+        while (spectrumHistory.length > MAX_HISTORY_SAMPLES) {
+            spectrumHistory.shift();
+        }
+    }
+}
+
+// --- FIND NOTE IN HISTORY (for missed detections) ---
+function findNoteInHistory(expectedTime, expectedFreq, toleranceMs, freqTolerance = 50) {
+    const windowStart = expectedTime - toleranceMs;
+    const windowEnd = expectedTime + toleranceMs;
+
+    let bestMatch = null;
+    let bestEnergy = 0;
+
+    for (let i = spectrumHistory.length - 1; i >= 0; i--) {
+        const sample = spectrumHistory[i];
+
+        if (sample.timestamp >= windowStart && sample.timestamp <= windowEnd) {
+            if (Math.abs(sample.freq - expectedFreq) < freqTolerance) {
+                if (sample.energy > bestEnergy) {
+                    bestEnergy = sample.energy;
+                    bestMatch = sample;
+                }
+            }
+        }
+    }
+
+    return bestMatch;
+}
+
+// --- MICROPHONE INITIALIZATION (for neighbor listening) ---
+async function enableMicrophone() {
+    if (isMicActive) return true;
+
+    try {
+        log('🎤 Requesting microphone for neighbor listening...');
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+                echoCancellation: false,
+                noiseSuppression: true,
+                autoGainControl: false,
+                sampleRate: 44100
+            },
+            video: false
+        });
+
+        micStream = stream;
+
+        if (!audioCtx) {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         }
 
-        // SCHEDULE ACTUAL START (full volume, looped)
-        if (startDelay > 0) {
-            const startTimeoutId = setTimeout(() => {
-                try {
-                    const source = audioCtx.createBufferSource();
-                    source.buffer = bufferCache[myUrl];
-                    source.loop = true; // Pillars play continuously
+        const source = audioCtx.createMediaStreamSource(stream);
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = FFT_SIZE;
+        analyser.smoothingTimeConstant = 0.1; // Fast response for onset detection
 
-                    const gainNode = audioCtx.createGain();
-                    gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime); // Full volume
+        source.connect(analyser);
 
-                    source.connect(gainNode).connect(audioCtx.destination);
-                    source.start(0);
+        sampleRate = audioCtx.sampleRate;
 
-                    log(`🏛️ ${mySeat.id} STARTED at ${new Date().toLocaleTimeString()}`);
+        // Calculate frequency bins for piccolo range
+        const nyquist = sampleRate / 2;
+        binIndices.start = Math.floor(PICCOLO_MIN_FREQ / nyquist * (FFT_SIZE / 2));
+        binIndices.end = Math.ceil(PICCOLO_MAX_FREQ / nyquist * (FFT_SIZE / 2));
 
-                    // Store in active audio cues for potential later control
-                    activeAudioCues.push({
-                        type: 'pillar',
-                        source: source,
-                        gainNode: gainNode,
-                        startTime: startTime,
-                        id: mySeat.id,
-                        position: pillar
-                    });
+        frequencyData = new Uint8Array(analyser.frequencyBinCount);
+        timeDomainData = new Float32Array(analyser.fftSize);
 
-                } catch (e) {
-                    log(`❌ Pillar start failed: ${e.message}`);
-                }
+        isMicActive = true;
 
-                activeTimeouts = activeTimeouts.filter(id => id !== startTimeoutId);
-            }, startDelay);
+        // Show energy meter during tuning
+        document.getElementById('energy-meter').style.display = 'block';
 
-            activeTimeouts.push(startTimeoutId);
-            log(`📅 ${mySeat.id} start scheduled in ${Math.round(startDelay)}ms (at ${new Date(startTime).toLocaleTimeString()}.${String(startTime % 1000).padStart(3, '0')})`);
+        log(`🎤 Microphone enabled for neighbor listening (${allListeningTargets.length} targets)`);
+        log(`   Piccolo band: ${PICCOLO_MIN_FREQ}-${PICCOLO_MAX_FREQ}Hz (bins ${binIndices.start}-${binIndices.end})`);
 
-        } else if (startDelay > -1000) {
-            // Slightly late - start immediately
-            log(`⚠️ ${mySeat.id} start is ${Math.round(-startDelay)}ms late, playing immediately`);
+        // Start the detection loop
+        requestAnimationFrame(detectNeighborNotes);
+
+        return true;
+
+    } catch (e) {
+        log(`❌ Failed to enable microphone: ${e.message}`);
+        return false;
+    }
+}
+
+function disableMicrophone() {
+    if (micStream) {
+        micStream.getTracks().forEach(track => track.stop());
+        micStream = null;
+    }
+    analyser = null;
+    isMicActive = false;
+    document.getElementById('energy-meter').style.display = 'none';
+    log("🎤 Microphone disabled");
+}
+
+// --- TUNING SCHEDULE HANDLER (loads from tuning/current) ---
+// NOTE: This function is now in SECTION 2. If you have a duplicate here, delete it.
+// The correct version is in SECTION 2 with the pillar URL fix.
+
+// --- PICCOLO PLAYBACK (scheduled note playback) ---
+async function playTuningMovement(cue) {
+    log("🎵 Starting tuning movement with distributed calibration");
+
+    if (!PICCOLO_URL) {
+        log("❌ No piccolo URL available");
+        return;
+    }
+
+    // Use movement start time from the GO cue
+    const movementStartTime = cue.startTime || currentTuningSchedule?.startTime;
+
+    if (mySeat.id.startsWith('PILLAR_')) {
+        startPillarFabric(movementStartTime);
+        return;
+    }
+
+    if (assignedNotes.length === 0) {
+        log("No notes assigned to this device for tuning");
+        return;
+    }
+
+    if (!bufferCache[PICCOLO_URL]) {
+        try {
+            const res = await fetch(PICCOLO_URL);
+            const arrayBuf = await res.arrayBuffer();
+            bufferCache[PICCOLO_URL] = await audioCtx.decodeAudioData(arrayBuf);
+        } catch (e) {
+            log(`❌ Failed to load piccolo audio: ${e.message}`);
+            return;
+        }
+    }
+
+    const nowWall = Date.now() + serverOffset;
+
+    const sortedNotes = [...assignedNotes].sort((a, b) => a.startMs - b.startMs);
+
+    // Group into continuous blocks
+    const blocks = [];
+    let currentBlock = {
+        startMs: sortedNotes[0].startMs,
+        endMs: sortedNotes[0].startMs + sortedNotes[0].durationMs,
+        notes: [sortedNotes[0]]
+    };
+
+    for (let i = 1; i < sortedNotes.length; i++) {
+        const note = sortedNotes[i];
+        const prevNote = sortedNotes[i-1];
+        const gap = note.startMs - (prevNote.startMs + prevNote.durationMs);
+
+        if (gap <= 50) {
+            currentBlock.endMs = note.startMs + note.durationMs;
+            currentBlock.notes.push(note);
+        } else {
+            blocks.push(currentBlock);
+            currentBlock = {
+                startMs: note.startMs,
+                endMs: note.startMs + note.durationMs,
+                notes: [note]
+            };
+        }
+    }
+    blocks.push(currentBlock);
+
+    log(`📦 Scheduled ${blocks.length} continuous blocks for ${assignedNotes.length} notes`);
+
+    blocks.forEach(block => {
+        const blockStartWall = movementStartTime + block.startMs;
+        // Adjust for calibrated speaker delay (from Phase 2) and mic delay (from Phase 1)
+        const adjustedStartWall = blockStartWall - (calibratedSpeakerDelay || 0) - (myMicDelayMs || 0);
+        const delayMs = adjustedStartWall - nowWall;
+
+        if (delayMs > 0) {
+            const timeoutId = setTimeout(() => {
+                playAudioBlock(PICCOLO_URL, block, movementStartTime);
+                activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
+            }, delayMs);
+            activeTimeouts.push(timeoutId);
+            log(`📅 Block scheduled in ${Math.round(delayMs)}ms`);
+        } else if (delayMs > -500) {
+            log(`⚠️ Block is ${Math.round(-delayMs)}ms late, playing immediately`);
+            playAudioBlock(PICCOLO_URL, block, movementStartTime);
+        } else {
+            log(`❌ Block is too late (${Math.round(-delayMs)}ms), skipping`);
+        }
+    });
+}
+
+async function playAudioBlock(url, block, movementStartTime) {
+    const source = audioCtx.createBufferSource();
+    source.buffer = bufferCache[url];
+
+    const gainNode = audioCtx.createGain();
+    source.connect(gainNode).connect(audioCtx.destination);
+
+    const seekSeconds = block.startMs / 1000;
+    source.start(0, seekSeconds);
+
+    const now = audioCtx.currentTime;
+    const blockDuration = (block.endMs - block.startMs) / 1000;
+
+    gainNode.gain.setValueAtTime(0, now);
+    gainNode.gain.linearRampToValueAtTime(1.0, now + 0.03);
+    gainNode.gain.setValueAtTime(1.0, now + blockDuration - 0.04);
+    gainNode.gain.linearRampToValueAtTime(0, now + blockDuration);
+
+    log(`🔊 Playing block: ${(block.startMs/1000).toFixed(2)}s-${(block.endMs/1000).toFixed(2)}s (${block.notes.length} notes)`);
+
+    // Schedule brightness animation for each note in the block
+    block.notes.forEach(note => {
+        const noteStartWall = movementStartTime + note.startMs;
+        const nowWall = Date.now() + serverOffset;
+
+        // Use the same adjusted timing as audio playback
+        const adjustedStartWall = noteStartWall - (calibratedSpeakerDelay || 0) - (myMicDelayMs || 0);
+        const delayMs = adjustedStartWall - nowWall;
+
+        if (delayMs > 0) {
+            const timeoutId = setTimeout(() => {
+                animateNoteBrightness(note.durationMs);
+                activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
+            }, delayMs);
+            activeTimeouts.push(timeoutId);
+        }
+    });
+}
+
+// --- PILLAR FABRIC PLAYBACK (continuous background music) ---
+async function startPillarFabric(startTime) {
+    log(`🎻 Starting pillar fabric for ${mySeat.id}`);
+
+    // Get this pillar's position from pillarConfig
+    const pillar = pillarConfig[mySeat.id];
+    if (!pillar) {
+        log(`❌ No position found for ${mySeat.id} in pillarConfig`);
+        return;
+    }
+
+    // Get this pillar's URL from pillarUrls (loaded from tuning_mode.json)
+    const positionCode = mySeat.id.replace('PILLAR_', '');
+    const myUrl = pillarUrls[positionCode];
+
+    if (!myUrl) {
+        log(`❌ No URL found for ${mySeat.id} (position ${positionCode})`);
+        return;
+    }
+
+    log(`📌 ${mySeat.id} at (${pillar.x}, ${pillar.y})`);
+    log(`🔊 URL: ${myUrl.split('/').pop()}`);
+
+    const nowWall = Date.now() + serverOffset;
+
+    // Calculate warm-up time (500ms before start, play silently for 100ms)
+    const warmUpTime = startTime - WARMUP_ADVANCE_MS;
+    const warmUpDelay = warmUpTime - nowWall - (calibratedSpeakerDelay || 0) - (myMicDelayMs || 0);
+
+    // Calculate actual start time
+    const startDelay = startTime - nowWall - (calibratedSpeakerDelay || 0) - (myMicDelayMs || 0);
+
+    // Ensure the audio is loaded
+    if (!bufferCache[myUrl]) {
+        try {
+            log(`📦 Loading pillar audio: ${myUrl.split('/').pop()}`);
+            const res = await fetch(myUrl);
+            const arrayBuf = await res.arrayBuffer();
+            bufferCache[myUrl] = await audioCtx.decodeAudioData(arrayBuf);
+            log(`✅ Pillar audio loaded`);
+        } catch (e) {
+            log(`❌ Failed to load pillar audio: ${e.message}`);
+            return;
+        }
+    }
+
+    // SCHEDULE WARM-UP PULSE (100ms silent playback)
+    if (warmUpDelay > 0) {
+        const warmUpTimeoutId = setTimeout(() => {
             try {
                 const source = audioCtx.createBufferSource();
                 source.buffer = bufferCache[myUrl];
-                source.loop = true;
 
                 const gainNode = audioCtx.createGain();
-                gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime);
+                gainNode.gain.setValueAtTime(0, audioCtx.currentTime); // Silent
 
                 source.connect(gainNode).connect(audioCtx.destination);
                 source.start(0);
 
-                log(`🏛️ ${mySeat.id} STARTED (late)`);
+                // Stop after exactly 100ms
+                source.stop(audioCtx.currentTime + (SILENT_WARMUP_MS / 1000));
 
+                log(`🔇 Warm-up pulse for ${mySeat.id} at ${new Date().toLocaleTimeString()}`);
+            } catch (e) {
+                log(`❌ Warm-up failed: ${e.message}`);
+            }
+
+            activeTimeouts = activeTimeouts.filter(id => id !== warmUpTimeoutId);
+        }, warmUpDelay);
+
+        activeTimeouts.push(warmUpTimeoutId);
+        log(`📅 ${mySeat.id} warm-up scheduled in ${Math.round(warmUpDelay)}ms`);
+    } else {
+        log(`⚠️ Warm-up delay negative (${Math.round(warmUpDelay)}ms), skipping`);
+    }
+
+    // SCHEDULE ACTUAL START (full volume, looped)
+    if (startDelay > 0) {
+        const startTimeoutId = setTimeout(() => {
+            try {
+                const source = audioCtx.createBufferSource();
+                source.buffer = bufferCache[myUrl];
+                source.loop = true; // Pillars play continuously
+
+                const gainNode = audioCtx.createGain();
+                gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime); // Full volume
+
+                source.connect(gainNode).connect(audioCtx.destination);
+                source.start(0);
+
+                log(`🏛️ ${mySeat.id} STARTED at ${new Date().toLocaleTimeString()}`);
+
+                // Store in active audio cues for potential later control
                 activeAudioCues.push({
                     type: 'pillar',
                     source: source,
@@ -1357,15 +1015,81 @@ devicedist.html: Feature List
                     id: mySeat.id,
                     position: pillar
                 });
+
             } catch (e) {
                 log(`❌ Pillar start failed: ${e.message}`);
             }
-        } else {
-            log(`❌ ${mySeat.id} start is too late (${Math.round(-startDelay)}ms), skipping`);
-        }
-    }
 
-    // SECTION 3 END ============================================================
+            activeTimeouts = activeTimeouts.filter(id => id !== startTimeoutId);
+        }, startDelay);
+
+        activeTimeouts.push(startTimeoutId);
+        log(`📅 ${mySeat.id} start scheduled in ${Math.round(startDelay)}ms (at ${new Date(startTime).toLocaleTimeString()}.${String(startTime % 1000).padStart(3, '0')})`);
+
+    } else if (startDelay > -1000) {
+        // Slightly late - start immediately
+        log(`⚠️ ${mySeat.id} start is ${Math.round(-startDelay)}ms late, playing immediately`);
+        try {
+            const source = audioCtx.createBufferSource();
+            source.buffer = bufferCache[myUrl];
+            source.loop = true;
+
+            const gainNode = audioCtx.createGain();
+            gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime);
+
+            source.connect(gainNode).connect(audioCtx.destination);
+            source.start(0);
+
+            log(`🏛️ ${mySeat.id} STARTED (late)`);
+
+            activeAudioCues.push({
+                type: 'pillar',
+                source: source,
+                gainNode: gainNode,
+                startTime: startTime,
+                id: mySeat.id,
+                position: pillar
+            });
+        } catch (e) {
+            log(`❌ Pillar start failed: ${e.message}`);
+        }
+    } else {
+        log(`❌ ${mySeat.id} start is too late (${Math.round(-startDelay)}ms), skipping`);
+    }
+}
+
+// --- BRIGHTNESS ANIMATION for note playback ---
+function animateNoteBrightness(durationMs) {
+    const canvas = document.getElementById('stage-canvas');
+    const ctx = canvas.getContext('2d');
+
+    // First half: 100% brightness (full white)
+    const halfDuration = durationMs / 2;
+    const quarterDuration = durationMs / 4;
+
+    // Start with full brightness
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Schedule fade to 50% after half duration
+    setTimeout(() => {
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }, halfDuration);
+
+    // Schedule fade to 10% after half + quarter (75% through)
+    setTimeout(() => {
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }, halfDuration + quarterDuration);
+
+    // Clear after note ends
+    setTimeout(() => {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }, durationMs);
+}
+
+// SECTION 3 END ============================================================
 
     // SECTION 4 BEGIN ============================================================
 // PHASE 1 MIC-CAL — PILLAR DETECTION, MIC DELAY DERIVATION
