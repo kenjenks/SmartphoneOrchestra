@@ -6,8 +6,8 @@
   
   "paths": {
     "base_dir": "C:\\\\Users\\\\ken\\\\Documents\\\\Ken\\\\Fiction\\\\HMP_SW\\\\Script_Analysis_and_Production\\\\SmartphoneOrchestra stuff\\\\Jesu Joy",
-    "input_musicxml": "Tuning-Jesu - Stacatto - Piccolo.musicxml",
-    "input_musicxml_pillars": "Tuning-Jesu - Stacatto - quad piano.musicxml",
+    "input_musicxml": "Tuning-Jesu - Stacatto.txt",
+    "input_musicxml_pillars": "Tuning-Jesu - Stacatto.txt",
     "output_file": "tuning_mode.json"
   },
   
@@ -36,25 +36,40 @@
   "_pillar_order_comment": "Order of pillars for calibration windows (clockwise from front left)",
   
   "pillar_musicxml_mapping": {
-    "PILLAR_FL": "P7",
-    "PILLAR_FR": "P8",
-    "PILLAR_BR": "P9",
-    "PILLAR_BL": "P10"
+    "PILLAR_FL": {
+      "part_id": "P3",
+      "staff": 1,
+      "part_name": "Piccolo FL"
+    },
+    "PILLAR_FR": {
+      "part_id": "P4",
+      "staff": 1,
+      "part_name": "Piccolo FR"
+    },
+    "PILLAR_BR": {
+      "part_id": "P5",
+      "staff": 1,
+      "part_name": "Piccolo BR"
+    },
+    "PILLAR_BL": {
+      "part_id": "P6",
+      "staff": 1,
+      "part_name": "Piccolo BL"
+    }
   },
-  "_pillar_musicxml_mapping_comment": "Maps pillar IDs to MusicXML part IDs (the part name in the score-partwise/part-list)",
+  "_pillar_musicxml_mapping_comment": "Maps pillar IDs to MusicXML part IDs and staff numbers. Staff 1 is the right hand (piccolo part), Staff 2 is left hand (piano part - ignore).",
   
   "window_start_measures": [1, 3, 5, 7],
   "_window_start_measures_comment": "Starting measure numbers for each pillar's calibration window (2 measures each, in pillar_order sequence)",
   
   "urls": {
-    "flute": "https://static.wixstatic.com/mp3/9178d1_15f2dad109ba41678cc46d01123b1dc5.mp3",
+    "flute":	"https://static.wixstatic.com/mp3/9178d1_704b40e60fc349c6bb6eb03e054f0a03.mp3",
     "test_pulse": "https://static.wixstatic.com/mp3/9178d1_63e58ac50ec7434eba6785cd3291c227.mp3",
     "pillars": {
-      "FL": "https://static.wixstatic.com/mp3/9178d1_62aad804441d4642af5079609e98f652.mp3",
-      "FR": "https://static.wixstatic.com/mp3/9178d1_0cbc0362a1694c02920f45fcbf2d5cbc.mp3",
-      "BL": "https://static.wixstatic.com/mp3/9178d1_1e3aa9b8711a40f6879f44eace692019.mp3",
-      "BR": "https://static.wixstatic.com/mp3/9178d1_37856d1295fb48bb9a18b0e3885ec8e1.mp3",
-      "ALL": "https://static.wixstatic.com/mp3/9178d1_e79d0f407e984ca29b8cd4e2d386ff1b.mp3"
+      "FL":	"https://static.wixstatic.com/mp3/9178d1_e8108138dfb346baaeb9f82576895522.mp3",
+      "FR":	"https://static.wixstatic.com/mp3/9178d1_66dae9e9165842ac9a57f03c1171d2d4.mp3",
+      "BL":	"https://static.wixstatic.com/mp3/9178d1_00a16606545245e2a1fe1795ade453fe.mp3",
+      "BR":	"https://static.wixstatic.com/mp3/9178d1_91f02965c1564b8f81de165f49c8ec00.mp3"
     },
     "_comment": "URLs for audio assets on Wix CDN"
   },
@@ -62,6 +77,7 @@
   "analysis_params": {
     "method": "musicxml_only",
     "use_audio_alignment": false,
-    "_comment": "Set use_audio_alignment to true if you want to align with recorded audio (experimental)"
+    "pillar_staff": 1,
+    "_comment": "Set use_audio_alignment to true if you want to align with recorded audio (experimental). pillar_staff: 1 = right hand (piccolo part), 2 = left hand (piano part)"
   }
 }

@@ -10,6 +10,7 @@ This version:
 - Parses quad piano MusicXML to extract pillar notes for Phase 1 mic calibration
 - Creates tuning_mode.json with perfect timing from the score
 - Pillar calibration windows are sequential (2 measures per pillar)
+- SUPPORTS STAFF FILTERING: can extract notes from specific staff (e.g., staff 1 for piccolo parts)
 
 REQUIREMENTS
 ------------
@@ -20,6 +21,7 @@ import os
 import json
 import music21
 from datetime import datetime
+
 
 # ---------------------------------------------------------------------------
 # LOAD CONFIGURATION
@@ -38,6 +40,7 @@ def load_config():
         config = json.load(f)
 
     return config
+
 
 # ---------------------------------------------------------------------------
 # MAIN EXTRACTOR CLASS
@@ -62,18 +65,34 @@ class BachToneExtractor:
         # Pillar order for calibration windows
         self.pillar_order = config["pillar_order"]
 
-        # Pillar mapping (MusicXML part IDs to pillar IDs)
-        # FIXED: Use pillar_musicxml_mapping from config
+        # Pillar mapping - handle both old (string) and new (dict) formats
         self.pillar_mapping = config["pillar_musicxml_mapping"]
 
-        # Also create reverse mapping for lookup by part ID
-        self.part_id_to_pillar = {v: k for k, v in self.pillar_mapping.items()}
+        # Build part_id_to_pillar mapping from the config (handles both formats)
+        self.part_id_to_pillar = {}
+        self.pillar_staff_map = {}  # Map pillar_id to staff number
+
+        for pillar_id, mapping in self.pillar_mapping.items():
+            if isinstance(mapping, dict):
+                # New format with part_id and staff
+                part_id = mapping.get("part_id")
+                staff = mapping.get("staff", 1)
+                if part_id:
+                    self.part_id_to_pillar[part_id] = pillar_id
+                    self.pillar_staff_map[pillar_id] = staff
+            else:
+                # Old format - just part_id string
+                self.part_id_to_pillar[mapping] = pillar_id
+                self.pillar_staff_map[pillar_id] = 1  # Default to staff 1
 
         # URLs for assets
         self.urls = config["urls"]
 
         # Window start measures (default to [1, 3, 5, 7] if not in config)
         self.window_start_measures = config.get("window_start_measures", [1, 3, 5, 7])
+
+        # Get pillar_staff from analysis_params (default to 1)
+        self.default_pillar_staff = config.get("analysis_params", {}).get("pillar_staff", 1)
 
         # Calculate durations
         self.quarter_duration_ms = 60000 / self.tempo_bpm
@@ -84,7 +103,8 @@ class BachToneExtractor:
         print(f"   Time signature: {self.beats_per_measure}/{self.beat_unit}")
         print(f"   Measure duration: {self.measure_duration_ms:.1f}ms")
         print(f"   Window duration: {self.window_measures * self.measure_duration_ms:.1f}ms")
-        print(f"   Pillar mapping: {self.pillar_mapping}")
+        print(f"   Pillar mapping: {self.part_id_to_pillar}")
+        print(f"   Pillar staff map: {self.pillar_staff_map}")
 
     def parse_piccolo_musicxml(self):
         """Extract perfect note sequence from piccolo MusicXML."""
@@ -170,7 +190,7 @@ class BachToneExtractor:
             total_duration_ms = max(total_duration_ms, offset_ms + duration_ms)
 
         print(f"   Created {len(timeline)} notes from MusicXML")
-        print(f"   Total duration: {total_duration_ms/1000:.2f}s at {self.tempo_bpm} BPM")
+        print(f"   Total duration: {total_duration_ms / 1000:.2f}s at {self.tempo_bpm} BPM")
 
         # Show first few notes
         print("\n   First few notes:")
@@ -179,17 +199,41 @@ class BachToneExtractor:
 
         return timeline
 
+    def get_note_staff(self, element):
+        """
+        Get the staff number for a note element.
+        Returns None if staff not specified.
+        """
+        # Try to get staff from element's staff attribute
+        if hasattr(element, 'staff') and element.staff:
+            staff = element.staff
+            if isinstance(staff, list) and len(staff) > 0:
+                return staff[0]
+            elif isinstance(staff, (int, str)):
+                return int(staff)
+
+        # Try to get staff from the element's parent context
+        try:
+            # Walk up the hierarchy to find staff context
+            context = element
+            while context:
+                if hasattr(context, 'staff') and context.staff:
+                    staff = context.staff
+                    if isinstance(staff, list) and len(staff) > 0:
+                        return staff[0]
+                    elif isinstance(staff, (int, str)):
+                        return int(staff)
+                context = getattr(context, '_activeSite', None) if hasattr(context, '_activeSite') else None
+        except:
+            pass
+
+        return None
+
     def extract_pillar_notes(self):
         """
         Extract pillar notes from quad piano MusicXML.
 
-        Uses pillar_musicxml_mapping from config to map MusicXML part IDs to pillar IDs.
-        Uses window_start_measures from config to define calibration windows.
-
-        Returns:
-            - pillar_notes: list of dicts with pillar_id, index, measure, ms_offset, duration_ms, pitch, pulse_ms
-            - pillar_cal_windows: list of dicts with pillar_id, start_ms, end_ms (2-measure windows)
-            - total_duration_ms: total duration of all pillar notes
+        Supports staff filtering: each pillar can specify which staff to extract from.
         """
         print(f"\n🎹 Loading pillar MusicXML: {self.pillars_path}")
 
@@ -233,16 +277,27 @@ class BachToneExtractor:
                 continue
 
             pillar_id = self.part_id_to_pillar[part_id]
+            target_staff = self.pillar_staff_map.get(pillar_id, self.default_pillar_staff)
 
             notes_in_part = []
             current_offset_q = 0.0
 
-            print(f"      → {part_id} belongs to {pillar_id}")
+            print(f"      → {part_id} belongs to {pillar_id} (staff {target_staff})")
 
             for element in part.flatten().notesAndRests:
                 if element.isNote:
                     # Get measure number
                     measure = element.measureNumber
+
+                    # Get staff number
+                    staff_num = self.get_note_staff(element)
+
+                    # Skip if staff doesn't match target
+                    if staff_num is not None and staff_num != target_staff:
+                        # Only print first few skips to avoid clutter
+                        if len(notes_in_part) < 5:
+                            print(f"         Skipping note in measure {measure} (staff {staff_num} != {target_staff})")
+                        continue
 
                     # Get pitch
                     pitch = element.pitch.nameWithOctave
@@ -268,7 +323,7 @@ class BachToneExtractor:
                     }
 
                     notes_in_part.append(note_data)
-                    print(f"         Note {measure}: {pitch} at {ms_offset:.1f}ms")
+                    print(f"         Note {measure}: {pitch} at {ms_offset:.1f}ms (staff {staff_num})")
 
                 current_offset_q += element.duration.quarterLength
 
@@ -277,7 +332,7 @@ class BachToneExtractor:
                 pillar_notes_by_id[pillar_id].extend(notes_in_part)
                 print(f"      Added {len(notes_in_part)} notes to {pillar_id}")
             else:
-                print(f"      ⚠️ No notes found in {part_id}")
+                print(f"      ⚠️ No notes found in {part_id} (staff {target_staff})")
 
         # Combine all pillar notes into a single list with global indices
         all_pillar_notes = []
@@ -412,11 +467,12 @@ class BachToneExtractor:
             print(f"   • Pillar notes:  {manifest['metadata']['pillar_notes_count']}")
         print(f"   • Tempo: {self.tempo_bpm} BPM")
         print(f"   • Time signature: {manifest['metadata']['time_signature']}")
-        print(f"   • Total duration: {manifest['metadata']['total_duration_ms']/1000:.2f}s")
+        print(f"   • Total duration: {manifest['metadata']['total_duration_ms'] / 1000:.2f}s")
 
         print(f"\n🎯 Pillar Calibration Windows:")
         for w in manifest["metadata"]["pillar_cal_windows"]:
-            print(f"   {w['pillar_id']:12s}: measures {w['start_measure']}-{w['end_measure']} → {w['start_ms']:.1f}ms → {w['end_ms']:.1f}ms")
+            print(
+                f"   {w['pillar_id']:12s}: measures {w['start_measure']}-{w['end_measure']} → {w['start_ms']:.1f}ms → {w['end_ms']:.1f}ms")
 
     def run(self):
         """Main execution pipeline."""
