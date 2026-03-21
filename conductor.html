@@ -343,6 +343,10 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
     let totalMeasurements = 0;
     let devicesWithMeasurements = new Set();
 
+    // --- LOG VIEWER DEBOUNCE
+    let logDisplayDebounceTimer = null;
+    const LOG_DISPLAY_DEBOUNCE_MS = 200;
+
     // --- LOG VIEWER STATE ---
     let allLogs = [];
     let logListeners = [];
@@ -392,6 +396,14 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         }
     }
 
+    function scheduleLogDisplayUpdate() {
+        if (logDisplayDebounceTimer) clearTimeout(logDisplayDebounceTimer);
+        logDisplayDebounceTimer = setTimeout(() => {
+            updateLogDisplay();
+            logDisplayDebounceTimer = null;
+        }, LOG_DISPLAY_DEBOUNCE_MS);
+    }
+
     function flushConductorLogs() {
         if (conductorLogQueue.length === 0) return;
 
@@ -429,12 +441,44 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             allLogs = allLogs.slice(-500);
         }
 
-        updateLogDisplay();
+        // Use debounced update instead of immediate
+        scheduleLogDisplayUpdate();
     }
 
     function updateLogDisplay() {
         const container = document.getElementById('log-entries');
         if (!container) return;
+
+        // Update device filter dropdown from deviceData (not a separate listener)
+        const deviceSelect = document.getElementById('log-filter-device');
+        if (deviceSelect && deviceData) {
+            const currentValue = deviceSelect.value;
+            const options = ['', 'conductor'];
+
+            // Add all non-pillar devices from deviceData
+            Object.keys(deviceData).forEach(deviceId => {
+                if (!deviceId.startsWith('PILLAR_') && !options.includes(deviceId)) {
+                    options.push(deviceId);
+                }
+            });
+
+            // Add pillars
+            Object.keys(deviceData).forEach(deviceId => {
+                if (deviceId.startsWith('PILLAR_') && !options.includes(deviceId)) {
+                    options.push(deviceId);
+                }
+            });
+
+            options.sort();
+
+            // Only update if changed
+            if (options.length !== deviceSelect.options.length) {
+                const selected = deviceSelect.value;
+                deviceSelect.innerHTML = options.map(opt =>
+                    `<option value="${opt}" ${opt === selected ? 'selected' : ''}>${opt === '' ? 'All Devices' : opt}</option>`
+                ).join('');
+            }
+        }
 
         // Apply filters to displayed logs
         let filteredLogs = allLogs.filter(log => {
@@ -478,8 +522,8 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         allLogs = [];
         updateLogDisplay();
 
-        // Fetch recent logs from all devices
-        db.ref('device_logs').once('value', snap => {
+        // Fetch recent logs from all devices with limit
+        db.ref('device_logs').limitToLast(100).once('value', snap => {
             const allDeviceLogs = snap.val();
             if (!allDeviceLogs) return;
 
@@ -495,6 +539,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             });
 
             conductorLog(`Log viewer refreshed: ${allLogs.length} logs loaded`, 'info');
+            scheduleLogDisplayUpdate();
         });
     }
 
@@ -502,7 +547,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         if (confirm("⚠️ Delete ALL device logs from Firebase? This cannot be undone.")) {
             db.ref('device_logs').remove().then(() => {
                 allLogs = [];
-                updateLogDisplay();
+                scheduleLogDisplayUpdate();
                 conductorLog("🗑️ All device logs cleared", 'info');
             }).catch(e => {
                 conductorLog(`❌ Failed to clear logs: ${e.message}`, 'error');
@@ -518,14 +563,14 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         if (filterText) {
             filterText.addEventListener('input', (e) => {
                 logFilterText = e.target.value;
-                updateLogDisplay();
+                scheduleLogDisplayUpdate();
             });
         }
 
         if (filterDevice) {
             filterDevice.addEventListener('change', (e) => {
                 logFilterDevice = e.target.value;
-                updateLogDisplay();
+                scheduleLogDisplayUpdate();
             });
         }
 
@@ -533,8 +578,8 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         document.getElementById('refresh-logs-btn').onclick = refreshLogs;
         document.getElementById('clear-logs-btn').onclick = clearAllLogs;
 
-        // Listen for real-time log updates
-        db.ref('device_logs').on('child_added', (snap) => {
+        // Add limitToLast(50) to only get recent logs, not full history
+        db.ref('device_logs').limitToLast(50).on('child_added', (snap) => {
             const deviceId = snap.key;
             const logs = snap.val();
 
@@ -554,38 +599,28 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             }
         });
 
-        // Update device filter dropdown when devices appear
-        db.ref('devices').on('value', snap => {
-            const devices = snap.val() || {};
-            const deviceSelect = document.getElementById('log-filter-device');
-            if (!deviceSelect) return;
+        // Also listen for child_changed to catch updates
+        db.ref('device_logs').limitToLast(50).on('child_changed', (snap) => {
+            const deviceId = snap.key;
+            const logs = snap.val();
 
-            const currentValue = deviceSelect.value;
-            const options = ['', 'conductor'];
-
-            Object.keys(devices).forEach(deviceId => {
-                if (!deviceId.startsWith('PILLAR_')) {
-                    options.push(deviceId);
-                }
-            });
-
-            // Also add pillars
-            Object.keys(devices).forEach(deviceId => {
-                if (deviceId.startsWith('PILLAR_') && !options.includes(deviceId)) {
-                    options.push(deviceId);
-                }
-            });
-
-            options.sort();
-
-            // Only update if changed
-            if (options.length !== deviceSelect.options.length) {
-                const selected = deviceSelect.value;
-                deviceSelect.innerHTML = options.map(opt =>
-                    `<option value="${opt}" ${opt === selected ? 'selected' : ''}>${opt === '' ? 'All Devices' : opt}</option>`
-                ).join('');
+            if (logs) {
+                Object.entries(logs).forEach(([key, logEntry]) => {
+                    if (logEntry && logEntry.message) {
+                        const exists = allLogs.some(l => l.timestamp === logEntry.timestamp && l.seatId === deviceId);
+                        if (!exists) {
+                            addLogToDisplay({
+                                ...logEntry,
+                                seatId: deviceId
+                            });
+                        }
+                    }
+                });
             }
         });
+
+        // FIX 3: Remove the separate devices listener from here
+        // The device dropdown will be populated from deviceData in scheduleLogDisplayUpdate
 
         // Start conductor log flusher
         if (conductorLogFlushTimer) clearInterval(conductorLogFlushTimer);
