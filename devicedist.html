@@ -596,7 +596,6 @@ function addLogDisplayToDebugPanel() {
 // --- MICROPHONE PERMISSION STATE ---
 let micPermissionGranted = false;
 let micPermissionRequested = false;
-let micStream = null;
 
 window.requestMicrophonePermission = async function() {
     console.log("🎤 requestMicrophonePermission called");
@@ -622,7 +621,7 @@ window.requestMicrophonePermission = async function() {
         const stream = await navigator.mediaDevices.getUserMedia({
             audio: {
                 echoCancellation: false,
-                noiseSuppression: true,
+                noiseSuppression: false,  // FIXED: was true, now false for raw audio
                 autoGainControl: false,
                 sampleRate: 44100
             },
@@ -689,7 +688,7 @@ async function setupMicrophone() {
             const stream = await navigator.mediaDevices.getUserMedia({
                 audio: {
                     echoCancellation: false,
-                    noiseSuppression: true,
+                    noiseSuppression: false,
                     autoGainControl: false,
                     sampleRate: 44100
                 }
@@ -1050,6 +1049,16 @@ async function preloadAssets() {
         document.getElementById('asset-progress').style.display = 'none';
         log(`✅ Asset preload complete (${totalAssetsToPreload} files)`);
         assetsPreloaded = true;
+
+        // Check if mic permission was already granted during preload
+        if (micPermissionGranted && mySeat && myNeighbors) {
+            const readyBtn = document.getElementById('ready-btn');
+            if (readyBtn) {
+                readyBtn.disabled = false;
+                document.getElementById('system-msg').innerText = "System Ready. Please Enter.";
+            }
+        }
+
         return true;
 
     } catch (e) {
