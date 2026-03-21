@@ -1552,7 +1552,7 @@ async function startIterativeCalibration() {
                 clearInterval(checkInterval);
                 log('⚠️ Phase 1 timeout after 25 seconds - proceeding with micDelay=0');
                 resolve();
-            }, 25000); // 25 second hard timeout
+            }, 25000);
 
             const checkInterval = setInterval(() => {
                 if (phase1Complete) {
@@ -1580,8 +1580,28 @@ async function startIterativeCalibration() {
     processedTimingReports.clear();
     previousIterationReports = [];
 
-    // Start the first iteration
-    runCalibrationIteration();
+    // Start the first iteration - use the existing tuningStartTime from conductor
+    // Don't create a new start time - we need to align with the conductor's schedule
+    calibrationIteration = 1;
+    iterationStartTime = Date.now() + serverOffset;
+
+    log(`🔄 Starting calibration iteration ${calibrationIteration}/${maxIterations} at ${new Date(iterationStartTime).toLocaleTimeString()}`);
+    log(`   Conductor's tuningStartTime: ${new Date(tuningStartTime).toLocaleTimeString()}`);
+
+    // Reset measurement tracking for this iteration
+    processedMeasurements.clear();
+    incomingTimingErrors = [];
+    selfSamples = [];
+
+    // The piccolo is already playing or will start at tuningStartTime
+    // We just need to listen for neighbor reports during this iteration
+    // Schedule evaluation after the piccolo section ends (measure 9 onward is ~22-182 seconds)
+    const evaluationDelay = 35000; // Evaluate after 35 seconds (gives time for Phase 2 to collect samples)
+
+    if (currentIterationTimeout) clearTimeout(currentIterationTimeout);
+    currentIterationTimeout = setTimeout(() => evaluateIteration(), evaluationDelay);
+
+    log(`⏱️ Evaluation scheduled in ${evaluationDelay/1000}s`);
 }
 
 async function runCalibrationIteration() {
@@ -1602,27 +1622,24 @@ async function runCalibrationIteration() {
 
     // Reset measurement tracking for this iteration
     processedMeasurements.clear();
-    incomingTimingErrors = [];  // Clear for new reports
+    incomingTimingErrors = [];
 
-    // Clear previous delay measurements for fresh start
-    if (calibrationIteration > 1) {
-        selfSamples = [];
-        log(`   Cleared previous speaker delay samples for fresh measurement`);
-    }
+    // Keep selfSamples for stability calculation, but don't clear them
+    // This allows us to see convergence over iterations
 
-    // Create a cue object for this iteration
-    const iterationCue = {
-        startTime: Date.now() + serverOffset + 500,  // Start in 500ms
-        endTime: 30000,  // 30 seconds of playback
-        type: 'TUNING_MOVEMENT'
-    };
+    // IMPORTANT: Do NOT create a new cue with a new start time!
+    // The tuning movement is already playing from the conductor's schedule.
+    // We just need to wait for more neighbor reports.
 
-    // Play the piccolo with current timing adjustments
-    await playTuningMovement(iterationCue);
+    log(`   Listening for neighbor reports... (using existing tuning playback)`);
 
-    // Schedule evaluation after the notes have played (30 seconds)
+    // Schedule evaluation after enough time for new reports
+    const evaluationDelay = 35000; // 35 seconds
+
     if (currentIterationTimeout) clearTimeout(currentIterationTimeout);
-    currentIterationTimeout = setTimeout(() => evaluateIteration(), 35000);  // Wait 35 seconds for playback + buffer
+    currentIterationTimeout = setTimeout(() => evaluateIteration(), evaluationDelay);
+
+    log(`⏱️ Evaluation scheduled in ${evaluationDelay/1000}s`);
 }
 
 function evaluateIteration() {
@@ -2084,40 +2101,47 @@ function animateNoteBrightness(durationMs) {
 // PHASE 1 MIC-CAL — PILLAR DETECTION, MIC DELAY DERIVATION
 // ============================================================================
 
-// --- PILLAR DETECTION (keep existing implementation) ---
-function detectPillarOnsets(now, avgEnergy, dominantFreq, ratioToBaseline) {
-    // This function is called from processDetectionWindows in Phase 2
-    // It should contain the existing Phase 1 detection logic
-    // For brevity, this is a placeholder - the actual implementation should be preserved
-    // The existing Phase 1 detection code should remain unchanged
-}
+// Note: The actual detectPillarOnsets function is now in SECTION 3
+// This section contains only the self-calibration listener that uses the correct path
 
-// --- SELF-CALIBRATION LISTENER (receives measurements from neighbors) ---
+// --- SELF-CALIBRATION LISTENER (UPDATED for new Firebase path) ---
 function initSelfCalibrationListener() {
-    // Listen for measurements of this device (Phase 2 speaker delay)
+    // Listen for measurements where we are the target (for speaker delay calculation)
+    // Uses the new path: measurements/{noteIndex}/reporters/{reporterId}
     db.ref('measurements').on('child_added', snap => {
-        const noteIndex = snap.key;
-        const measurements = snap.val();
+        if (!calibrationMode || calibrationComplete) return;
 
-        Object.entries(measurements).forEach(([reporterId, data]) => {
-            if (data.playingSeat === mySeat.id) {
-                processSelfMeasurement(data.speakerDelay, data.reportedAt, reporterId);
+        const noteIndex = snap.key;
+        const reporters = snap.val()?.reporters;
+        if (!reporters) return;
+
+        Object.entries(reporters).forEach(([reporterId, report]) => {
+            // Only process reports where WE are the target
+            if (report.targetSeatId !== mySeat.id) return;
+
+            // Process speaker delay for selfSamples (Phase 2 HAPPY detection)
+            if (report.speakerDelay !== undefined) {
+                processSelfMeasurement(report.speakerDelay, report.reportedAt, reporterId);
             }
         });
     });
 
     db.ref('measurements').on('child_changed', snap => {
-        const noteIndex = snap.key;
-        const measurements = snap.val();
+        if (!calibrationMode || calibrationComplete) return;
 
-        Object.entries(measurements).forEach(([reporterId, data]) => {
-            if (data.playingSeat === mySeat.id) {
-                processSelfMeasurement(data.speakerDelay, data.reportedAt, reporterId);
+        const noteIndex = snap.key;
+        const reporters = snap.val()?.reporters;
+        if (!reporters) return;
+
+        Object.entries(reporters).forEach(([reporterId, report]) => {
+            if (report.targetSeatId !== mySeat.id) return;
+            if (report.speakerDelay !== undefined) {
+                processSelfMeasurement(report.speakerDelay, report.reportedAt, reporterId);
             }
         });
     });
 
-    // Also listen for mic delay updates (Phase 1)
+    // Listen for mic delay updates from Phase 1
     db.ref(`devices/${mySeat.id}/calibration`).on('value', snap => {
         const cal = snap.val();
         if (cal && cal.micDelayMs !== undefined && !phase1Complete) {
@@ -2136,11 +2160,13 @@ function initSelfCalibrationListener() {
 function processSelfMeasurement(speakerDelay, reportedAt, reporterId) {
     console.log(`📊 Received measurement from ${reporterId}: ${speakerDelay.toFixed(2)}ms at ${new Date(reportedAt).toLocaleTimeString()}`);
 
+    // Sanity check
     if (speakerDelay < -200 || speakerDelay > 800) {
         console.log(`⚠️ Rejecting outlier measurement: ${speakerDelay.toFixed(2)}ms (outside -200 to 800ms range)`);
         return;
     }
 
+    // Reject if too far from current estimate
     if (calibratedSpeakerDelay !== null && Math.abs(speakerDelay - calibratedSpeakerDelay) > 200) {
         console.log(`⚠️ Rejecting outlier: ${speakerDelay.toFixed(2)}ms is too far from current estimate ${calibratedSpeakerDelay.toFixed(2)}ms`);
         return;
@@ -2148,6 +2174,7 @@ function processSelfMeasurement(speakerDelay, reportedAt, reporterId) {
 
     selfSamples.push(speakerDelay);
 
+    // Keep only last MAX_SELF_SAMPLES
     if (selfSamples.length > MAX_SELF_SAMPLES) {
         selfSamples.shift();
     }
@@ -2167,6 +2194,7 @@ function processSelfMeasurement(speakerDelay, reportedAt, reporterId) {
         lastMeasurementAt: Date.now() + serverOffset
     });
 
+    // Calculate stats for display (but don't set HAPPY here - that's handled by evaluateIteration)
     if (selfSamples.length >= MIN_SELF_SAMPLES) {
         const recentSamples = selfSamples.slice(-MIN_SELF_SAMPLES);
         const mean = recentSamples.reduce((a, b) => a + b, 0) / recentSamples.length;
@@ -2174,50 +2202,22 @@ function processSelfMeasurement(speakerDelay, reportedAt, reporterId) {
         const stdDev = Math.sqrt(variance);
 
         document.getElementById('debug-stddev').innerText = stdDev.toFixed(1) + 'ms';
-        console.log(`📊 Stats: mean=${mean.toFixed(2)}ms, stdDev=${stdDev.toFixed(2)}ms`);
 
-        if (stdDev < HAPPY_STDDEV_THRESHOLD && !isHappy && calibrationComplete) {
-            isHappy = true;
-            calibratedSpeakerDelay = median;
+        // Update summary for conductor dashboard
+        db.ref(`measurements/summary/${mySeat.id}`).set({
+            speakerDelayMs: median,
+            happy: calibrationComplete && isHappy,
+            samples: selfSamples.length,
+            stdDev: stdDev,
+            micDelayMs: myMicDelayMs || 0,
+            iteration: calibrationIteration,
+            updatedAt: Date.now() + serverOffset
+        });
 
-            log(`✅ HAPPY! Speaker delay: ${calibratedSpeakerDelay.toFixed(1)}ms (σ=${stdDev.toFixed(1)}ms, ${selfSamples.length} samples)`);
-
-            db.ref(`devices/${mySeat.id}`).update({
-                status: 'HAPPY',
-                calibratedAt: Date.now() + serverOffset
-            });
-
-            db.ref(`devices/${mySeat.id}/calibration`).update({
-                speakerDelayMs: calibratedSpeakerDelay,
-                speakerSamples: selfSamples.length,
-                speakerStdDev: stdDev,
-                speakerCalibratedAt: Date.now() + serverOffset,
-                neighbors: myNeighbors.length,
-                micDelayMs: myMicDelayMs || 0
-            });
-
-            db.ref(`measurements/summary/${mySeat.id}`).set({
-                speakerDelayMs: calibratedSpeakerDelay,
-                happy: true,
-                samples: selfSamples.length,
-                stdDev: stdDev,
-                micDelayMs: myMicDelayMs || 0,
-                updatedAt: Date.now() + serverOffset
-            });
-
-            document.getElementById('debug-status').innerText = 'HAPPY';
-
-        } else if (!calibrationComplete) {
-            db.ref(`measurements/summary/${mySeat.id}`).set({
-                speakerDelayMs: median,
-                happy: false,
-                samples: selfSamples.length,
-                stdDev: stdDev,
-                micDelayMs: myMicDelayMs || 0,
-                iteration: calibrationIteration,
-                updatedAt: Date.now() + serverOffset
-            });
-
+        // Update status display (but don't set HAPPY flag yet - wait for evaluateIteration)
+        if (calibrationComplete && isHappy) {
+            document.getElementById('debug-status').innerHTML = 'HAPPY ✓';
+        } else {
             document.getElementById('debug-status').innerHTML = `ITER ${calibrationIteration} (σ=${stdDev.toFixed(0)}ms)`;
         }
     }
@@ -2424,7 +2424,7 @@ function processDetectionWindows(now, avgEnergy, dominantFreq, ratioToBaseline) 
     });
 }
 
-// --- REPORT MEASUREMENT TO FIREBASE (UPDATED with targetSeatId) ---
+// --- REPORT MEASUREMENT TO FIREBASE (UPDATED with atomic summary update) ---
 async function reportMeasurement(noteIndex, playingSeatId, speakerDelay, rawDelay, propagationMs, detectionTime) {
     try {
         const now = Date.now() + serverOffset;
@@ -2452,29 +2452,36 @@ async function reportMeasurement(noteIndex, playingSeatId, speakerDelay, rawDela
 
         log(`📝 Reported timing error for note ${noteIndex} to ${playingSeatId}: ${timingError > 0 ? '+' : ''}${timingError.toFixed(1)}ms (playing device was ${timingError > 0 ? 'late' : 'early'})`);
 
-        // Also update summary for Phase 2 HAPPY detection (speaker delay only)
-        // This maintains backward compatibility with existing Phase 2 logic
-        await db.ref(`measurements/summary/${playingSeatId}/reports/${mySeat.id}`).set({
-            speakerDelay: Math.round(speakerDelay),
-            timingError: timingError,
-            reportedAt: now,
-            noteIndex: noteIndex
-        });
-
-        // Update running summary for the playing device
+        // Update summary using transaction to avoid race conditions
         const summaryRef = db.ref(`measurements/summary/${playingSeatId}`);
-        const snap = await summaryRef.once('value');
-        const current = snap.val() || {};
-        const reports = current.reports || {};
-        const reportValues = Object.values(reports).map(r => r.speakerDelay).filter(v => v);
-        if (reportValues.length > 0) {
-            const median = calculateMedian(reportValues);
-            await summaryRef.update({
-                speakerDelayMs: Math.round(median),
-                samples: reportValues.length,
-                updatedAt: now
-            });
-        }
+
+        summaryRef.transaction(current => {
+            const newData = current || {};
+            const reports = newData.reports || {};
+            reports[mySeat.id] = {
+                speakerDelay: Math.round(speakerDelay),
+                timingError: timingError,
+                reportedAt: now,
+                noteIndex: noteIndex
+            };
+
+            // Calculate new median
+            const reportValues = Object.values(reports).map(r => r.speakerDelay).filter(v => v);
+            if (reportValues.length > 0) {
+                const sorted = [...reportValues].sort((a, b) => a - b);
+                const mid = Math.floor(sorted.length / 2);
+                const median = sorted.length % 2 === 0 ?
+                    (sorted[mid - 1] + sorted[mid]) / 2 :
+                    sorted[mid];
+
+                newData.speakerDelayMs = Math.round(median);
+                newData.samples = reportValues.length;
+                newData.updatedAt = now;
+            }
+
+            newData.reports = reports;
+            return newData;
+        });
 
     } catch (e) {
         log(`❌ Failed to report measurement: ${e.message}`);
