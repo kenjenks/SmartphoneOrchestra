@@ -598,9 +598,12 @@ let micPermissionGranted = false;
 let micPermissionRequested = false;
 let micStream = null;
 
-async function requestMicrophonePermission() {
+window.requestMicrophonePermission = async function() {
+    console.log("🎤 requestMicrophonePermission called");
+
     if (micPermissionGranted) {
         log("✅ Mic permission already granted");
+        document.getElementById('mic-status-msg').innerHTML = "✅ Microphone already ready!";
         return true;
     }
 
@@ -613,7 +616,8 @@ async function requestMicrophonePermission() {
 
     try {
         log("🎤 Requesting microphone permission...");
-        document.getElementById('mic-status-msg').innerHTML = "Requesting microphone... Please allow access.";
+        const statusMsg = document.getElementById('mic-status-msg');
+        if (statusMsg) statusMsg.innerHTML = "Requesting microphone... Please allow access.";
 
         const stream = await navigator.mediaDevices.getUserMedia({
             audio: {
@@ -629,8 +633,10 @@ async function requestMicrophonePermission() {
         micPermissionGranted = true;
 
         log("✅ Microphone permission GRANTED");
-        document.getElementById('mic-status-msg').innerHTML = "✅ Microphone ready! You can now enter.";
-        document.getElementById('mic-status-msg').style.color = "#00ffcc";
+        if (statusMsg) {
+            statusMsg.innerHTML = "✅ Microphone ready! You can now enter.";
+            statusMsg.style.color = "#00ffcc";
+        }
 
         const micBtn = document.getElementById('request-mic-btn');
         if (micBtn) {
@@ -640,16 +646,28 @@ async function requestMicrophonePermission() {
             micBtn.disabled = true;
         }
 
+        // Check if we can enable the ready button
+        if (mySeat && myNeighbors && assetsPreloaded) {
+            const readyBtn = document.getElementById('ready-btn');
+            if (readyBtn) {
+                readyBtn.disabled = false;
+                document.getElementById('system-msg').innerText = "Mic ready! Tap ENTER to begin.";
+            }
+        }
+
         return true;
 
     } catch (e) {
         log(`❌ Microphone permission DENIED: ${e.message}`);
-        document.getElementById('mic-status-msg').innerHTML = `❌ Mic access denied: ${e.message}. Please grant permission and refresh.`;
-        document.getElementById('mic-status-msg').style.color = "#ff8888";
+        const statusMsg = document.getElementById('mic-status-msg');
+        if (statusMsg) {
+            statusMsg.innerHTML = `❌ Mic access denied: ${e.message}. Please grant permission and refresh.`;
+            statusMsg.style.color = "#ff8888";
+        }
         micPermissionRequested = false;
         return false;
     }
-}
+};
 
 async function setupMicrophone() {
     if (!micPermissionGranted) {
@@ -2482,19 +2500,31 @@ function handleSeatTest(cue) {
 }
 
 // --- UI BINDINGS AND INITIALIZATION ---
-document.getElementById('request-mic-btn').onclick = async () => {
-    const granted = await requestMicrophonePermission();
-    if (granted && mySeat && myNeighbors && assetsPreloaded) {
-        document.getElementById('ready-btn').disabled = false;
-        document.getElementById('system-msg').innerText = "Mic ready! Tap ENTER to begin.";
-    }
-};
+// Mic permission button handler
+const micButton = document.getElementById('request-mic-btn');
+if (micButton) {
+    micButton.onclick = async function() {
+        console.log("Mic button clicked");
+        const granted = await window.requestMicrophonePermission();
+        if (granted && mySeat && myNeighbors && assetsPreloaded) {
+            const readyBtn = document.getElementById('ready-btn');
+            if (readyBtn) {
+                readyBtn.disabled = false;
+                document.getElementById('system-msg').innerText = "Mic ready! Tap ENTER to begin.";
+            }
+        }
+    };
+}
 
+// Ready button handler
 document.getElementById('ready-btn').onclick = async () => {
     if (!micPermissionGranted) {
         log("⚠️ Please grant microphone permission first");
-        document.getElementById('mic-status-msg').innerHTML = "⚠️ Please click 'Request Mic Permission' first";
-        document.getElementById('mic-status-msg').style.color = "#ffaa00";
+        const micStatusMsg = document.getElementById('mic-status-msg');
+        if (micStatusMsg) {
+            micStatusMsg.innerHTML = "⚠️ Please click 'Request Mic Permission' first";
+            micStatusMsg.style.color = "#ffaa00";
+        }
         return;
     }
 
@@ -2512,6 +2542,7 @@ document.getElementById('ready-btn').onclick = async () => {
 
     requestAnimationFrame(frame);
 
+    // Listen for cues from conductor
     db.ref('show/currentCue').on('value', snap => {
         const cue = snap.val();
         if (!cue) return;
@@ -2531,14 +2562,19 @@ document.getElementById('ready-btn').onclick = async () => {
         }
     });
 
+    // Initialize tuning listener
     initTuningListener();
+
+    // Initialize self-calibration listener
     initSelfCalibrationListener();
 
+    // Start history check interval for missed detections
     if (window.historyCheckInterval) clearInterval(window.historyCheckInterval);
     window.historyCheckInterval = setInterval(() => {
         if (calibrationMode && phase1Complete) checkHistoryForMissedNotes();
     }, 2000);
 
+    // Register device
     if (mySeat) {
         await db.ref(`devices/${mySeat.id}`).update({
             lastSeen: Date.now() + serverOffset,
@@ -2555,6 +2591,7 @@ document.getElementById('ready-btn').onclick = async () => {
     }
 };
 
+// Add detection flash element if not present
 if (!document.getElementById('detection-flash')) {
     const flash = document.createElement('div');
     flash.id = 'detection-flash';
@@ -2572,6 +2609,7 @@ if (!document.getElementById('detection-flash')) {
     document.body.appendChild(flash);
 }
 
+// Add CSS for detection flash
 const flashStyle = document.createElement('style');
 flashStyle.textContent = `
     .detection-flash-active {
