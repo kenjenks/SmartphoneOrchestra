@@ -1232,7 +1232,784 @@ function initTuningListener() {
     });
 }
 
+// SECTION 2 BEGIN ============================================================
+// FIREBASE, IDENTITY, CLOCK SYNC, HEARTBEAT, ASSET PRELOAD
+// ============================================================================
+
+// --- PROTECTED BLOCK: FIREBASE CONFIGURATION ---
+const firebaseConfig = {
+    apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
+    authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
+    databaseURL: "https://smartphoneorchestra-dwt-default-rtdb.firebaseio.com/",
+    projectId: "smartphoneorchestra-dwt"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+
+// --- LOGGING FUNCTION with Firebase persistence ---
+let logQueue = [];
+let logFlushTimer = null;
+let pendingFlush = false;
+const LOG_FLUSH_INTERVAL_MS = 2000;
+const MAX_LOG_QUEUE_SIZE = 50;
+
+let logRef = null;
+
+function initLogging() {
+    if (!mySeat) return;
+    logRef = db.ref(`device_logs/${mySeat.id}`);
+
+    if (logFlushTimer) clearInterval(logFlushTimer);
+    logFlushTimer = setInterval(flushLogs, LOG_FLUSH_INTERVAL_MS);
+
+    log(`🚀 Device ${mySeat.id} started at ${new Date().toISOString()}`);
+    log(`   Platform: ${navigator.platform}, User Agent: ${navigator.userAgent.substring(0, 100)}`);
+    log(`   Location: (${mySeat.x}, ${mySeat.y}) in ${mySeat.section}`);
+
+    setTimeout(() => flushLogs(), 100);
+}
+
+function flushLogs() {
+    if (logQueue.length === 0 || !logRef || pendingFlush) return;
+    pendingFlush = true;
+
+    const logsToSend = [...logQueue];
+    logQueue = [];
+
+    const batch = {};
+    logsToSend.forEach((logEntry, index) => {
+        const ts = Date.now() + (serverOffset || 0);
+        batch[`${ts}_${index}_${Math.random().toString(36).substr(2, 6)}`] = logEntry;
+    });
+
+    logRef.update(batch)
+        .catch(e => {
+            console.error("Failed to send logs to Firebase:", e);
+            logQueue = [...logsToSend, ...logQueue];
+            if (logQueue.length > MAX_LOG_QUEUE_SIZE) {
+                logQueue = logQueue.slice(-MAX_LOG_QUEUE_SIZE);
+            }
+        })
+        .finally(() => {
+            pendingFlush = false;
+        });
+}
+
+function log(message, type = 'info') {
+    console.log(`[${new Date().toLocaleTimeString()}] ${message}`);
+
+    const logEntry = {
+        timestamp: Date.now() + (serverOffset || 0),
+        timeStr: new Date().toLocaleTimeString(),
+        message: message,
+        seatId: mySeat ? mySeat.id : 'unknown',
+        type: type,
+        calibrationMode: calibrationMode,
+        phase1Complete: phase1Complete,
+        isHappy: isHappy,
+        speakerDelay: calibratedSpeakerDelay,
+        micDelay: myMicDelayMs,
+        neighborCount: myNeighbors ? myNeighbors.length : 0
+    };
+
+    logQueue.push(logEntry);
+
+    if (logQueue.length >= MAX_LOG_QUEUE_SIZE && logRef) {
+        flushLogs();
+    }
+
+    const logDiv = document.getElementById('log');
+    if (logDiv) {
+        logDiv.innerHTML = `<div class="log-entry">[${logEntry.timeStr}] ${message}</div>` + logDiv.innerHTML;
+        if (logDiv.children.length > 100) {
+            while (logDiv.children.length > 100) {
+                logDiv.removeChild(logDiv.lastChild);
+            }
+        }
+    }
+}
+
+function addLogDisplayToDebugPanel() {
+    const debugPanel = document.getElementById('calibration-debug');
+    if (!debugPanel) return;
+    if (document.getElementById('device-log-display')) return;
+
+    const logDisplay = document.createElement('div');
+    logDisplay.id = 'device-log-display';
+    logDisplay.style.cssText = `
+        margin-top: 10px;
+        padding-top: 5px;
+        border-top: 1px solid #333;
+        font-family: monospace;
+        font-size: 9px;
+        max-height: 100px;
+        overflow-y: auto;
+    `;
+    logDisplay.innerHTML = '<div style="color: #888; margin-bottom: 3px;">📋 Recent logs:</div><div id="log"></div>';
+    debugPanel.appendChild(logDisplay);
+}
+
+// --- MICROPHONE PERMISSION STATE ---
+let micPermissionGranted = false;
+let micPermissionRequested = false;
+
+window.requestMicrophonePermission = async function() {
+    console.log("🎤 requestMicrophonePermission called");
+
+    if (micPermissionGranted) {
+        log("✅ Mic permission already granted");
+        document.getElementById('mic-status-msg').innerHTML = "✅ Microphone already ready!";
+        return true;
+    }
+
+    if (micPermissionRequested) {
+        log("⚠️ Mic permission already requested, waiting for user...");
+        return false;
+    }
+
+    micPermissionRequested = true;
+
+    try {
+        log("🎤 Requesting microphone permission...");
+        const statusMsg = document.getElementById('mic-status-msg');
+        if (statusMsg) statusMsg.innerHTML = "Requesting microphone... Please allow access.";
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+                echoCancellation: false,
+                noiseSuppression: false,
+                autoGainControl: false,
+                sampleRate: 44100
+            },
+            video: false
+        });
+
+        micStream = stream;
+        micPermissionGranted = true;
+
+        log("✅ Microphone permission GRANTED");
+        if (statusMsg) {
+            statusMsg.innerHTML = "✅ Microphone ready! You can now enter.";
+            statusMsg.style.color = "#00ffcc";
+        }
+
+        const micBtn = document.getElementById('request-mic-btn');
+        if (micBtn) {
+            micBtn.style.background = "#1e4d1e";
+            micBtn.style.color = "#8bc34a";
+            micBtn.innerHTML = "✅ Mic Ready";
+            micBtn.disabled = true;
+        }
+
+        if (mySeat && myNeighbors && assetsPreloaded) {
+            const readyBtn = document.getElementById('ready-btn');
+            if (readyBtn) {
+                readyBtn.disabled = false;
+                document.getElementById('system-msg').innerText = "Mic ready! Tap ENTER to begin.";
+            }
+        }
+
+        return true;
+
+    } catch (e) {
+        log(`❌ Microphone permission DENIED: ${e.message}`);
+        const statusMsg = document.getElementById('mic-status-msg');
+        if (statusMsg) {
+            statusMsg.innerHTML = `❌ Mic access denied: ${e.message}. Please grant permission and refresh.`;
+            statusMsg.style.color = "#ff8888";
+        }
+        micPermissionRequested = false;
+        return false;
+    }
+};
+
+async function setupMicrophone() {
+    if (!micPermissionGranted) {
+        log("⚠️ Cannot setup mic - permission not granted");
+        return false;
+    }
+
+    if (isMicActive) {
+        log("✅ Mic already active");
+        return true;
+    }
+
+    try {
+        if (!audioCtx) {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+
+        if (!micStream) {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    echoCancellation: false,
+                    noiseSuppression: false,
+                    autoGainControl: false,
+                    sampleRate: 44100
+                }
+            });
+            micStream = stream;
+        }
+
+        const source = audioCtx.createMediaStreamSource(micStream);
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = FFT_SIZE;
+        analyser.smoothingTimeConstant = 0.1;
+
+        source.connect(analyser);
+
+        sampleRate = audioCtx.sampleRate;
+
+        const nyquist = sampleRate / 2;
+        binIndices.start = Math.floor(PICCOLO_MIN_FREQ / nyquist * (FFT_SIZE / 2));
+        binIndices.end = Math.ceil(PICCOLO_MAX_FREQ / nyquist * (FFT_SIZE / 2));
+
+        frequencyData = new Uint8Array(analyser.frequencyBinCount);
+        timeDomainData = new Float32Array(analyser.fftSize);
+
+        isMicActive = true;
+
+        document.getElementById('energy-meter').style.display = 'block';
+
+        log(`🎤 Microphone active (${allListeningTargets.length} listening targets)`);
+        log(`   Piccolo band: ${PICCOLO_MIN_FREQ}-${PICCOLO_MAX_FREQ}Hz (bins ${binIndices.start}-${binIndices.end})`);
+
+        requestAnimationFrame(detectNeighborNotes);
+
+        return true;
+
+    } catch (e) {
+        log(`❌ Failed to setup microphone: ${e.message}`);
+        return false;
+    }
+}
+
+async function enableMicrophone() {
+    if (!micPermissionGranted) {
+        log("⚠️ Cannot enable mic - permission not granted yet");
+        return false;
+    }
+
+    if (isMicActive) return true;
+
+    return await setupMicrophone();
+}
+
+function disableMicrophone() {
+    analyser = null;
+    isMicActive = false;
+    document.getElementById('energy-meter').style.display = 'none';
+    log("🎤 Microphone disabled (will keep permission for next tuning)");
+}
+
+// --- CLOCK SYNCHRONIZATION ---
+function syncClock() {
+    const offsetRef = db.ref(".info/serverTimeOffset");
+    offsetRef.on("value", snap => {
+        serverOffset = snap.val() || 0;
+        document.getElementById('sync-ind').className = 'indicator active';
+        log(`⏱️ Server offset: ${serverOffset}ms`);
+    });
+}
+
+// --- IDENTITY RESOLUTION ---
+async function resolveIdentity() {
+    try {
+        const urlParams = new URLSearchParams(window.location.search);
+        const seatId = urlParams.get('seat');
+
+        if (!seatId) {
+            log("No seat ID in URL, using default for testing");
+            mySeat = { id: 'G12', x: 7.75, y: 12.5, section: 'Orchestra' };
+            document.getElementById('id-ind').className = 'indicator syncing';
+            return true;
+        }
+
+        document.getElementById('seat-label').innerText = `Seat ${seatId} (loading...)`;
+
+        const seatsSnap = await db.ref('seat_config/seats').once('value');
+        const seatsData = seatsSnap.val();
+
+        if (seatsData && seatsData[seatId]) {
+            mySeat = {
+                id: seatId,
+                x: seatsData[seatId].x,
+                y: seatsData[seatId].y,
+                section: seatsData[seatId].section || 'Orchestra'
+            };
+            document.getElementById('seat-label').innerText = `Seat ${mySeat.id}`;
+            document.getElementById('id-ind').className = 'indicator active';
+            log(`✅ Resolved seat ${seatId} at (${mySeat.x}, ${mySeat.y}) in ${mySeat.section}`);
+            return true;
+        } else if (Array.isArray(seatsData)) {
+            const config = seatsData.find(s => s.id === seatId);
+            if (config) {
+                mySeat = {
+                    id: config.id,
+                    x: config.x,
+                    y: config.y,
+                    section: config.section || 'Orchestra'
+                };
+                document.getElementById('seat-label').innerText = `Seat ${mySeat.id}`;
+                document.getElementById('id-ind').className = 'indicator active';
+                log(`✅ Resolved seat ${seatId} from array`);
+                return true;
+            }
+        }
+
+        log(`❌ Seat ${seatId} not found`);
+        document.getElementById('id-ind').className = 'indicator error';
+        return false;
+
+    } catch (e) {
+        log(`❌ Identity Resolution Error: ${e.message}`);
+        document.getElementById('id-ind').className = 'indicator error';
+        return false;
+    }
+}
+
+// --- LOAD NEIGHBOR MAP ---
+async function loadNeighborMap() {
+    if (!mySeat) return false;
+
+    try {
+        const neighborSnap = await db.ref(`seat_config/neighborMap/${mySeat.id}`).once('value');
+        const neighborData = neighborSnap.val();
+
+        if (neighborData) {
+            myNeighbors = neighborData.neighbors || [];
+            myPillars = neighborData.pillars || [];
+
+            allListeningTargets = [...myNeighbors, ...myPillars];
+
+            log(`📍 Neighbor map loaded for ${mySeat.id}`);
+            log(`   Neighbors (${myNeighbors.length}): ${myNeighbors.slice(0, 3).join(', ')}${myNeighbors.length > 3 ? '...' : ''}`);
+            log(`   Pillars (${myPillars.length}): ${myPillars.join(', ')}`);
+
+            document.getElementById('neighbor-ind').className = 'indicator active';
+            document.getElementById('debug-neighbors').innerText = myNeighbors.length;
+
+            return true;
+        } else {
+            log(`⚠️ No neighbor map entry for ${mySeat.id}`);
+            document.getElementById('neighbor-ind').className = 'indicator error';
+            return false;
+        }
+    } catch (e) {
+        log(`❌ Failed to load neighbor map: ${e.message}`);
+        document.getElementById('neighbor-ind').className = 'indicator error';
+        return false;
+    }
+}
+
+// --- LOAD PILLAR CONFIGURATION ---
+async function loadPillarConfig() {
+    try {
+        const snap = await db.ref('pillar_config').once('value');
+        const data = snap.val();
+
+        if (!data || !data.pillars) {
+            log("⚠️ No pillar_config found - pillar calibration will use defaults");
+            return;
+        }
+
+        data.pillars.forEach(p => {
+            pillarConfig[p.id] = {
+                id: p.id,
+                label: p.label,
+                x: p.x,
+                y: p.y,
+                speakerDelayMs: p.speakerDelayMs || 0,
+                micDelayMs: p.micDelayMs || 0
+            };
+            pillarPositions[p.id] = { x: p.x, y: p.y };
+        });
+
+        log(`📡 Loaded pillar config for ${Object.keys(pillarConfig).length} pillars`);
+        Object.entries(pillarConfig).forEach(([id, config]) => {
+            log(`   ${id}: speaker=${config.speakerDelayMs}ms, mic=${config.micDelayMs}ms at (${config.x}, ${config.y})`);
+        });
+
+    } catch (e) {
+        log(`⚠️ Failed to load pillar config: ${e.message}`);
+    }
+}
+
+// --- LOAD PICCOLO ASSET URLS ---
+async function loadPiccoloAssetUrls() {
+    try {
+        const tuningSnap = await db.ref('tuning_mode').once('value');
+        const tuningData = tuningSnap.val();
+
+        if (!tuningData) {
+            log("⚠️ No tuning_mode data found in Firebase");
+            return;
+        }
+
+        if (tuningData.assets) {
+            if (tuningData.assets.piccolo) {
+                PICCOLO_URL = tuningData.assets.piccolo;
+                log(`🎵 Piccolo URL loaded: ${PICCOLO_URL.split('/').pop()}`);
+            }
+            if (tuningData.assets.test_pulse) {
+                TEST_PULSE_URL = tuningData.assets.test_pulse;
+                log(`🔊 Test pulse URL loaded: ${TEST_PULSE_URL.split('/').pop()}`);
+            }
+            if (tuningData.assets.pillars) {
+                const pillars = tuningData.assets.pillars;
+                if (pillars.FL) pillarUrls.FL = pillars.FL;
+                if (pillars.FR) pillarUrls.FR = pillars.FR;
+                if (pillars.BL) pillarUrls.BL = pillars.BL;
+                if (pillars.BR) pillarUrls.BR = pillars.BR;
+                log(`🏛️ Pillar URLs loaded: FL, FR, BL, BR`);
+            }
+        }
+
+        if (tuningData.metadata) {
+            if (!PICCOLO_URL && tuningData.metadata.source_audio_url) {
+                PICCOLO_URL = tuningData.metadata.source_audio_url;
+            }
+            if (!TEST_PULSE_URL && tuningData.metadata.test_pulse_url) {
+                TEST_PULSE_URL = tuningData.metadata.test_pulse_url;
+            }
+        }
+
+        if (PICCOLO_URL && !bufferCache[PICCOLO_URL]) {
+            preloadTuningAsset(PICCOLO_URL);
+        }
+
+    } catch (e) {
+        log(`❌ Failed to load piccolo asset URLs: ${e.message}`);
+    }
+}
+
+async function preloadTuningAsset(url) {
+    try {
+        const res = await fetch(url);
+        const arrayBuf = await res.arrayBuffer();
+        bufferCache[url] = await audioCtx.decodeAudioData(arrayBuf);
+        log(`✅ Preloaded tuning asset: ${url.split('/').pop()}`);
+    } catch (e) {
+        log(`❌ Failed to preload tuning asset: ${e.message}`);
+    }
+}
+
+// --- HEARTBEAT FUNCTIONS ---
+function startHeartbeat() {
+    if (!mySeat) return;
+    if (heartbeatInterval) clearInterval(heartbeatInterval);
+    if (heartbeatTimer) clearTimeout(heartbeatTimer);
+    scheduleNextHeartbeat();
+    log(`💓 Heartbeat started for ${mySeat.id}`);
+}
+
+function scheduleNextHeartbeat() {
+    const jitter = Math.floor(Math.random() * HEARTBEAT_JITTER_MS) - (HEARTBEAT_JITTER_MS / 2);
+    const nextInterval = Math.max(1000, HEARTBEAT_BASE_INTERVAL_MS + jitter);
+
+    if (heartbeatTimer) clearTimeout(heartbeatTimer);
+
+    heartbeatTimer = setTimeout(() => {
+        sendHeartbeat();
+        scheduleNextHeartbeat();
+    }, nextInterval);
+}
+
+async function sendHeartbeat() {
+    if (!mySeat) return;
+
+    try {
+        const now = Date.now() + serverOffset;
+        await db.ref(`devices/${mySeat.id}`).update({
+            lastSeen: now,
+            status: isHappy ? 'HAPPY' : (calibrationMode ? 'CALIBRATING' : 'ACTIVE'),
+            x: mySeat.x,
+            y: mySeat.y,
+            speakerDelay: calibratedSpeakerDelay,
+            micDelay: myMicDelayMs,
+            neighborCount: myNeighbors.length,
+            estimatedDelay: Math.round(estimatedDeviceDelayMs),
+            adaptiveWindow: Math.round(adaptiveWindowMs),
+            phase1Complete: phase1Complete,
+            calibrationIteration: calibrationIteration
+        });
+    } catch (e) {
+        log(`💔 Heartbeat failed: ${e.message}`);
+    }
+}
+
+function stopHeartbeat() {
+    if (heartbeatInterval) clearInterval(heartbeatInterval);
+    if (heartbeatTimer) clearTimeout(heartbeatTimer);
+    log(`💓 Heartbeat stopped for ${mySeat?.id}`);
+}
+
+// --- ASSET PRELOADING ---
+let assetsPreloaded = false;
+
+async function preloadAssets() {
+    document.getElementById('asset-progress').style.display = 'block';
+    log("📦 Starting asset preload...");
+
+    try {
+        const movementsSnap = await db.ref('show/movements').once('value');
+        const movements = movementsSnap.val();
+
+        if (!movements || !movements.length) {
+            log("⚠️ No movements found in Firebase show/movements");
+            document.getElementById('asset-ind').className = 'indicator syncing';
+            document.getElementById('asset-progress').style.display = 'none';
+            return true;
+        }
+
+        const audioFiles = new Set();
+
+        movements.forEach(movement => {
+            (movement.cues || []).forEach(cue => {
+                (cue.assets || []).forEach(asset => {
+                    if (asset.audio_url) {
+                        audioFiles.add(asset.audio_url);
+                    }
+                });
+            });
+        });
+
+        totalAssetsToPreload = audioFiles.size;
+        preloadedCount = 0;
+
+        log(`📦 Preloading ${totalAssetsToPreload} audio assets from timeline`);
+
+        if (totalAssetsToPreload === 0) {
+            document.getElementById('asset-ind').className = 'indicator active';
+            document.getElementById('asset-progress').style.display = 'none';
+            return true;
+        }
+
+        const loadTasks = Array.from(audioFiles).map(async url => {
+            try {
+                const res = await fetch(url);
+                const arrayBuf = await res.arrayBuffer();
+                bufferCache[url] = await audioCtx.decodeAudioData(arrayBuf);
+                preloadedCount++;
+                updatePreloadProgress();
+                log(`✅ Loaded: ${url.split('/').pop()}`);
+            } catch (e) {
+                log(`❌ Failed to load ${url.split('/').pop()}: ${e.message}`);
+                preloadedCount++;
+                updatePreloadProgress();
+            }
+        });
+
+        await Promise.all(loadTasks);
+        document.getElementById('asset-ind').className = 'indicator active';
+        document.getElementById('asset-progress').style.display = 'none';
+        log(`✅ Asset preload complete (${totalAssetsToPreload} files)`);
+        assetsPreloaded = true;
+
+        if (micPermissionGranted && mySeat && myNeighbors) {
+            const readyBtn = document.getElementById('ready-btn');
+            if (readyBtn) {
+                readyBtn.disabled = false;
+                document.getElementById('system-msg').innerText = "System Ready. Please Enter.";
+            }
+        }
+
+        return true;
+
+    } catch (e) {
+        log(`❌ Asset Load Failure: ${e.message}`);
+        document.getElementById('asset-ind').className = 'indicator error';
+        document.getElementById('asset-progress').style.display = 'none';
+        return false;
+    }
+}
+
+function updatePreloadProgress() {
+    const percent = (preloadedCount / totalAssetsToPreload) * 100;
+    document.getElementById('asset-progress-fill').style.width = `${percent}%`;
+}
+
+// --- UTILITY FUNCTIONS ---
+function calculateMedian(values) {
+    if (values.length === 0) return 0;
+    const sorted = [...values].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    if (sorted.length % 2 === 0) {
+        return (sorted[mid - 1] + sorted[mid]) / 2;
+    } else {
+        return sorted[mid];
+    }
+}
+
+// --- TUNING SCHEDULE HANDLER (UPDATED with iterative calibration) ---
+function initTuningListener() {
+    db.ref('tuning/current').on('value', snap => {
+        const schedule = snap.val();
+        if (schedule && schedule.status === 'ACTIVE') {
+            calibrationMode = true;
+            currentTuningSchedule = schedule;
+
+            // RESET ITERATIVE CALIBRATION STATE
+            calibrationIteration = 0;
+            calibrationComplete = false;
+            iterationResults = [];
+            previousTimingErrors = [];
+            calibrationStartTime = Date.now() + serverOffset;
+
+            if (currentIterationTimeout) {
+                clearTimeout(currentIterationTimeout);
+                currentIterationTimeout = null;
+            }
+
+            tuningStartTime = schedule.startTime;
+
+            if (schedule.schedule) {
+                noteSchedule = schedule.schedule.map(note => ({
+                    ...note,
+                    startMs: parseFloat(note.startMs),
+                    durationMs: parseFloat(note.durationMs)
+                }));
+
+                expectedNoteMap.clear();
+                noteSchedule.forEach(note => {
+                    expectedNoteMap.set(note.noteIndex, note.deviceId);
+                });
+
+                assignedNotes = noteSchedule
+                    .filter(note => note.deviceId === mySeat.id)
+                    .map(note => ({
+                        ...note,
+                        startMs: parseFloat(note.startMs),
+                        durationMs: parseFloat(note.durationMs)
+                    }));
+
+                log(`🎯 This device assigned ${assignedNotes.length} notes for tuning`);
+                log(`   Listening for notes from ${allListeningTargets.length} neighbors/pillars`);
+
+                document.getElementById('debug-listening-to').innerText = allListeningTargets.length;
+                document.getElementById('debug-measurements').innerText = noteSchedule.length;
+            }
+
+            if (schedule.pillar_notes && Array.isArray(schedule.pillar_notes)) {
+                pillarNoteSchedule = schedule.pillar_notes.map(note => ({
+                    ...note,
+                    ms_offset: parseFloat(note.ms_offset),
+                    duration_ms: parseFloat(note.duration_ms),
+                    pulse_ms: parseFloat(note.pulse_ms)
+                }));
+                log(`📡 Loaded ${pillarNoteSchedule.length} pillar notes from tuning schedule for mic delay calibration`);
+            } else {
+                log(`⚠️ No pillar_notes found in tuning schedule - Phase 1 mic calibration will be skipped`);
+            }
+
+            if (schedule.pillar_cal_windows) {
+                pillarWindows = schedule.pillar_cal_windows;
+                log(`🎯 Loaded ${pillarWindows.length} pillar calibration windows`);
+                pillarWindows.forEach(w => {
+                    log(`   ${w.pillar_id}: ${w.start_ms}ms → ${w.end_ms}ms`);
+                });
+            } else {
+                log(`⚠️ No pillar_cal_windows found - Phase 1 mic calibration will use fallback`);
+                if (pillarNoteSchedule.length > 0) {
+                    const pillarIds = ['PILLAR_FL', 'PILLAR_FR', 'PILLAR_BR', 'PILLAR_BL'];
+                    let currentOffset = 0;
+                    const notesPerPillar = Math.floor(pillarNoteSchedule.length / 4);
+
+                    for (let i = 0; i < pillarIds.length; i++) {
+                        const pillarId = pillarIds[i];
+                        const startIdx = i * notesPerPillar;
+                        const endIdx = Math.min(startIdx + notesPerPillar, pillarNoteSchedule.length - 1);
+
+                        if (startIdx < pillarNoteSchedule.length) {
+                            const startMs = pillarNoteSchedule[startIdx].ms_offset;
+                            const endMs = pillarNoteSchedule[endIdx].ms_offset + 500;
+                            pillarWindows.push({ pillar_id: pillarId, start_ms: startMs, end_ms: endMs });
+                            log(`   Fallback window ${pillarId}: ${startMs}ms → ${endMs}ms`);
+                        }
+                    }
+                }
+            }
+
+            phase1Complete = false;
+            phase1WindowActive = true;
+            micDelaySamples = [];
+            myMicDelayMs = null;
+            currentPillarWindowIndex = 0;
+
+            if (pillarWindows.length > 0 && pillarNoteSchedule.length > 0) {
+                currentPillarWindow = pillarWindows[0];
+                const windowStartAbs = tuningStartTime + currentPillarWindow.start_ms;
+                const windowEndAbs = tuningStartTime + currentPillarWindow.end_ms;
+                currentWindowEndTime = windowEndAbs;
+                log(`🎤 Phase 1 window open: listening for ${currentPillarWindow.pillar_id} from ${(currentPillarWindow.start_ms/1000).toFixed(1)}s to ${(currentPillarWindow.end_ms/1000).toFixed(1)}s`);
+                log(`   (${new Date(windowStartAbs).toLocaleTimeString()} → ${new Date(windowEndAbs).toLocaleTimeString()})`);
+            } else {
+                log(`⚠️ No pillar windows available - Phase 1 mic calibration will be skipped`);
+                phase1Complete = true;
+            }
+
+            if (pillarWindows.length > 0) {
+                const lastWindow = pillarWindows[pillarWindows.length - 1];
+                const phase1EndTime = tuningStartTime + lastWindow.end_ms;
+                const phase1Duration = lastWindow.end_ms;
+
+                setTimeout(() => {
+                    if (phase1WindowActive && !phase1Complete) {
+                        phase1WindowActive = false;
+                        phase1Complete = true;
+                        if (micDelaySamples.length === 0) {
+                            myMicDelayMs = 0;
+                            log(`⚠️ Phase 1 window closed with no samples - using 0ms mic delay`);
+                        } else {
+                            const sorted = [...micDelaySamples].sort((a, b) => a - b);
+                            myMicDelayMs = sorted[Math.floor(sorted.length / 2)];
+                            log(`🎤 Phase 1 complete: mic delay = ${myMicDelayMs.toFixed(1)}ms from ${micDelaySamples.length} samples`);
+                        }
+
+                        db.ref(`devices/${mySeat.id}/calibration`).update({
+                            micDelayMs: Math.round(myMicDelayMs || 0),
+                            micDelaySamples: micDelaySamples.length,
+                            micDelayDerivedAt: Date.now() + serverOffset
+                        });
+
+                        document.getElementById('debug-mic-delay').innerText = myMicDelayMs ? `${myMicDelayMs.toFixed(1)}ms` : '0ms (fallback)';
+                        document.getElementById('debug-phase1-samples').innerText = micDelaySamples.length;
+                    }
+                }, phase1Duration);
+            }
+
+            if (schedule.piccoloUrl) {
+                PICCOLO_URL = schedule.piccoloUrl;
+            }
+
+            // Enable microphone for neighbor listening
+            enableMicrophone();
+
+            // Start iterative calibration (will handle Phase 2 with feedback loop)
+            startIterativeCalibration();
+
+        } else {
+            calibrationMode = false;
+            currentTuningSchedule = null;
+            noteSchedule = [];
+            expectedNoteMap.clear();
+            phase1WindowActive = false;
+            calibrationComplete = false;
+
+            if (currentIterationTimeout) {
+                clearTimeout(currentIterationTimeout);
+                currentIterationTimeout = null;
+            }
+
+            disableMicrophone();
+
+            log("🎯 Tuning mode deactivated");
+        }
+    });
+}
+
 // SECTION 2 END ============================================================
+
 
 // SECTION 3 BEGIN ============================================================
 // TUNING SCHEDULER — NOTE DISTRIBUTION, PLAYBACK, RELAUNCH
@@ -1397,6 +2174,320 @@ async function playTuningMovement(cue) {
             log(`❌ Block ${blockIndex} is too late (${Math.round(-delayMs)}ms), skipping`);
         }
     });
+}
+
+// ITERATIVE CALIBRATION FUNCTIONS
+// ============================================================================
+
+// --- ITERATIVE CALIBRATION FUNCTIONS ---
+
+async function startIterativeCalibration() {
+    log("🎵 Starting iterative tuning calibration with feedback loop");
+
+    // Wait for Phase 1 to complete before starting iterative Phase 2
+    const waitForPhase1 = () => {
+        return new Promise((resolve) => {
+            if (phase1Complete) {
+                resolve();
+            } else {
+                const checkInterval = setInterval(() => {
+                    if (phase1Complete) {
+                        clearInterval(checkInterval);
+                        resolve();
+                    }
+                }, 100);
+            }
+        });
+    };
+
+    await waitForPhase1();
+
+    if (!PICCOLO_URL) {
+        log("❌ No piccolo URL available for iterative calibration");
+        return;
+    }
+
+    // Reset iterative state
+    calibrationIteration = 0;
+    calibrationComplete = false;
+    iterationResults = [];
+    previousTimingErrors = [];
+
+    // Start the first iteration
+    runCalibrationIteration();
+}
+
+async function runCalibrationIteration() {
+    if (calibrationComplete) {
+        log("✅ Calibration already complete, skipping iteration");
+        return;
+    }
+
+    calibrationIteration++;
+    iterationStartTime = Date.now() + serverOffset;
+
+    log(`🔄 Calibration iteration ${calibrationIteration}/${maxIterations} starting...`);
+
+    // Reset measurement tracking for this iteration
+    processedMeasurements.clear();
+
+    // Clear previous delay measurements for fresh start
+    if (calibrationIteration > 1) {
+        selfSamples = [];
+        log(`   Cleared previous speaker delay samples for fresh measurement`);
+    }
+
+    // Create a cue object for this iteration
+    const iterationCue = {
+        startTime: Date.now() + serverOffset + 500,  // Start in 500ms
+        endTime: 30000,  // 30 seconds of playback
+        type: 'TUNING_MOVEMENT'
+    };
+
+    // Play the piccolo with current timing adjustments
+    await playTuningMovement(iterationCue);
+
+    // Schedule evaluation after the notes have played (30 seconds)
+    if (currentIterationTimeout) clearTimeout(currentIterationTimeout);
+    currentIterationTimeout = setTimeout(() => evaluateIteration(), 35000);  // Wait 35 seconds for playback + buffer
+}
+
+function evaluateIteration() {
+    const now = Date.now() + serverOffset;
+    const iterationDuration = now - iterationStartTime;
+
+    // Get our current speaker delay from measurements (Phase 2)
+    const currentDelay = calibratedSpeakerDelay;
+
+    // Check if we have enough samples
+    if ((!currentDelay && selfSamples.length < MIN_SELF_SAMPLES) && calibrationIteration > 1) {
+        log(`⚠️ Iteration ${calibrationIteration}: insufficient samples (${selfSamples.length}/${MIN_SELF_SAMPLES})`);
+        scheduleIterationRetry();
+        return;
+    }
+
+    // Calculate stability (standard deviation of recent samples)
+    let stdDev = 999;
+    let mean = 0;
+
+    if (selfSamples.length >= MIN_SELF_SAMPLES) {
+        const recentSamples = selfSamples.slice(-MIN_SELF_SAMPLES);
+        mean = recentSamples.reduce((a,b) => a+b, 0) / recentSamples.length;
+        const variance = recentSamples.reduce((a,b) => a + Math.pow(b - mean, 2), 0) / recentSamples.length;
+        stdDev = Math.sqrt(variance);
+    }
+
+    // Calculate timing error from neighbors' measurements of us
+    let timingError = 0;
+    let neighborCount = 0;
+
+    // Use the neighbor delay measurements from Phase 2
+    if (deviceDelays && Object.keys(deviceDelays).length > 0) {
+        Object.entries(deviceDelays).forEach(([deviceId, delay]) => {
+            if (myNeighbors.includes(deviceId)) {
+                const error = Math.abs(delay - (currentDelay || mean));
+                timingError += error;
+                neighborCount++;
+            }
+        });
+    }
+
+    if (neighborCount > 0) {
+        timingError /= neighborCount;
+    } else if (selfSamples.length >= MIN_SELF_SAMPLES) {
+        timingError = stdDev;
+    } else {
+        timingError = 999;
+    }
+
+    const isStable = stdDev < HAPPY_STDDEV_THRESHOLD;
+    const isSynced = timingError < targetSyncWindowMs;
+    const isConverged = (calibrationIteration > 1 && previousTimingErrors.length > 0 &&
+                         Math.abs(previousTimingErrors[previousTimingErrors.length-1] - timingError) < 10);
+
+    // Record this iteration's results
+    iterationResults.push({
+        iteration: calibrationIteration,
+        speakerDelay: currentDelay || mean,
+        stdDev: stdDev,
+        timingError: timingError,
+        neighborCount: neighborCount,
+        samples: selfSamples.length,
+        timestamp: now
+    });
+
+    log(`📊 Iteration ${calibrationIteration} results:`);
+    log(`   Speaker delay: ${(currentDelay || mean).toFixed(1)}ms`);
+    log(`   Stability (σ): ${stdDev.toFixed(1)}ms (target: <${HAPPY_STDDEV_THRESHOLD}ms)`);
+    log(`   Sync error: ${timingError.toFixed(1)}ms (target: <${targetSyncWindowMs}ms)`);
+    log(`   Neighbors reporting: ${neighborCount}, Samples: ${selfSamples.length}`);
+
+    // Check if we're done (converged)
+    if (isStable && isSynced && (calibrationIteration >= 2 || isConverged)) {
+        calibrationComplete = true;
+        const finalDelay = currentDelay || mean;
+
+        log(`✅✅✅ Calibration CONVERGED after ${calibrationIteration} iterations! ✅✅✅`);
+        log(`   Final speaker delay: ${finalDelay.toFixed(1)}ms (σ=${stdDev.toFixed(1)}ms)`);
+        log(`   Sync error: ${timingError.toFixed(1)}ms`);
+
+        // Mark as HAPPY in Firebase
+        db.ref(`devices/${mySeat.id}`).update({
+            status: 'HAPPY',
+            calibrationIterations: calibrationIteration,
+            finalDelay: Math.round(finalDelay),
+            finalStdDev: Math.round(stdDev),
+            finalSyncError: Math.round(timingError),
+            convergedAt: now
+        });
+
+        db.ref(`devices/${mySeat.id}/calibration`).update({
+            speakerDelayMs: Math.round(finalDelay),
+            speakerSamples: selfSamples.length,
+            speakerStdDev: Math.round(stdDev),
+            iterationsCompleted: calibrationIteration,
+            converged: true,
+            convergedAt: now
+        });
+
+        db.ref(`measurements/summary/${mySeat.id}`).set({
+            speakerDelayMs: Math.round(finalDelay),
+            happy: true,
+            samples: selfSamples.length,
+            stdDev: Math.round(stdDev),
+            micDelayMs: myMicDelayMs || 0,
+            iterations: calibrationIteration,
+            convergedAt: now
+        });
+
+        document.getElementById('debug-status').innerHTML = 'HAPPY ✓';
+
+        const flash = document.getElementById('detection-flash');
+        if (flash) {
+            flash.style.background = '#00ffcc';
+            flash.style.boxShadow = '0 0 30px #00ffcc';
+            setTimeout(() => {
+                flash.style.background = '#333';
+                flash.style.boxShadow = 'none';
+            }, 1000);
+        }
+
+        db.ref(`calibration/status/${mySeat.id}`).set({
+            status: 'HAPPY',
+            iteration: calibrationIteration,
+            delay: Math.round(finalDelay),
+            error: Math.round(timingError),
+            stdDev: Math.round(stdDev),
+            timestamp: now
+        });
+
+        if (currentIterationTimeout) {
+            clearTimeout(currentIterationTimeout);
+            currentIterationTimeout = null;
+        }
+
+        return;
+    }
+
+    // Not converged yet - schedule another iteration
+    if (calibrationIteration < maxIterations) {
+        log(`🔄 Not converged, scheduling iteration ${calibrationIteration + 1}`);
+
+        if (currentDelay || mean > 0) {
+            const currentBest = currentDelay || mean;
+            const adjustment = Math.min(40, Math.max(-40, -timingError * 0.3));
+            const newDelay = currentBest + adjustment;
+
+            if (adjustment !== 0) {
+                log(`   Adjusting speaker delay by ${adjustment > 0 ? '+' : ''}${adjustment.toFixed(1)}ms → ${newDelay.toFixed(1)}ms`);
+                calibratedSpeakerDelay = newDelay;
+            }
+        }
+
+        previousTimingErrors.push(timingError);
+        if (previousTimingErrors.length > 3) previousTimingErrors.shift();
+
+        if (currentIterationTimeout) clearTimeout(currentIterationTimeout);
+        currentIterationTimeout = setTimeout(() => {
+            activeAudioCues.forEach(cue => {
+                if (cue.source) {
+                    try { cue.source.stop(); } catch(e) {}
+                }
+            });
+            activeAudioCues = [];
+            activeTimeouts.forEach(timeout => clearTimeout(timeout));
+            activeTimeouts = [];
+
+            log(`⏸️ Pausing ${iterationPauseMs/1000}s before next iteration...`);
+
+            setTimeout(() => {
+                runCalibrationIteration();
+            }, iterationPauseMs);
+
+            currentIterationTimeout = null;
+        }, 2000);
+
+    } else {
+        const bestIteration = iterationResults.reduce((best, current) =>
+            (current.stdDev < best.stdDev) ? current : best, iterationResults[0]);
+
+        const finalDelay = bestIteration.speakerDelay;
+        calibratedSpeakerDelay = finalDelay;
+
+        log(`⚠️ Max iterations (${maxIterations}) reached, using best result from iteration ${bestIteration.iteration}`);
+        log(`   Best speaker delay: ${finalDelay.toFixed(1)}ms (σ=${bestIteration.stdDev.toFixed(1)}ms)`);
+        log(`   Sync error: ${bestIteration.timingError.toFixed(1)}ms`);
+
+        db.ref(`devices/${mySeat.id}`).update({
+            status: bestIteration.timingError < targetSyncWindowMs * 2 ? 'HAPPY' : 'CALIBRATING',
+            calibrationIterations: calibrationIteration,
+            finalDelay: Math.round(finalDelay),
+            finalStdDev: Math.round(bestIteration.stdDev),
+            fallbackUsed: true,
+            fallbackReason: 'max_iterations'
+        });
+
+        db.ref(`devices/${mySeat.id}/calibration`).update({
+            speakerDelayMs: Math.round(finalDelay),
+            speakerSamples: bestIteration.samples,
+            speakerStdDev: Math.round(bestIteration.stdDev),
+            iterationsCompleted: calibrationIteration,
+            converged: false,
+            fallbackUsed: true
+        });
+
+        document.getElementById('debug-status').innerHTML = `FALLBACK (σ=${Math.round(bestIteration.stdDev)}ms)`;
+
+        if (currentIterationTimeout) {
+            clearTimeout(currentIterationTimeout);
+            currentIterationTimeout = null;
+        }
+    }
+}
+
+function scheduleIterationRetry() {
+    if (calibrationIteration < maxIterations) {
+        log(`⏳ Insufficient data, retrying iteration ${calibrationIteration} in 5 seconds...`);
+
+        if (currentIterationTimeout) clearTimeout(currentIterationTimeout);
+        currentIterationTimeout = setTimeout(() => {
+            activeAudioCues.forEach(cue => {
+                if (cue.source) try { cue.source.stop(); } catch(e) {}
+            });
+            activeAudioCues = [];
+            activeTimeouts.forEach(timeout => clearTimeout(timeout));
+            activeTimeouts = [];
+
+            calibrationIteration--;
+            setTimeout(() => {
+                runCalibrationIteration();
+            }, 1000);
+
+            currentIterationTimeout = null;
+        }, 5000);
+    } else {
+        log(`⚠️ Max iterations reached, cannot retry`);
+    }
 }
 
 // --- PLAY AUDIO BLOCK with timing feedback ---
@@ -1661,31 +2752,24 @@ function initSelfCalibrationListener() {
 }
 
 function processSelfMeasurement(speakerDelay, reportedAt, reporterId) {
-    // Log every measurement for debugging
     console.log(`📊 Received measurement from ${reporterId}: ${speakerDelay.toFixed(2)}ms at ${new Date(reportedAt).toLocaleTimeString()}`);
 
-    // Sanity check - reject obviously wrong values
-    // Valid speaker delay should be between -50ms (very fast) and +500ms (very slow)
     if (speakerDelay < -200 || speakerDelay > 800) {
         console.log(`⚠️ Rejecting outlier measurement: ${speakerDelay.toFixed(2)}ms (outside -200 to 800ms range)`);
         return;
     }
 
-    // Also reject if the measurement is too far from current estimate (if we have one)
     if (calibratedSpeakerDelay !== null && Math.abs(speakerDelay - calibratedSpeakerDelay) > 200) {
         console.log(`⚠️ Rejecting outlier: ${speakerDelay.toFixed(2)}ms is too far from current estimate ${calibratedSpeakerDelay.toFixed(2)}ms`);
         return;
     }
 
-    // Add to samples
     selfSamples.push(speakerDelay);
 
-    // Keep only last MAX_SELF_SAMPLES
     if (selfSamples.length > MAX_SELF_SAMPLES) {
         selfSamples.shift();
     }
 
-    // Update debug display
     document.getElementById('debug-samples').innerText = selfSamples.length;
 
     const median = calculateMedian(selfSamples);
@@ -1693,28 +2777,29 @@ function processSelfMeasurement(speakerDelay, reportedAt, reporterId) {
 
     console.log(`📊 Current samples: ${selfSamples.length}, median: ${median.toFixed(2)}ms`);
 
-    // Need at least MIN_SELF_SAMPLES to check HAPPY status
-    if (selfSamples.length >= MIN_SELF_SAMPLES) {
-        // Get last MIN_SELF_SAMPLES samples
-        const recentSamples = selfSamples.slice(-MIN_SELF_SAMPLES);
+    // Update iteration progress in Firebase
+    db.ref(`calibration/status/${mySeat.id}`).update({
+        currentDelay: median,
+        samples: selfSamples.length,
+        iteration: calibrationIteration,
+        lastMeasurementAt: Date.now() + serverOffset
+    });
 
-        // Calculate standard deviation
+    if (selfSamples.length >= MIN_SELF_SAMPLES) {
+        const recentSamples = selfSamples.slice(-MIN_SELF_SAMPLES);
         const mean = recentSamples.reduce((a, b) => a + b, 0) / recentSamples.length;
         const variance = recentSamples.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / recentSamples.length;
         const stdDev = Math.sqrt(variance);
 
         document.getElementById('debug-stddev').innerText = stdDev.toFixed(1) + 'ms';
-
         console.log(`📊 Stats: mean=${mean.toFixed(2)}ms, stdDev=${stdDev.toFixed(2)}ms`);
 
-        // HAPPY if stdDev < HAPPY_STDDEV_THRESHOLD (15ms)
-        if (stdDev < HAPPY_STDDEV_THRESHOLD && !isHappy) {
+        if (stdDev < HAPPY_STDDEV_THRESHOLD && !isHappy && calibrationComplete) {
             isHappy = true;
             calibratedSpeakerDelay = median;
 
             log(`✅ HAPPY! Speaker delay: ${calibratedSpeakerDelay.toFixed(1)}ms (σ=${stdDev.toFixed(1)}ms, ${selfSamples.length} samples)`);
 
-            // Update Firebase with calibrated delay
             db.ref(`devices/${mySeat.id}`).update({
                 status: 'HAPPY',
                 calibratedAt: Date.now() + serverOffset
@@ -1740,18 +2825,18 @@ function processSelfMeasurement(speakerDelay, reportedAt, reporterId) {
 
             document.getElementById('debug-status').innerText = 'HAPPY';
 
-        } else if (!isHappy) {
-            // Still calibrating - update summary with current median
+        } else if (!calibrationComplete) {
             db.ref(`measurements/summary/${mySeat.id}`).set({
                 speakerDelayMs: median,
                 happy: false,
                 samples: selfSamples.length,
                 stdDev: stdDev,
                 micDelayMs: myMicDelayMs || 0,
+                iteration: calibrationIteration,
                 updatedAt: Date.now() + serverOffset
             });
 
-            document.getElementById('debug-status').innerHTML = `CALIBRATING (σ=${stdDev.toFixed(0)}ms)`;
+            document.getElementById('debug-status').innerHTML = `ITER ${calibrationIteration} (σ=${stdDev.toFixed(0)}ms)`;
         }
     }
 
