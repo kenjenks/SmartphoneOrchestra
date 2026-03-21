@@ -489,6 +489,7 @@ const db = firebase.database();
 // --- LOGGING FUNCTION with Firebase persistence ---
 let logQueue = [];
 let logFlushTimer = null;
+let pendingFlush = false;
 const LOG_FLUSH_INTERVAL_MS = 2000;  // Flush every 2 seconds
 const MAX_LOG_QUEUE_SIZE = 50;        // Flush if queue gets this big
 
@@ -504,14 +505,19 @@ function initLogging() {
     if (logFlushTimer) clearInterval(logFlushTimer);
     logFlushTimer = setInterval(flushLogs, LOG_FLUSH_INTERVAL_MS);
 
-    // Log startup message
+    // Log startup message (will be queued and sent after init)
     log(`🚀 Device ${mySeat.id} started at ${new Date().toISOString()}`);
     log(`   Platform: ${navigator.platform}, User Agent: ${navigator.userAgent.substring(0, 100)}`);
     log(`   Location: (${mySeat.x}, ${mySeat.y}) in ${mySeat.section}`);
+
+    // Flush any pending logs from before init
+    setTimeout(() => flushLogs(), 100);
 }
 
 function flushLogs() {
-    if (logQueue.length === 0) return;
+    // Guard against null logRef and prevent multiple simultaneous flushes
+    if (logQueue.length === 0 || !logRef || pendingFlush) return;
+    pendingFlush = true;
 
     // Take all current logs and clear queue
     const logsToSend = [...logQueue];
@@ -520,30 +526,37 @@ function flushLogs() {
     // Add to Firebase as a batch
     const batch = {};
     logsToSend.forEach((logEntry, index) => {
-        batch[`${Date.now()}_${index}`] = logEntry;
+        // Use timestamp with serverOffset and random string to avoid collisions
+        const ts = Date.now() + (serverOffset || 0);
+        batch[`${ts}_${index}_${Math.random().toString(36).substr(2, 6)}`] = logEntry;
     });
 
-    logRef.update(batch).catch(e => {
-        console.error("Failed to send logs to Firebase:", e);
-        // Put logs back in queue on failure
-        logQueue = [...logsToSend, ...logQueue];
-        // Keep only MAX_LOG_QUEUE_SIZE
-        if (logQueue.length > MAX_LOG_QUEUE_SIZE) {
-            logQueue = logQueue.slice(-MAX_LOG_QUEUE_SIZE);
-        }
-    });
+    logRef.update(batch)
+        .catch(e => {
+            console.error("Failed to send logs to Firebase:", e);
+            // Put logs back in queue on failure
+            logQueue = [...logsToSend, ...logQueue];
+            // Keep only MAX_LOG_QUEUE_SIZE
+            if (logQueue.length > MAX_LOG_QUEUE_SIZE) {
+                logQueue = logQueue.slice(-MAX_LOG_QUEUE_SIZE);
+            }
+        })
+        .finally(() => {
+            pendingFlush = false;
+        });
 }
 
-function log(message) {
+function log(message, type = 'info') {
     // Always log to console for local debugging
     console.log(`[${new Date().toLocaleTimeString()}] ${message}`);
 
-    // Create log entry for Firebase
+    // Create log entry
     const logEntry = {
         timestamp: Date.now() + (serverOffset || 0),
         timeStr: new Date().toLocaleTimeString(),
         message: message,
         seatId: mySeat ? mySeat.id : 'unknown',
+        type: type,
         calibrationMode: calibrationMode,
         phase1Complete: phase1Complete,
         isHappy: isHappy,
@@ -552,11 +565,11 @@ function log(message) {
         neighborCount: myNeighbors ? myNeighbors.length : 0
     };
 
-    // Add to queue
+    // Add to queue (always, even if logRef not ready yet)
     logQueue.push(logEntry);
 
-    // Flush immediately if queue is getting large
-    if (logQueue.length >= MAX_LOG_QUEUE_SIZE) {
+    // Flush immediately if queue is getting large and logRef is ready
+    if (logQueue.length >= MAX_LOG_QUEUE_SIZE && logRef) {
         flushLogs();
     }
 
@@ -572,7 +585,7 @@ function log(message) {
     }
 }
 
-// --- Add a small log display to the debug panel ---
+// Add a small log display to the debug panel
 function addLogDisplayToDebugPanel() {
     const debugPanel = document.getElementById('calibration-debug');
     if (!debugPanel) return;
@@ -923,6 +936,169 @@ function calculateMedian(values) {
     } else {
         return sorted[mid];
     }
+}
+
+// --- TUNING SCHEDULE HANDLER (loads from tuning/current) ---
+function initTuningListener() {
+    db.ref('tuning/current').on('value', snap => {
+        const schedule = snap.val();
+        if (schedule && schedule.status === 'ACTIVE') {
+            calibrationMode = true;
+            currentTuningSchedule = schedule;
+
+            // Store tuning start time
+            tuningStartTime = schedule.startTime;
+
+            // Store full note schedule for piccolo
+            if (schedule.schedule) {
+                noteSchedule = schedule.schedule.map(note => ({
+                    ...note,
+                    startMs: parseFloat(note.startMs),
+                    durationMs: parseFloat(note.durationMs)
+                }));
+
+                expectedNoteMap.clear();
+                noteSchedule.forEach(note => {
+                    expectedNoteMap.set(note.noteIndex, note.deviceId);
+                });
+
+                assignedNotes = noteSchedule
+                    .filter(note => note.deviceId === mySeat.id)
+                    .map(note => ({
+                        ...note,
+                        startMs: parseFloat(note.startMs),
+                        durationMs: parseFloat(note.durationMs)
+                    }));
+
+                log(`🎯 This device assigned ${assignedNotes.length} notes for tuning`);
+                log(`   Listening for notes from ${allListeningTargets.length} neighbors/pillars`);
+
+                document.getElementById('debug-listening-to').innerText = allListeningTargets.length;
+                document.getElementById('debug-measurements').innerText = noteSchedule.length;
+            }
+
+            // Load pillar notes from the schedule (if present) for Phase 1
+            if (schedule.pillar_notes && Array.isArray(schedule.pillar_notes)) {
+                pillarNoteSchedule = schedule.pillar_notes.map(note => ({
+                    ...note,
+                    ms_offset: parseFloat(note.ms_offset),
+                    duration_ms: parseFloat(note.duration_ms),
+                    pulse_ms: parseFloat(note.pulse_ms)
+                }));
+                log(`📡 Loaded ${pillarNoteSchedule.length} pillar notes from tuning schedule for mic delay calibration`);
+            } else {
+                log(`⚠️ No pillar_notes found in tuning schedule - Phase 1 mic calibration will be skipped`);
+            }
+
+            // Load pillar calibration windows (look at top level, not metadata)
+            if (schedule.pillar_cal_windows) {
+                pillarWindows = schedule.pillar_cal_windows;
+                log(`🎯 Loaded ${pillarWindows.length} pillar calibration windows`);
+                pillarWindows.forEach(w => {
+                    log(`   ${w.pillar_id}: ${w.start_ms}ms → ${w.end_ms}ms`);
+                });
+            } else {
+                log(`⚠️ No pillar_cal_windows found - Phase 1 mic calibration will use fallback`);
+                // Fallback: create windows based on timing of pillar notes
+                if (pillarNoteSchedule.length > 0) {
+                    const pillarIds = ['PILLAR_FL', 'PILLAR_FR', 'PILLAR_BR', 'PILLAR_BL'];
+                    let currentOffset = 0;
+                    const notesPerPillar = Math.floor(pillarNoteSchedule.length / 4);
+
+                    for (let i = 0; i < pillarIds.length; i++) {
+                        const pillarId = pillarIds[i];
+                        const startIdx = i * notesPerPillar;
+                        const endIdx = Math.min(startIdx + notesPerPillar, pillarNoteSchedule.length - 1);
+
+                        if (startIdx < pillarNoteSchedule.length) {
+                            const startMs = pillarNoteSchedule[startIdx].ms_offset;
+                            const endMs = pillarNoteSchedule[endIdx].ms_offset + 500;
+                            pillarWindows.push({ pillar_id: pillarId, start_ms: startMs, end_ms: endMs });
+                            log(`   Fallback window ${pillarId}: ${startMs}ms → ${endMs}ms`);
+                        }
+                    }
+                }
+            }
+
+            // Reset Phase 1 state
+            phase1Complete = false;
+            phase1WindowActive = true;
+            micDelaySamples = [];
+            myMicDelayMs = null;
+            currentPillarWindowIndex = 0;
+
+            // Find the first pillar window that has notes
+            if (pillarWindows.length > 0 && pillarNoteSchedule.length > 0) {
+                currentPillarWindow = pillarWindows[0];
+                const windowStartAbs = tuningStartTime + currentPillarWindow.start_ms;
+                const windowEndAbs = tuningStartTime + currentPillarWindow.end_ms;
+                currentWindowEndTime = windowEndAbs;
+                log(`🎤 Phase 1 window open: listening for ${currentPillarWindow.pillar_id} from ${(currentPillarWindow.start_ms/1000).toFixed(1)}s to ${(currentPillarWindow.end_ms/1000).toFixed(1)}s`);
+                log(`   (${new Date(windowStartAbs).toLocaleTimeString()} → ${new Date(windowEndAbs).toLocaleTimeString()})`);
+            } else {
+                log(`⚠️ No pillar windows available - Phase 1 mic calibration will be skipped`);
+                phase1Complete = true; // Skip Phase 1
+            }
+
+            // Set timer to close phase 1 window after all pillars
+            if (pillarWindows.length > 0) {
+                const lastWindow = pillarWindows[pillarWindows.length - 1];
+                const phase1EndTime = tuningStartTime + lastWindow.end_ms;
+                const phase1Duration = lastWindow.end_ms;
+
+                setTimeout(() => {
+                    if (phase1WindowActive && !phase1Complete) {
+                        phase1WindowActive = false;
+                        phase1Complete = true;
+                        if (micDelaySamples.length === 0) {
+                            myMicDelayMs = 0;
+                            log(`⚠️ Phase 1 window closed with no samples - using 0ms mic delay`);
+                        } else {
+                            // Calculate median if we have samples
+                            const sorted = [...micDelaySamples].sort((a, b) => a - b);
+                            myMicDelayMs = sorted[Math.floor(sorted.length / 2)];
+                            log(`🎤 Phase 1 complete: mic delay = ${myMicDelayMs.toFixed(1)}ms from ${micDelaySamples.length} samples`);
+                        }
+
+                        // Write to Firebase
+                        db.ref(`devices/${mySeat.id}/calibration`).update({
+                            micDelayMs: Math.round(myMicDelayMs || 0),
+                            micDelaySamples: micDelaySamples.length,
+                            micDelayDerivedAt: Date.now() + serverOffset
+                        });
+
+                        document.getElementById('debug-mic-delay').innerText = myMicDelayMs ? `${myMicDelayMs.toFixed(1)}ms` : '0ms (fallback)';
+                        document.getElementById('debug-phase1-samples').innerText = micDelaySamples.length;
+                    }
+                }, phase1Duration);
+            }
+
+            // Store piccolo URL
+            if (schedule.piccoloUrl) {
+                PICCOLO_URL = schedule.piccoloUrl;
+            }
+
+            // FIX: DO NOT overwrite pillarUrls with schedule.pillars!
+            // pillarUrls is already correctly set by loadTuningAssetUrls() from tuning_mode.json.
+            // The schedule.pillars contains show movement URLs (performance MP3s), not tuning MP3s.
+            // This block is intentionally removed to prevent overwriting.
+
+            // Enable microphone for neighbor listening
+            enableMicrophone();
+
+        } else {
+            calibrationMode = false;
+            currentTuningSchedule = null;
+            noteSchedule = [];
+            expectedNoteMap.clear();
+            phase1WindowActive = false;
+
+            // Disable microphone when tuning ends
+            disableMicrophone();
+
+            log("🎯 Tuning mode deactivated");
+        }
+    });
 }
 
 // SECTION 2 END ============================================================
@@ -1815,7 +1991,7 @@ function checkHistoryForMissedNotes() {
 
 // SECTION 5 END ============================================================
 
-    // SECTION 6 BEGIN ============================================================
+// SECTION 6 BEGIN ============================================================
 // SHOW PLAYBACK — GO SIGNAL, SPATIAL AUDIO, LIGHT ENGINE, RENDER LOOP
 // ============================================================================
 
@@ -2021,6 +2197,150 @@ async function playAudioBlock(url, block, movementStartTime) {
             activeTimeouts.push(timeoutId);
         }
     });
+}
+
+// --- PILLAR FABRIC PLAYBACK (continuous background music) ---
+async function startPillarFabric(startTime) {
+    log(`🎻 Starting pillar fabric for ${mySeat.id}`);
+
+    // Get this pillar's position from pillarConfig
+    const pillar = pillarConfig[mySeat.id];
+    if (!pillar) {
+        log(`❌ No position found for ${mySeat.id} in pillarConfig`);
+        return;
+    }
+
+    // Get this pillar's URL from pillarUrls (loaded from tuning_mode.json)
+    const positionCode = mySeat.id.replace('PILLAR_', '');
+    const myUrl = pillarUrls[positionCode];
+
+    if (!myUrl) {
+        log(`❌ No URL found for ${mySeat.id} (position ${positionCode})`);
+        return;
+    }
+
+    log(`📌 ${mySeat.id} at (${pillar.x}, ${pillar.y})`);
+    log(`🔊 URL: ${myUrl.split('/').pop()}`);
+
+    const nowWall = Date.now() + serverOffset;
+
+    // Calculate warm-up time (500ms before start, play silently for 100ms)
+    const warmUpTime = startTime - WARMUP_ADVANCE_MS;
+    const warmUpDelay = warmUpTime - nowWall - (calibratedSpeakerDelay || 0) - (myMicDelayMs || 0);
+
+    // Calculate actual start time
+    const startDelay = startTime - nowWall - (calibratedSpeakerDelay || 0) - (myMicDelayMs || 0);
+
+    // Ensure the audio is loaded
+    if (!bufferCache[myUrl]) {
+        try {
+            log(`📦 Loading pillar audio: ${myUrl.split('/').pop()}`);
+            const res = await fetch(myUrl);
+            const arrayBuf = await res.arrayBuffer();
+            bufferCache[myUrl] = await audioCtx.decodeAudioData(arrayBuf);
+            log(`✅ Pillar audio loaded`);
+        } catch (e) {
+            log(`❌ Failed to load pillar audio: ${e.message}`);
+            return;
+        }
+    }
+
+    // SCHEDULE WARM-UP PULSE (100ms silent playback)
+    if (warmUpDelay > 0) {
+        const warmUpTimeoutId = setTimeout(() => {
+            try {
+                const source = audioCtx.createBufferSource();
+                source.buffer = bufferCache[myUrl];
+
+                const gainNode = audioCtx.createGain();
+                gainNode.gain.setValueAtTime(0, audioCtx.currentTime); // Silent
+
+                source.connect(gainNode).connect(audioCtx.destination);
+                source.start(0);
+
+                // Stop after exactly 100ms
+                source.stop(audioCtx.currentTime + (SILENT_WARMUP_MS / 1000));
+
+                log(`🔇 Warm-up pulse for ${mySeat.id} at ${new Date().toLocaleTimeString()}`);
+            } catch (e) {
+                log(`❌ Warm-up failed: ${e.message}`);
+            }
+
+            activeTimeouts = activeTimeouts.filter(id => id !== warmUpTimeoutId);
+        }, warmUpDelay);
+
+        activeTimeouts.push(warmUpTimeoutId);
+        log(`📅 ${mySeat.id} warm-up scheduled in ${Math.round(warmUpDelay)}ms`);
+    } else {
+        log(`⚠️ Warm-up delay negative (${Math.round(warmUpDelay)}ms), skipping`);
+    }
+
+    // SCHEDULE ACTUAL START (full volume, looped)
+    if (startDelay > 0) {
+        const startTimeoutId = setTimeout(() => {
+            try {
+                const source = audioCtx.createBufferSource();
+                source.buffer = bufferCache[myUrl];
+                source.loop = true; // Pillars play continuously
+
+                const gainNode = audioCtx.createGain();
+                gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime); // Full volume
+
+                source.connect(gainNode).connect(audioCtx.destination);
+                source.start(0);
+
+                log(`🏛️ ${mySeat.id} STARTED at ${new Date().toLocaleTimeString()}`);
+
+                // Store in active audio cues for potential later control
+                activeAudioCues.push({
+                    type: 'pillar',
+                    source: source,
+                    gainNode: gainNode,
+                    startTime: startTime,
+                    id: mySeat.id,
+                    position: pillar
+                });
+
+            } catch (e) {
+                log(`❌ Pillar start failed: ${e.message}`);
+            }
+
+            activeTimeouts = activeTimeouts.filter(id => id !== startTimeoutId);
+        }, startDelay);
+
+        activeTimeouts.push(startTimeoutId);
+        log(`📅 ${mySeat.id} start scheduled in ${Math.round(startDelay)}ms (at ${new Date(startTime).toLocaleTimeString()}.${String(startTime % 1000).padStart(3, '0')})`);
+
+    } else if (startDelay > -1000) {
+        // Slightly late - start immediately
+        log(`⚠️ ${mySeat.id} start is ${Math.round(-startDelay)}ms late, playing immediately`);
+        try {
+            const source = audioCtx.createBufferSource();
+            source.buffer = bufferCache[myUrl];
+            source.loop = true;
+
+            const gainNode = audioCtx.createGain();
+            gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime);
+
+            source.connect(gainNode).connect(audioCtx.destination);
+            source.start(0);
+
+            log(`🏛️ ${mySeat.id} STARTED (late)`);
+
+            activeAudioCues.push({
+                type: 'pillar',
+                source: source,
+                gainNode: gainNode,
+                startTime: startTime,
+                id: mySeat.id,
+                position: pillar
+            });
+        } catch (e) {
+            log(`❌ Pillar start failed: ${e.message}`);
+        }
+    } else {
+        log(`❌ ${mySeat.id} start is too late (${Math.round(-startDelay)}ms), skipping`);
+    }
 }
 
 // --- MOVEMENT HANDLER (processes GO signal from conductor) ---
@@ -2590,7 +2910,7 @@ flashStyle.textContent = `
 `;
 document.head.appendChild(flashStyle);
 
-// --- WINDOW ONLOAD ---
+// --- WINDOW ONLOAD (FIXED - only one) ---
 window.onload = async () => {
     syncClock();
     await loadPillarConfig();  // Load pillar positions and delay values
@@ -2602,20 +2922,19 @@ window.onload = async () => {
     const neighborOk = await loadNeighborMap();
     const assetsOk = await preloadAssets();
 
-    if (idOk && neighborOk && assetsOk) {
-        document.getElementById('ready-btn').disabled = false;
-        document.getElementById('system-msg').innerText = "System Ready. Please Enter.";
-    }
-
-     // Initialize Firebase logging after identity is known
+    // Initialize Firebase logging after identity is known
     if (idOk && mySeat) {
         initLogging();
     }
 
+    // Only one check for ready button enable
     if (idOk && neighborOk && assetsOk) {
         document.getElementById('ready-btn').disabled = false;
         document.getElementById('system-msg').innerText = "System Ready. Please Enter.";
     }
+
+    // Add log display to debug panel
+    addLogDisplayToDebugPanel();
 
     // Start debug updates
     setInterval(() => {
@@ -2635,6 +2954,8 @@ window.onresize = () => {
 window.addEventListener('beforeunload', () => {
     stopHeartbeat();
     if (window.historyCheckInterval) clearInterval(window.historyCheckInterval);
+    // Flush any remaining logs
+    flushLogs();
 });
 
 // SECTION 6 END ============================================================
