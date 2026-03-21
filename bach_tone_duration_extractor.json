@@ -6,8 +6,8 @@
   
   "paths": {
     "base_dir": "C:\\\\Users\\\\ken\\\\Documents\\\\Ken\\\\Fiction\\\\HMP_SW\\\\Script_Analysis_and_Production\\\\SmartphoneOrchestra stuff\\\\Jesu Joy",
-    "input_musicxml": "Tuning-Jesu - Stacatto.txt",
-    "input_musicxml_pillars": "Tuning-Jesu - Stacatto.txt",
+    "input_musicxml": "Tuning-Jesu - Stacatto.musicxml",
+    "input_musicxml_pillars": "Tuning-Jesu - Stacatto.musicxml",
     "output_file": "tuning_mode.json"
   },
   
