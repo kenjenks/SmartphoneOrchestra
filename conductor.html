@@ -13,6 +13,7 @@ Features:
 - Seat map visualization with status indicators
 - Heartbeat monitoring: devices marked dead if no heartbeat for 12.1s
 - Spiral distribution: Each device receives notes in a spiral pattern
+- LOG VIEWER: Displays logs from all devices (including conductor) in real-time
 
 Note: All configuration uploads (seat_config.tsv, tuning_mode.json,
 pillar_config.json, visual_timeline.json) are handled by admin.html
@@ -28,7 +29,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         body { margin: 0; background: #1a1a1a; color: #eee; font-family: 'Segoe UI', sans-serif; display: flex; height: 100vh; overflow: hidden; }
 
         /* Sidebar Controls */
-        #control-panel { width: 350px; background: #252525; border-right: 1px solid #444; padding: 20px; display: flex; flex-direction: column; overflow-y: auto; }
+        #control-panel { width: 380px; background: #252525; border-right: 1px solid #444; padding: 20px; display: flex; flex-direction: column; overflow-y: auto; }
         .section { margin-bottom: 25px; padding-bottom: 15px; border-bottom: 1px solid #333; }
         h2 { font-size: 1.1rem; color: #00ffcc; margin-top: 0; text-transform: uppercase; letter-spacing: 1px; }
 
@@ -44,12 +45,114 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         button.go-button { background: #00ff00; color: #000; font-size: 1.2rem; padding: 15px; margin-top: 10px; }
         button.go-button:hover { background: #00cc00; }
         .btn-group { display: flex; gap: 10px; }
+        button.secondary { background: #2a2a2a; border-color: #446; }
+        button.danger { background: #600; border-color: #a00; color: #fff; }
+        button.danger:hover { background: #800; }
 
         /* Performance Registry UI Block */
-        #performance-registry { font-family: monospace; font-size: 11px; background: #000; padding: 10px; border-radius: 4px; height: 200px; overflow-y: auto; border: 1px solid #333; }
+        #performance-registry { font-family: monospace; font-size: 11px; background: #000; padding: 10px; border-radius: 4px; height: 180px; overflow-y: auto; border: 1px solid #333; }
         .perf-row { display: flex; justify-content: space-between; padding: 2px 0; border-bottom: 1px solid #111; }
         .perf-row.warning { color: #ffcc00; }
         .perf-row.critical { color: #ff4444; font-weight: bold; }
+
+        /* Log Viewer */
+        #log-viewer-container {
+            margin-top: 15px;
+            background: #0a0a0a;
+            border: 1px solid #333;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .log-viewer-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 10px;
+            background: #1a1a1a;
+            border-bottom: 1px solid #333;
+        }
+        .log-viewer-header h3 {
+            margin: 0;
+            font-size: 0.9rem;
+            color: #00ffcc;
+        }
+        .log-viewer-controls {
+            display: flex;
+            gap: 8px;
+        }
+        .log-viewer-controls button {
+            width: auto;
+            padding: 4px 12px;
+            margin: 0;
+            font-size: 0.7rem;
+            background: #333;
+        }
+        .log-viewer-controls button.clear-btn {
+            background: #600;
+            border-color: #a00;
+        }
+        .log-viewer-controls button.clear-btn:hover {
+            background: #800;
+        }
+        .log-filter {
+            display: flex;
+            gap: 8px;
+            padding: 8px 10px;
+            background: #111;
+            border-bottom: 1px solid #333;
+            font-size: 0.7rem;
+        }
+        .log-filter input {
+            flex: 1;
+            background: #000;
+            border: 1px solid #333;
+            color: #fff;
+            padding: 4px 8px;
+            border-radius: 3px;
+            font-size: 0.7rem;
+        }
+        .log-filter select {
+            background: #000;
+            border: 1px solid #333;
+            color: #fff;
+            padding: 4px 8px;
+            border-radius: 3px;
+            font-size: 0.7rem;
+        }
+        #log-entries {
+            height: 250px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 10px;
+            padding: 8px;
+        }
+        .log-entry {
+            margin-bottom: 4px;
+            padding: 2px 4px;
+            border-bottom: 1px solid #1a1a1a;
+            font-family: monospace;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        .log-entry-info { color: #888; border-left: 2px solid #888; padding-left: 6px; }
+        .log-entry-match { color: #00ffcc; border-left: 2px solid #00ffcc; padding-left: 6px; }
+        .log-entry-break { color: #ffcc00; border-left: 2px solid #ffcc00; padding-left: 6px; }
+        .log-entry-unmatched { color: #ff4444; border-left: 2px solid #ff4444; padding-left: 6px; }
+        .log-entry-error { color: #ff8888; border-left: 2px solid #ff4444; padding-left: 6px; background: #330000; }
+        .log-seat-badge {
+            display: inline-block;
+            background: #00ffcc20;
+            color: #00ffcc;
+            border-radius: 3px;
+            padding: 1px 4px;
+            margin-right: 6px;
+            font-weight: bold;
+            font-size: 9px;
+        }
+        .log-timestamp {
+            color: #666;
+            margin-right: 8px;
+        }
 
         /* Legend */
         .legend { display: flex; gap: 10px; font-size: 10px; margin-top: 10px; }
@@ -66,9 +169,6 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         .movement-selector { margin: 10px 0; max-height: 150px; overflow-y: auto; }
         .movement-btn { background: #222; text-align: left; padding: 8px; margin: 2px 0; }
         .movement-btn.active { background: #00ffcc; color: #000; border-left: 4px solid #fff; }
-
-        /* Heartbeat status indicators */
-        .heartbeat-dead { opacity: 0.3; filter: grayscale(100%); }
     </style>
 </head>
 <body>
@@ -120,10 +220,6 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
 
             <button id="load-default-pillars-btn" class="secondary" style="margin-top: 5px;">🏛️ Load Default Pillar URLs</button>
 
-            <div id="note-timing-status" style="font-size: 0.7rem; color: #888; margin-top: 5px;">
-                Using tuning_mode.json from admin
-            </div>
-
             <div id="tuning-progress" style="display: none;">
                 <div style="display: flex; justify-content: space-between;">
                     <span>Calibration:</span>
@@ -138,7 +234,6 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
                     <span>📊 Reporting: <span id="reporting-count">0</span></span>
                     <span>❌ Dead: <span id="dead-count">0</span></span>
                 </div>
-                <!-- Calibration Status -->
                 <div class="stats-row" style="margin-top: 10px; border-top: 1px solid #333; padding-top: 5px;">
                     <span>🎯 Devices with measurements:</span>
                     <span id="devices-with-measurements">0</span>
@@ -157,7 +252,30 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         <div class="section">
             <h2>Performance Registry</h2>
             <div id="performance-registry">
-                <div class="perf-row"><span>ID</span><span>SPEAKER DELAY</span><span>STATUS</span></div>
+                <div class="perf-row"><span>ID</span><span>MIC DELAY</span><span>SPEAKER DELAY</span><span>STATUS</span></div>
+            </div>
+        </div>
+
+        <!-- LOG VIEWER SECTION -->
+        <div class="section">
+            <div id="log-viewer-container">
+                <div class="log-viewer-header">
+                    <h3>📋 Device Logs</h3>
+                    <div class="log-viewer-controls">
+                        <button id="refresh-logs-btn" class="secondary" style="width: auto;">🔄 Refresh</button>
+                        <button id="clear-logs-btn" class="clear-btn" style="width: auto;">🗑️ Clear All</button>
+                    </div>
+                </div>
+                <div class="log-filter">
+                    <input type="text" id="log-filter-text" placeholder="Filter by message..." style="flex: 2;">
+                    <select id="log-filter-device">
+                        <option value="">All Devices</option>
+                        <option value="conductor">Conductor (this panel)</option>
+                    </select>
+                </div>
+                <div id="log-entries">
+                    <div class="log-entry log-entry-info">[System] Log viewer ready. Waiting for logs...</div>
+                </div>
             </div>
         </div>
 
@@ -173,7 +291,6 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
 
 <script>
     // PROTECTED BLOCK: Firebase Configuration
-    // Security restricted to authorized domains in Google Cloud Console
     const firebaseConfig = {
         apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
         authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
@@ -196,17 +313,18 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
     let tuningStartTime = 0;
     let activeDevices = [];
     let serverOffset = 0;
+    let noteTimings = [];
 
     // Movement state
     let movements = [];
     let currentMovement = null;
     let PILLAR_URLS = {};
 
-    // Piccolo URLs (loaded from tuning_mode.json)
+    // Piccolo URLs
     let PICCOLO_URL = "";
     let TEST_PULSE_URL = "";
 
-    // Default pillar URLs for tuning mode (fallback if no movement selected)
+    // Default pillar URLs for tuning mode
     const DEFAULT_PILLAR_URLS = {
         FL: "https://static.wixstatic.com/mp3/9178d1_9aba02e74fc344808064f364bb505086.mp3",
         FR: "https://static.wixstatic.com/mp3/9178d1_08a292cbcee448d7b83e464d6a94b377.mp3",
@@ -215,7 +333,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
     };
 
     // Heartbeat monitoring parameters
-    const HEARTBEAT_TIMEOUT_MS = 12100; // 12.1 seconds (10s ±1s heartbeat + 10% buffer)
+    const HEARTBEAT_TIMEOUT_MS = 12100;
     let heartbeatChecker = null;
 
     // Device delays for registry display
@@ -225,31 +343,272 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
     let totalMeasurements = 0;
     let devicesWithMeasurements = new Set();
 
+    // --- LOG VIEWER STATE ---
+    let allLogs = [];
+    let logListeners = [];
+    let conductorLogRef = null;
+    let logFilterText = '';
+    let logFilterDevice = '';
+
+    // Conductor log queue
+    let conductorLogQueue = [];
+    let conductorLogFlushTimer = null;
+    const CONDUCTOR_LOG_FLUSH_INTERVAL_MS = 2000;
+    const MAX_CONDUCTOR_LOG_QUEUE = 50;
+
     // --- CLOCK SYNC ---
     const offsetRef = db.ref(".info/serverTimeOffset");
     offsetRef.on("value", snap => {
         serverOffset = snap.val() || 0;
     });
 
-    // --- HEARTBEAT MONITORING ---
-    function startHeartbeatMonitoring() {
-        if (heartbeatChecker) {
-            clearInterval(heartbeatChecker);
+    // --- CONDUCTOR LOGGING FUNCTION ---
+    function conductorLog(message, type = 'info') {
+        const timestamp = Date.now() + serverOffset;
+        const timeStr = new Date(timestamp).toLocaleTimeString();
+
+        // Log to console
+        console.log(`[CONDUCTOR ${timeStr}] ${message}`);
+
+        // Create log entry
+        const logEntry = {
+            timestamp: timestamp,
+            timeStr: timeStr,
+            message: message,
+            seatId: 'conductor',
+            type: type,
+            isConductor: true
+        };
+
+        // Add to local display immediately
+        addLogToDisplay(logEntry);
+
+        // Queue for Firebase
+        conductorLogQueue.push(logEntry);
+
+        // Flush if queue is getting large
+        if (conductorLogQueue.length >= MAX_CONDUCTOR_LOG_QUEUE) {
+            flushConductorLogs();
+        }
+    }
+
+    function flushConductorLogs() {
+        if (conductorLogQueue.length === 0) return;
+
+        const logsToSend = [...conductorLogQueue];
+        conductorLogQueue = [];
+
+        const batch = {};
+        logsToSend.forEach((logEntry, index) => {
+            batch[`${logEntry.timestamp}_${index}`] = logEntry;
+        });
+
+        db.ref(`device_logs/conductor`).update(batch).catch(e => {
+            console.error("Failed to send conductor logs:", e);
+            conductorLogQueue = [...logsToSend, ...conductorLogQueue];
+            if (conductorLogQueue.length > MAX_CONDUCTOR_LOG_QUEUE) {
+                conductorLogQueue = conductorLogQueue.slice(-MAX_CONDUCTOR_LOG_QUEUE);
+            }
+        });
+    }
+
+    // --- LOG VIEWER FUNCTIONS ---
+    function addLogToDisplay(logEntry) {
+        // Apply filters
+        if (logFilterText && !logEntry.message.toLowerCase().includes(logFilterText.toLowerCase())) {
+            return;
+        }
+        if (logFilterDevice && logEntry.seatId !== logFilterDevice) {
+            return;
         }
 
-        // Check every 12.1 seconds
+        allLogs.push(logEntry);
+
+        // Keep last 500 logs
+        if (allLogs.length > 500) {
+            allLogs = allLogs.slice(-500);
+        }
+
+        updateLogDisplay();
+    }
+
+    function updateLogDisplay() {
+        const container = document.getElementById('log-entries');
+        if (!container) return;
+
+        // Apply filters to displayed logs
+        let filteredLogs = allLogs.filter(log => {
+            if (logFilterText && !log.message.toLowerCase().includes(logFilterText.toLowerCase())) {
+                return false;
+            }
+            if (logFilterDevice && log.seatId !== logFilterDevice) {
+                return false;
+            }
+            return true;
+        });
+
+        // Take last 200 for display
+        filteredLogs = filteredLogs.slice(-200);
+
+        if (filteredLogs.length === 0) {
+            container.innerHTML = '<div class="log-entry log-entry-info">[System] No logs match filter...</div>';
+            return;
+        }
+
+        let html = '';
+        filteredLogs.forEach(log => {
+            let typeClass = 'log-entry-info';
+            if (log.type === 'match') typeClass = 'log-entry-match';
+            else if (log.type === 'break') typeClass = 'log-entry-break';
+            else if (log.type === 'unmatched') typeClass = 'log-entry-unmatched';
+            else if (log.type === 'error') typeClass = 'log-entry-error';
+
+            const seatBadge = `<span class="log-seat-badge">${log.seatId}</span>`;
+            const timestamp = `<span class="log-timestamp">[${log.timeStr}]</span>`;
+
+            html += `<div class="log-entry ${typeClass}">${timestamp} ${seatBadge} ${log.message}</div>`;
+        });
+
+        container.innerHTML = html;
+        container.scrollTop = container.scrollHeight;
+    }
+
+    function refreshLogs() {
+        // Clear and reload from Firebase
+        allLogs = [];
+        updateLogDisplay();
+
+        // Fetch recent logs from all devices
+        db.ref('device_logs').once('value', snap => {
+            const allDeviceLogs = snap.val();
+            if (!allDeviceLogs) return;
+
+            Object.entries(allDeviceLogs).forEach(([deviceId, logs]) => {
+                Object.entries(logs).forEach(([key, logEntry]) => {
+                    if (logEntry && logEntry.message) {
+                        addLogToDisplay({
+                            ...logEntry,
+                            seatId: deviceId
+                        });
+                    }
+                });
+            });
+
+            conductorLog(`Log viewer refreshed: ${allLogs.length} logs loaded`, 'info');
+        });
+    }
+
+    function clearAllLogs() {
+        if (confirm("⚠️ Delete ALL device logs from Firebase? This cannot be undone.")) {
+            db.ref('device_logs').remove().then(() => {
+                allLogs = [];
+                updateLogDisplay();
+                conductorLog("🗑️ All device logs cleared", 'info');
+            }).catch(e => {
+                conductorLog(`❌ Failed to clear logs: ${e.message}`, 'error');
+            });
+        }
+    }
+
+    function initLogViewer() {
+        // Set up filter listeners
+        const filterText = document.getElementById('log-filter-text');
+        const filterDevice = document.getElementById('log-filter-device');
+
+        if (filterText) {
+            filterText.addEventListener('input', (e) => {
+                logFilterText = e.target.value;
+                updateLogDisplay();
+            });
+        }
+
+        if (filterDevice) {
+            filterDevice.addEventListener('change', (e) => {
+                logFilterDevice = e.target.value;
+                updateLogDisplay();
+            });
+        }
+
+        // Set up button listeners
+        document.getElementById('refresh-logs-btn').onclick = refreshLogs;
+        document.getElementById('clear-logs-btn').onclick = clearAllLogs;
+
+        // Listen for real-time log updates
+        db.ref('device_logs').on('child_added', (snap) => {
+            const deviceId = snap.key;
+            const logs = snap.val();
+
+            if (logs) {
+                Object.entries(logs).forEach(([key, logEntry]) => {
+                    if (logEntry && logEntry.message) {
+                        // Check if we already have this log (by timestamp)
+                        const exists = allLogs.some(l => l.timestamp === logEntry.timestamp && l.seatId === deviceId);
+                        if (!exists) {
+                            addLogToDisplay({
+                                ...logEntry,
+                                seatId: deviceId
+                            });
+                        }
+                    }
+                });
+            }
+        });
+
+        // Update device filter dropdown when devices appear
+        db.ref('devices').on('value', snap => {
+            const devices = snap.val() || {};
+            const deviceSelect = document.getElementById('log-filter-device');
+            if (!deviceSelect) return;
+
+            const currentValue = deviceSelect.value;
+            const options = ['', 'conductor'];
+
+            Object.keys(devices).forEach(deviceId => {
+                if (!deviceId.startsWith('PILLAR_')) {
+                    options.push(deviceId);
+                }
+            });
+
+            // Also add pillars
+            Object.keys(devices).forEach(deviceId => {
+                if (deviceId.startsWith('PILLAR_') && !options.includes(deviceId)) {
+                    options.push(deviceId);
+                }
+            });
+
+            options.sort();
+
+            // Only update if changed
+            if (options.length !== deviceSelect.options.length) {
+                const selected = deviceSelect.value;
+                deviceSelect.innerHTML = options.map(opt =>
+                    `<option value="${opt}" ${opt === selected ? 'selected' : ''}>${opt === '' ? 'All Devices' : opt}</option>`
+                ).join('');
+            }
+        });
+
+        // Start conductor log flusher
+        if (conductorLogFlushTimer) clearInterval(conductorLogFlushTimer);
+        conductorLogFlushTimer = setInterval(flushConductorLogs, CONDUCTOR_LOG_FLUSH_INTERVAL_MS);
+
+        // Log conductor startup
+        conductorLog("🚀 Conductor started", 'info');
+    }
+
+    // --- HEARTBEAT MONITORING ---
+    function startHeartbeatMonitoring() {
+        if (heartbeatChecker) clearInterval(heartbeatChecker);
         heartbeatChecker = setInterval(() => {
             checkDeviceHeartbeats();
         }, 12100);
-
-        console.log(`💓 Heartbeat monitoring started (timeout: ${HEARTBEAT_TIMEOUT_MS}ms)`);
+        conductorLog(`💓 Heartbeat monitoring started (timeout: ${HEARTBEAT_TIMEOUT_MS}ms)`, 'info');
     }
 
     function stopHeartbeatMonitoring() {
         if (heartbeatChecker) {
             clearInterval(heartbeatChecker);
             heartbeatChecker = null;
-            console.log("💓 Heartbeat monitoring stopped");
+            conductorLog("💓 Heartbeat monitoring stopped", 'info');
         }
     }
 
@@ -260,8 +619,6 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         Object.keys(deviceData).forEach(deviceId => {
             const device = deviceData[deviceId];
             if (!device) return;
-
-            // Skip pillars - they might have different heartbeat expectations
             if (deviceId.startsWith('PILLAR_')) return;
 
             const lastSeen = device.lastSeen;
@@ -269,25 +626,16 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
 
             const timeSinceLastSeen = now - lastSeen;
 
-            // Check if device has missed too many heartbeats
             if (timeSinceLastSeen > HEARTBEAT_TIMEOUT_MS) {
-                // Only mark as dead if it was previously considered alive
                 if (device.status !== 'DEAD' && device.status !== 'OFFLINE') {
-                    console.log(`💔 Device ${deviceId} marked DEAD (last seen ${(timeSinceLastSeen/1000).toFixed(1)}s ago)`);
-
-                    // Update local data
+                    conductorLog(`💔 Device ${deviceId} marked DEAD (last seen ${(timeSinceLastSeen/1000).toFixed(1)}s ago)`, 'break');
                     deviceData[deviceId].status = 'DEAD';
-
-                    // Update Firebase to reflect dead status
                     db.ref(`devices/${deviceId}/status`).set('DEAD');
-
                     anyChanges = true;
                 }
             } else {
-                // Device is alive - ensure status reflects that (unless it was explicitly DEAD)
-                // This handles devices that come back online
                 if (device.status === 'DEAD' || device.status === 'OFFLINE') {
-                    console.log(`💚 Device ${deviceId} returned to life`);
+                    conductorLog(`💚 Device ${deviceId} returned to life`, 'match');
                     deviceData[deviceId].status = 'ACTIVE';
                     db.ref(`devices/${deviceId}/status`).set('ACTIVE');
                     anyChanges = true;
@@ -302,7 +650,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         }
     }
 
-    // --- LOAD CONFIGURATIONS FROM FIREBASE (uploaded by admin.html) ---
+    // --- LOAD CONFIGURATIONS ---
     async function loadSeatConfig() {
         try {
             const configSnap = await db.ref('seat_config').once('value');
@@ -310,15 +658,15 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
 
             if (configData && configData.seats) {
                 seats = configData.seats;
-                console.log(`📋 Loaded ${seats.length} seats from Firebase`);
+                conductorLog(`📋 Loaded ${seats.length} seats from Firebase`, 'info');
                 document.getElementById('device-count-value').innerText = Object.keys(deviceData).length;
                 resizeCanvas();
                 renderMap();
             } else {
-                console.log("No seat configuration found in Firebase");
+                conductorLog("No seat configuration found in Firebase", 'info');
             }
         } catch (e) {
-            console.log("Error loading seat config: " + e.message);
+            conductorLog(`Error loading seat config: ${e.message}`, 'error');
         }
     }
 
@@ -328,54 +676,56 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             const configData = configSnap.val();
 
             if (configData && configData.piano_notes) {
-                // Load piccolo URL from tuning_mode.json metadata
+                noteTimings = configData.piano_notes.map((note, index) => ({
+                    index: index,
+                    startMs: note.ms_offset,
+                    durationMs: note.duration_ms || 500,
+                    measure: note.measure,
+                    id: note.id,
+                    pitch: note.pitch
+                }));
+
                 if (configData.assets && configData.assets.piccolo) {
                     PICCOLO_URL = configData.assets.piccolo;
                 } else if (configData.metadata && configData.metadata.source_audio_url) {
                     PICCOLO_URL = configData.metadata.source_audio_url;
                 }
 
-                // Load test pulse URL if present
                 if (configData.assets && configData.assets.test_pulse) {
                     TEST_PULSE_URL = configData.assets.test_pulse;
                 } else if (configData.metadata && configData.metadata.test_pulse_url) {
                     TEST_PULSE_URL = configData.metadata.test_pulse_url;
                 }
 
-                console.log(`Loaded tuning config with ${configData.piano_notes.length} notes`);
+                conductorLog(`Loaded tuning config with ${noteTimings.length} notes`, 'info');
                 if (PICCOLO_URL) {
-                    console.log(`Piccolo URL: ${PICCOLO_URL.split('/').pop()}`);
+                    conductorLog(`Piccolo URL: ${PICCOLO_URL.split('/').pop()}`, 'info');
                 }
             } else {
-                console.log("No tuning configuration found in Firebase");
+                conductorLog("No tuning configuration found in Firebase", 'info');
             }
         } catch (e) {
-            console.log("Error loading tuning config: " + e.message);
+            conductorLog(`Error loading tuning config: ${e.message}`, 'error');
         }
     }
 
     async function loadMovements() {
         try {
-            // Load the show manifest which contains the full timeline with cues
             const showSnap = await db.ref('show').once('value');
             const showData = showSnap.val();
 
             if (showData && showData.movements) {
                 movements = showData.movements;
-                console.log(`📋 Loaded ${movements.length} movements from Firebase`);
-
-                // Render movement buttons
+                conductorLog(`📋 Loaded ${movements.length} movements from Firebase`, 'info');
                 renderMovementButtons();
-
-                // Auto-select first movement if available
                 if (movements.length > 0) {
                     await selectMovement(0);
                 }
             } else {
-                console.log("No movements found in show data");
+                conductorLog("No movements found in show data", 'info');
             }
         } catch (e) {
-            console.log("Error loading movements: " + e.message);
+            conductorLog(`Error loading movements: ${e.message}`, 'error');
         }
     }
 
@@ -399,22 +749,18 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         const movement = movements[index];
         if (!movement) return;
 
-        // Update UI buttons
         document.querySelectorAll('.movement-btn').forEach((btn, i) => {
             btn.classList.toggle('active', i === index);
         });
 
         currentMovement = movement;
-
-        // Update GO button with buffer time
         document.getElementById('go-button').innerText = `🚀 GO (in ${movement.buffer_s}s)`;
 
-        // Extract pillar URLs from the first cue's assets
         PILLAR_URLS = {};
         const firstCue = movement.cues?.[0];
         (firstCue?.assets || []).forEach(asset => {
             if (asset.type === 'pillar') {
-                const pos = asset.id.replace('PILLAR_', ''); // FL, FR, BL, BR
+                const pos = asset.id.replace('PILLAR_', '');
                 PILLAR_URLS[pos] = asset.audio_url;
             }
         });
@@ -427,18 +773,17 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         document.getElementById('current-movement-name').innerText = movement.movement_name;
         document.getElementById('go-button').disabled = false;
 
-        console.log(`Selected: ${movement.movement_name} | ${pillarCount} pillars, ${cueCount} cues, buffer: ${movement.buffer_s}s`);
+        conductorLog(`Selected: ${movement.movement_name} | ${pillarCount} pillars, ${cueCount} cues, buffer: ${movement.buffer_s}s`, 'info');
     }
 
-    // Function to load default pillar URLs for tuning mode
     function loadDefaultPillarUrls() {
         PILLAR_URLS = { ...DEFAULT_PILLAR_URLS };
         const pillarCount = Object.keys(PILLAR_URLS).length;
         document.getElementById('pillar-count').innerText = pillarCount;
-        console.log(`Loaded ${pillarCount} default pillar URLs for tuning`);
+        conductorLog(`Loaded ${pillarCount} default pillar URLs for tuning`, 'info');
     }
 
-    // --- 1. SEAT MAP GUI ---
+    // --- SEAT MAP GUI ---
     const canvas = document.getElementById('seat-map-canvas');
     const ctx = canvas.getContext('2d');
 
@@ -451,10 +796,8 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
 
     function renderMap() {
         if (!ctx || seats.length === 0) return;
-
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        // Find min/max for scaling
         const xValues = seats.map(s => s.x);
         const yValues = seats.map(s => s.y);
         const minX = Math.min(...xValues) - 1;
@@ -469,7 +812,6 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         const offsetX = (canvas.width - (maxX - minX) * scale) / 2 - minX * scale;
         const offsetY = (canvas.height - (maxY - minY) * scale) / 2 - minY * scale;
 
-        // Draw Stage Area (front of house)
         ctx.strokeStyle = '#333';
         ctx.lineWidth = 2;
         ctx.strokeRect(minX * scale + offsetX, minY * scale + offsetY,
@@ -481,38 +823,33 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         ctx.font = '10px Arial';
         ctx.fillText('STAGE', minX * scale + offsetX + 10, minY * scale + offsetY + 20);
 
-        // Draw each seat
         seats.forEach(seat => {
             const screenX = seat.x * scale + offsetX;
             const screenY = seat.y * scale + offsetY;
-
-            // Skip if outside visible area
             if (screenX < 0 || screenX > canvas.width || screenY < 0 || screenY > canvas.height) return;
 
             const deviceInfo = deviceData[seat.id];
             const status = deviceInfo?.status || 'OFFLINE';
             const isPillar = seat.id.startsWith('PILLAR_');
 
-            // Determine color based on status
             if (isPillar) {
-                ctx.fillStyle = '#8844cc'; // Purple for pillars
+                ctx.fillStyle = '#8844cc';
             } else if (status === 'HAPPY') {
                 ctx.fillStyle = '#00ffcc';
             } else if (status === 'CALIBRATING' || status === 'SYNCING') {
                 ctx.fillStyle = '#ffcc00';
             } else if (status === 'DEAD' || (deviceInfo && deviceInfo.lastSeen && (Date.now() + serverOffset - deviceInfo.lastSeen > HEARTBEAT_TIMEOUT_MS))) {
-                ctx.fillStyle = '#ff4444'; // Dead device
+                ctx.fillStyle = '#ff4444';
             } else if (status === 'ACTIVE') {
-                ctx.fillStyle = '#00ffcc'; // Active but not calibrated
+                ctx.fillStyle = '#00ffcc';
             } else {
-                ctx.fillStyle = '#333'; // Offline
+                ctx.fillStyle = '#333';
             }
 
             ctx.beginPath();
             ctx.arc(screenX, screenY, isPillar ? 8 : 5, 0, Math.PI * 2);
             ctx.fill();
 
-            // Draw seat label for first few rows
             if (seat.y < 10) {
                 ctx.fillStyle = '#888';
                 ctx.font = '8px Arial';
@@ -521,7 +858,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         });
     }
 
-    // --- 2. PERFORMANCE REGISTRY & STATUS MONITORING ---
+    // --- PERFORMANCE REGISTRY & STATUS MONITORING ---
     function initListeners() {
         db.ref('devices').on('value', snap => {
             deviceData = snap.val() || {};
@@ -530,12 +867,9 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             updatePerformanceRegistry();
         });
 
-        // Listen to measurement summaries to update device delays
         db.ref('measurements/summary').on('value', snap => {
             const summaries = snap.val() || {};
             deviceDelays = {};
-
-            // Track total measurements and devices
             totalMeasurements = 0;
             devicesWithMeasurements.clear();
 
@@ -547,11 +881,8 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
                 }
             });
 
-            // Update UI
             document.getElementById('total-samples').innerText = totalMeasurements;
             document.getElementById('devices-with-measurements').innerText = devicesWithMeasurements.size;
-
-            // Update performance registry with new delays
             updatePerformanceRegistry();
         });
 
@@ -560,6 +891,16 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         setInterval(() => {
             if (isTuningActive) {
                 updateCalibrationStats();
+
+                // Update song progress during tuning
+                if (tuningSchedule && tuningSchedule.totalNotes && noteTimings && noteTimings.length > 0) {
+                    const lastNote = noteTimings[noteTimings.length - 1];
+                    const totalDurationMs = lastNote.startMs + (lastNote.durationMs || 500);
+                    const now = Date.now() + serverOffset;
+                    const songPosition = Math.max(0, now - tuningStartTime);
+                    const progress = Math.min(100, (songPosition / totalDurationMs) * 100);
+                    document.getElementById('song-progress').innerText = Math.round(progress) + '%';
+                }
             }
         }, 2000);
     }
@@ -593,7 +934,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
 
     function updatePerformanceRegistry() {
         const registry = document.getElementById('performance-registry');
-        registry.innerHTML = '<div class="perf-row" style="font-weight:bold"><span>ID</span><span>SPEAKER DELAY</span><span>STATUS</span></div>';
+        registry.innerHTML = '<div class="perf-row" style="font-weight:bold"><span>ID</span><span>MIC DELAY</span><span>SPEAKER DELAY</span><span>STATUS</span></div>';
 
         Object.keys(deviceData).slice(0, 20).forEach(id => {
             const dev = deviceData[id];
@@ -604,32 +945,28 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             if (lastSeen && lastSeen > HEARTBEAT_TIMEOUT_MS) row.className += ' critical';
             else if (dev.performance?.lowPerf) row.className += ' warning';
 
-            // Get speaker delay from summary
-            const delay = deviceDelays[id] ? `${deviceDelays[id].toFixed(0)}ms` : '--';
+            const micDelay = dev.calibration?.micDelayMs ? `${dev.calibration.micDelayMs}ms` : '--';
+            const speakerDelay = deviceDelays[id] ? `${deviceDelays[id].toFixed(0)}ms` : '--';
 
             row.innerHTML = `
                 <span>${id.substring(0, 8)}...</span>
-                <span>${delay}</span>
+                <span>${micDelay}</span>
+                <span>${speakerDelay}</span>
                 <span>${dev.status || 'IDLE'}</span>
             `;
             registry.appendChild(row);
         });
     }
 
-    // --- 3. DYNAMIC TUNING ENGINE (Simplified - No Conductor Listening) ---
+    // --- DYNAMIC TUNING ENGINE ---
     async function refreshActiveDevices() {
         const snapshot = await db.ref('devices').once('value');
         const devices = snapshot.val() || {};
 
         activeDevices = [];
-
-        // Get server time offset
-        const offsetSnap = await db.ref('.info/serverTimeOffset').once('value');
-        const serverOffset = offsetSnap.val() || 0;
         const now = Date.now() + serverOffset;
 
         Object.entries(devices).forEach(([id, data]) => {
-            // Consider devices with recent heartbeats as active
             if (data.lastSeen && (Math.abs(now - data.lastSeen) < HEARTBEAT_TIMEOUT_MS)) {
                 activeDevices.push({
                     id: id,
@@ -643,6 +980,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         });
 
         document.getElementById('device-count-value').innerText = activeDevices.length;
+        conductorLog(`🔄 Refreshed devices: ${activeDevices.length} active`, 'info');
         return activeDevices;
     }
 
@@ -696,20 +1034,19 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
     }
 
     async function startPillars(startTime) {
-        // Check if we have pillar URLs, if not try to load defaults
         if (Object.keys(PILLAR_URLS).length === 0) {
-            console.log("No pillar URLs loaded - attempting to load defaults");
+            conductorLog("No pillar URLs loaded - attempting to load defaults", 'info');
             loadDefaultPillarUrls();
-
             if (Object.keys(PILLAR_URLS).length === 0) {
-                console.log("ERROR: No pillar URLs available - skipping pillar playback");
+                conductorLog("ERROR: No pillar URLs available - skipping pillar playback", 'error');
                 return;
             }
         }
 
         const pillarStartTime = startTime - 1000;
+        const pillarUrls = PILLAR_URLS;
 
-        for (const [position, url] of Object.entries(PILLAR_URLS)) {
+        for (const [position, url] of Object.entries(pillarUrls)) {
             await db.ref('show/currentCue').set({
                 type: "AUDIO",
                 file: url,
@@ -728,15 +1065,15 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             });
         }
 
-        console.log(`Started ${Object.keys(PILLAR_URLS).length} pillars`);
+        conductorLog(`Started ${Object.keys(pillarUrls).length} pillars`, 'info');
     }
 
     async function startTuningMovement() {
-        // Load note timings from tuning_mode
         const configSnap = await db.ref('tuning_mode').once('value');
         const configData = configSnap.val();
 
         if (!configData || !configData.piano_notes) {
+            conductorLog("No tuning configuration found. Please upload via admin.html", 'error');
             alert("No tuning configuration found. Please upload via admin.html");
             return;
         }
@@ -751,6 +1088,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         }));
 
         if (!PICCOLO_URL) {
+            conductorLog("No piccolo URL configured in tuning_mode.json", 'error');
             alert("No piccolo URL configured in tuning_mode.json");
             return;
         }
@@ -758,6 +1096,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         await refreshActiveDevices();
 
         if (activeDevices.length === 0) {
+            conductorLog("No active devices found!", 'error');
             alert("No active devices found!");
             return;
         }
@@ -765,6 +1104,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         const deviceOrder = createSpiralPath(activeDevices);
 
         if (deviceOrder.length === 0) {
+            conductorLog("No active patron devices found for piccolo path", 'error');
             alert("No active patron devices found for piccolo path");
             return;
         }
@@ -772,15 +1112,12 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         tuningSchedule = distributeNotes(deviceOrder);
         tuningStartTime = Date.now() + 3000;
 
-        // Ensure we have pillar URLs before starting
         if (Object.keys(PILLAR_URLS).length === 0) {
-            console.log("No pillar URLs from movement, loading defaults");
+            conductorLog("No pillar URLs from movement, loading defaults", 'info');
             loadDefaultPillarUrls();
         }
 
         await startPillars(tuningStartTime);
-
-        // No ramp strategy calculation - devices handle their own calibration
 
         await db.ref('tuning/current').set({
             status: 'ACTIVE',
@@ -798,10 +1135,8 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
                 y: d.y,
                 isPillar: d.isPillar
             }))
-            // No rampStrategy - devices will self-calibrate via neighbors
         });
 
-        // Include startTime property in the tuning cue
         await db.ref('show/currentCue').set({
             type: "TUNING_MOVEMENT",
             file: PICCOLO_URL,
@@ -810,7 +1145,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
 
         isTuningActive = true;
         document.getElementById('tuning-progress').style.display = 'block';
-        console.log(`🎯 Tuning started: ${deviceOrder.length} devices, ${noteTimings.length} notes`);
+        conductorLog(`🎯 Tuning started: ${deviceOrder.length} devices, ${noteTimings.length} notes`, 'match');
         renderMap();
     }
 
@@ -828,28 +1163,28 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         document.getElementById('tuning-progress').style.display = 'none';
         document.getElementById('song-progress').innerText = '0%';
 
-        console.log("⏹️ Tuning stopped");
+        conductorLog("⏹️ Tuning stopped", 'info');
     }
 
     // --- UI BINDINGS ---
     document.getElementById('refresh-devices-btn').onclick = async () => {
         await refreshActiveDevices();
         renderMap();
+        conductorLog("Device list refreshed", 'info');
     };
     document.getElementById('start-tuning-btn').onclick = startTuningMovement;
     document.getElementById('stop-tuning-btn').onclick = stopTuning;
     document.getElementById('load-default-pillars-btn').onclick = () => {
         loadDefaultPillarUrls();
-        console.log("Default pillar URLs loaded");
+        conductorLog("Default pillar URLs loaded", 'info');
     };
     document.getElementById('kill-all-btn').onclick = () => {
         if(confirm("Refresh all patron devices?")) {
             db.ref('show/currentCue').set({ action: 'KILL', triggerTime: Date.now() });
-            console.log("COMMAND: Global Kill Signal sent.");
+            conductorLog("COMMAND: Global Kill Signal sent.", 'info');
         }
     };
 
-    // GO button
     document.getElementById('go-button').onclick = async () => {
         if (!currentMovement) {
             alert("No movement selected");
@@ -865,13 +1200,12 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             movement:  currentMovement.movement_name,
             startTime: startTime,
             bufferMs:  bufferMs,
-            cues:      currentMovement.cues   // the array from visual_timeline.json, verbatim
+            cues:      currentMovement.cues
         });
 
-        console.log(`🚀 GO: "${currentMovement.movement_name}" at ${startTimeStr} (buffer: ${bufferMs/1000}s)`);
+        conductorLog(`🚀 GO: "${currentMovement.movement_name}" at ${startTimeStr} (buffer: ${bufferMs/1000}s)`, 'match');
     };
 
-    // Click on seat map to test individual seat
     canvas.addEventListener('click', (e) => {
         const rect = canvas.getBoundingClientRect();
         const mouseX = e.clientX - rect.left;
@@ -906,7 +1240,6 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         });
 
         if (closestSeat && minDist < 20) {
-            // Send seat test cue to the device
             const pulseTime = Date.now() + serverOffset + 1000;
             db.ref('show/currentCue').set({
                 type: "AUDIO",
@@ -921,35 +1254,37 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
                     seatId: closestSeat.id
                 }
             });
-            console.log(`🔊 Seat test sent to ${closestSeat.id}`);
+            conductorLog(`🔊 Seat test sent to ${closestSeat.id}`, 'info');
         }
     });
 
-    // Initialize everything - load all configs from Firebase
+    // Initialize everything
     window.onload = async () => {
-        // Load all configurations uploaded by admin.html
         await loadSeatConfig();
         await loadTuningConfig();
         await loadMovements();
 
         initListeners();
-
-        // Start heartbeat monitoring
         startHeartbeatMonitoring();
+        initLogViewer();
 
-        // Connection status
         db.ref('.info/connected').on('value', snap => {
             const el = document.getElementById('connection-status');
             if (snap.val() === true) {
                 el.innerHTML = '<span class="status-dot status-active"></span>Firebase Connected';
+                conductorLog("Firebase connected", 'info');
             } else {
                 el.innerHTML = '<span class="status-dot status-off"></span>Firebase Disconnected';
+                conductorLog("Firebase disconnected", 'error');
             }
         });
     };
 
     window.onresize = resizeCanvas;
-
+    window.addEventListener('beforeunload', () => {
+        flushConductorLogs();
+        stopHeartbeatMonitoring();
+    });
 </script>
 </body>
 </html>
