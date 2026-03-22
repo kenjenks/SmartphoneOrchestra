@@ -351,8 +351,15 @@ devicedist.html: Feature List
 
     // Pillar reference frequency range (computed from tuning data)
     let pillarRefMinFreq = 262;   // Will be updated from tuning data
-    let pillarRefMaxFreq = 500;   // Will be updated from tuning data
     let pillarRefBinIndices = { start: 0, end: 0 };
+    let pillarRefMaxFreq = 494;   // Will be updated from tuning data
+
+    // Pillar reference baseline (for processPillarReferenceDetection)
+    let pillarRefBaseline = 0;
+    let pillarRefBaselineSamples = [];
+
+    // Phase 1 end time (computed from tuning data)
+    let phase1EndMs = 20571.4;    // Will be updated from tuning data
 
     // --- AUDIO AND MICROPHONE STATE ---
     let audioCtx = null;
@@ -574,8 +581,7 @@ function flushLogs() {
 
 function log(message, type = 'info') {
     const serverTimestamp = Date.now() + (serverOffset || 0);
-    // Use ISO format for consistent timezone-independent logging
-    const timeStr = new Date(serverTimestamp).toISOString().substr(11, 12); // "HH:MM:SS.mmm"
+    const timeStr = new Date(serverTimestamp).toISOString().substr(11, 12);
 
     console.log(`[${timeStr}] ${message}`);
 
@@ -757,7 +763,7 @@ async function setupMicrophone() {
         } else {
             // Fallback if not computed yet
             const fallbackMin = 262;
-            const fallbackMax = 500;
+            const fallbackMax = 494;
             pillarRefBinIndices.start = Math.floor(fallbackMin / nyquist * (FFT_SIZE / 2));
             pillarRefBinIndices.end = Math.ceil(fallbackMax / nyquist * (FFT_SIZE / 2));
             log(`⚠️ Using fallback pillar reference bins: ${pillarRefBinIndices.start}-${pillarRefBinIndices.end} (${fallbackMin}-${fallbackMax}Hz)`);
@@ -772,7 +778,7 @@ async function setupMicrophone() {
 
         log(`🎤 Microphone active (${allListeningTargets.length} listening targets)`);
         log(`   Piccolo band: ${PICCOLO_MIN_FREQ}-${PICCOLO_MAX_FREQ}Hz (bins ${binIndices.start}-${binIndices.end})`);
-        log(`   Pillar reference band: ${pillarRefMinFreq?.toFixed(0) || 262}-${pillarRefMaxFreq?.toFixed(0) || 500}Hz (bins ${pillarRefBinIndices.start}-${pillarRefBinIndices.end})`);
+        log(`   Pillar reference band: ${pillarRefMinFreq?.toFixed(0) || 262}-${pillarRefMaxFreq?.toFixed(0) || 494}Hz (bins ${pillarRefBinIndices.start}-${pillarRefBinIndices.end})`);
 
         requestAnimationFrame(detectNeighborNotes);
 
@@ -947,6 +953,14 @@ function midiToFrequency(midi) {
     return 440 * Math.pow(2, (midi - 69) / 12);
 }
 
+// --- UTILITY FUNCTION: Calculate Standard Deviation ---
+function calculateStdDev(values) {
+    if (values.length < 2) return 999;
+    const mean = values.reduce((a, b) => a + b, 0) / values.length;
+    const variance = values.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / values.length;
+    return Math.sqrt(variance);
+}
+
 // --- LOAD PICCOLO ASSET URLS ---
 async function loadPiccoloAssetUrls() {
     try {
@@ -986,18 +1000,22 @@ async function loadPiccoloAssetUrls() {
             }
         }
 
-        // Compute pillar reference frequency range from pillar_notes (after measure 9)
-        if (tuningData.pillar_notes && tuningData.pillar_notes.length > 0) {
-            // Phase 1 windows end at 20571.4ms (end of measure 8)
-            const PHASE1_END_MS = 20571.4;
+        // Compute Phase 1 end time from pillar_cal_windows metadata
+        if (tuningData.metadata && tuningData.metadata.pillar_cal_windows && tuningData.metadata.pillar_cal_windows.length > 0) {
+            const lastWindow = tuningData.metadata.pillar_cal_windows[tuningData.metadata.pillar_cal_windows.length - 1];
+            phase1EndMs = lastWindow.end_ms;
+            log(`📊 Phase 1 ends at: ${phase1EndMs}ms (${phase1EndMs/1000}s)`);
+        }
 
+        // Compute pillar reference frequency range from pillar_notes (after Phase 1)
+        if (tuningData.pillar_notes && tuningData.pillar_notes.length > 0) {
             let minMidi = Infinity;
             let maxMidi = -Infinity;
             let referenceNoteCount = 0;
 
             tuningData.pillar_notes.forEach(note => {
                 // Only consider reference notes (after Phase 1 windows)
-                if (note.ms_offset >= PHASE1_END_MS && note.midi !== undefined) {
+                if (note.ms_offset >= phase1EndMs && note.midi !== undefined) {
                     minMidi = Math.min(minMidi, note.midi);
                     maxMidi = Math.max(maxMidi, note.midi);
                     referenceNoteCount++;
@@ -1014,17 +1032,21 @@ async function loadPiccoloAssetUrls() {
                 pillarRefMinFreq = Math.max(20, pillarRefMinFreq - freqRange * buffer);
                 pillarRefMaxFreq = pillarRefMaxFreq + freqRange * buffer;
 
+                // CRITICAL FIX: Cap at (PICCOLO_MIN_FREQ - 1) to avoid overlap with patron piccolo
+                // This ensures pillar detection band stays strictly below the patron piccolo floor
+                pillarRefMaxFreq = Math.min(pillarRefMaxFreq, PICCOLO_MIN_FREQ - 1);
+
                 log(`🎵 Pillar reference frequency range: ${pillarRefMinFreq.toFixed(0)}Hz - ${pillarRefMaxFreq.toFixed(0)}Hz (from ${referenceNoteCount} notes, MIDI ${minMidi}-${maxMidi})`);
             } else {
-                // Fallback to safe range
+                // Fallback to safe range (C4 to B4 only, below 500Hz)
                 pillarRefMinFreq = 262;  // C4
-                pillarRefMaxFreq = 500;  // Below piccolo
+                pillarRefMaxFreq = 494;  // B4 (below 500Hz)
                 log(`⚠️ No pillar reference notes found, using fallback range: ${pillarRefMinFreq}Hz - ${pillarRefMaxFreq}Hz`);
             }
         } else {
-            // No pillar notes at all - fallback
+            // No pillar notes at all - fallback to safe range
             pillarRefMinFreq = 262;
-            pillarRefMaxFreq = 500;
+            pillarRefMaxFreq = 494;
             log(`⚠️ No pillar_notes found, using fallback reference range: ${pillarRefMinFreq}Hz - ${pillarRefMaxFreq}Hz`);
         }
 
@@ -1419,6 +1441,13 @@ function initTuningListener() {
                 pillarPlaybackStarted = true;
                 return;
             }
+
+            // For patron devices - process schedule but DO NOT set pillarPlaybackStarted
+            // The flag remains false so that show/currentCue listener can call playTuningMovement()
+
+            // Reset pillar reference baseline for this tuning session
+            pillarRefBaseline = 0;
+            pillarRefBaselineSamples = [];
 
             // Enable microphone for neighbor listening (only for patron devices)
             enableMicrophone();
@@ -1854,6 +1883,10 @@ async function startIterativeCalibration() {
     // Clear pillar delay samples for fresh start
     pillarDelays.clear();
 
+    // Reset pillar reference baseline
+    pillarRefBaseline = 0;
+    pillarRefBaselineSamples = [];
+
     if (!reportListenerActive) {
         listenForTimingReports();
         reportListenerActive = true;
@@ -1889,6 +1922,10 @@ async function runCalibrationIteration() {
     // Also clear pillar delay samples for this iteration's fresh measurement
     pillarDelays.clear();
 
+    // Reset pillar reference baseline for this iteration
+    pillarRefBaseline = 0;
+    pillarRefBaselineSamples = [];
+
     log(`   Listening for neighbor reports and pillar references...`);
 
     // Calculate when this iteration's playback will end
@@ -1910,12 +1947,14 @@ function evaluateIteration() {
     let pillarDelayEstimate = null;
     let pillarSampleCount = 0;
     let allPillarEstimates = [];
+    let allPillarSamples = []; // Collect all raw pillar samples for std dev
 
     for (let [pillarId, samples] of pillarDelays.entries()) {
         if (samples.length > 0) {
             const sorted = [...samples].sort((a, b) => a - b);
             const median = sorted[Math.floor(sorted.length / 2)];
             allPillarEstimates.push(median);
+            allPillarSamples.push(...samples);
             pillarSampleCount += samples.length;
             log(`📊 Pillar ${pillarId}: median=${median.toFixed(1)}ms from ${samples.length} samples`);
         }
@@ -1925,6 +1964,13 @@ function evaluateIteration() {
         const sorted = [...allPillarEstimates].sort((a, b) => a - b);
         pillarDelayEstimate = sorted[Math.floor(sorted.length / 2)];
         log(`📊 Combined pillar estimate: ${pillarDelayEstimate.toFixed(1)}ms from ${pillarSampleCount} total samples`);
+    }
+
+    // Calculate pillar-specific standard deviation
+    let pillarStdDev = 999;
+    if (allPillarSamples.length >= 4) {
+        pillarStdDev = calculateStdDev(allPillarSamples);
+        log(`📊 Pillar std dev: ${pillarStdDev.toFixed(1)}ms from ${allPillarSamples.length} samples`);
     }
 
     // Calculate neighbor-based delay estimate
@@ -1990,7 +2036,6 @@ function evaluateIteration() {
     }
 
     // DO NOT push into selfSamples - keep measurement streams separate!
-    // selfSamples should only contain neighbor measurements
 
     document.getElementById('debug-speaker-delay').innerText = calibratedSpeakerDelay.toFixed(1) + 'ms';
     document.getElementById('debug-samples').innerText = selfSamples.length;
@@ -2013,6 +2058,7 @@ function evaluateIteration() {
         iteration: calibrationIteration,
         speakerDelay: calibratedSpeakerDelay,
         stdDev: stdDev,
+        pillarStdDev: pillarStdDev,
         timingError: timingError,
         neighborCount: recentReports.length,
         pillarSamples: pillarSampleCount,
@@ -2022,14 +2068,17 @@ function evaluateIteration() {
         timestamp: now
     });
 
-    log(`📊 Iteration ${calibrationIteration}: delay=${calibratedSpeakerDelay.toFixed(1)}ms, σ=${stdDev.toFixed(1)}ms, error=${timingError.toFixed(1)}ms`);
+    log(`📊 Iteration ${calibrationIteration}: delay=${calibratedSpeakerDelay.toFixed(1)}ms, σ=${stdDev.toFixed(1)}ms, pillarσ=${pillarStdDev.toFixed(1)}ms, error=${timingError.toFixed(1)}ms`);
 
     // Check for convergence
     const isStable = stdDev < HAPPY_STDDEV_THRESHOLD;
     const isSynced = timingError < targetSyncWindowMs;
     const hasPillarData = pillarSampleCount >= 4;
+    const isPillarStable = pillarStdDev < HAPPY_STDDEV_THRESHOLD && hasPillarData;
 
-    if ((isStable && isSynced && calibrationIteration >= 2) || (hasPillarData && isStable && calibrationIteration >= 1)) {
+    // FIX: Use pillar-specific stability check for single-device case
+    if ((isStable && isSynced && calibrationIteration >= 2) ||
+        (isPillarStable && calibrationIteration >= 1)) {
         calibrationComplete = true;
 
         log(`✅✅✅ Calibration CONVERGED after ${calibrationIteration} iterations! Final delay: ${calibratedSpeakerDelay.toFixed(1)}ms ✅✅✅`);
@@ -2039,6 +2088,7 @@ function evaluateIteration() {
             calibrationIterations: calibrationIteration,
             finalDelay: Math.round(calibratedSpeakerDelay),
             finalStdDev: Math.round(stdDev),
+            finalPillarStdDev: Math.round(pillarStdDev),
             pillarSamplesUsed: pillarSampleCount,
             neighborSamplesUsed: selfSamples.length,
             convergedAt: now
@@ -2048,6 +2098,7 @@ function evaluateIteration() {
             speakerDelayMs: Math.round(calibratedSpeakerDelay),
             speakerSamples: selfSamples.length,
             speakerStdDev: Math.round(stdDev),
+            pillarStdDev: Math.round(pillarStdDev),
             pillarSamples: pillarSampleCount,
             iterationsCompleted: calibrationIteration,
             converged: true
@@ -2110,6 +2161,7 @@ function evaluateIteration() {
             speakerDelayMs: Math.round(bestIteration.speakerDelay),
             speakerSamples: bestIteration.neighborSamples,
             speakerStdDev: Math.round(bestIteration.stdDev),
+            pillarStdDev: Math.round(bestIteration.pillarStdDev || 999),
             pillarSamples: bestIteration.pillarSamples,
             iterationsCompleted: calibrationIteration,
             converged: false,
@@ -2202,7 +2254,7 @@ async function startPillarFabric(startTime) {
     const nowWall = Date.now() + serverOffset;
     const scheduledStartTime = startTime;
     const timeUntilStart = scheduledStartTime - nowWall;
-    log(`📊 DIAGNOSTIC: Pillar ${mySeat.id} - scheduled start at ${new Date(scheduledStartTime).toLocaleTimeString()}.${String(scheduledStartTime % 1000).padStart(3, '0')}, in ${timeUntilStart.toFixed(0)}ms`);
+    log(`📊 DIAGNOSTIC: Pillar ${mySeat.id} - scheduled start at ${new Date(scheduledStartTime).toISOString().substr(11, 12)}.${String(scheduledStartTime % 1000).padStart(3, '0')}, in ${timeUntilStart.toFixed(0)}ms`);
 
     const warmUpTime = startTime - WARMUP_ADVANCE_MS;
     const warmUpDelay = warmUpTime - nowWall - (calibratedSpeakerDelay || 0) - (myMicDelayMs || 0);
@@ -2227,7 +2279,7 @@ async function startPillarFabric(startTime) {
     if (warmUpDelay > 0) {
         const warmUpTimeoutId = setTimeout(() => {
             const actualWarmUpTime = Date.now() + serverOffset;
-            log(`🔇 Warm-up pulse for ${mySeat.id} at ${new Date(actualWarmUpTime).toLocaleTimeString()}`);
+            log(`🔇 Warm-up pulse for ${mySeat.id} at ${new Date(actualWarmUpTime).toISOString().substr(11, 12)}`);
             try {
                 const source = audioCtx.createBufferSource();
                 source.buffer = bufferCache[myUrl];
@@ -2245,7 +2297,7 @@ async function startPillarFabric(startTime) {
     if (startDelay > 0) {
         const startTimeoutId = setTimeout(() => {
             const actualStartTime = Date.now() + serverOffset;
-            log(`🏛️ ${mySeat.id} STARTED at ${new Date(actualStartTime).toLocaleTimeString()}`);
+            log(`🏛️ ${mySeat.id} STARTED at ${new Date(actualStartTime).toISOString().substr(11, 12)}`);
             db.ref(`diagnostics/${mySeat.id}/start`).set({ scheduledTime: scheduledStartTime, actualTime: actualStartTime, errorMs: actualStartTime - scheduledStartTime, timestamp: actualStartTime });
             try {
                 const source = audioCtx.createBufferSource();
@@ -2367,31 +2419,23 @@ function processPillarReferenceDetection(now, pillarRefEnergy) {
 
     const songPosition = now - tuningStartTime;
 
-    // Maintain a separate baseline for pillar reference energy
-    if (typeof window.pillarRefBaseline === 'undefined') {
-        window.pillarRefBaseline = 0;
-        window.pillarRefBaselineSamples = [];
-    }
-
     // Update baseline for pillar reference energy (slowly adapting)
-    if (window.pillarRefBaselineSamples.length < 50) {
-        window.pillarRefBaselineSamples.push(pillarRefEnergy);
+    if (pillarRefBaselineSamples.length < 50) {
+        pillarRefBaselineSamples.push(pillarRefEnergy);
     } else {
-        const sorted = [...window.pillarRefBaselineSamples].sort((a, b) => a - b);
-        window.pillarRefBaseline = sorted[Math.floor(sorted.length / 2)];
+        const sorted = [...pillarRefBaselineSamples].sort((a, b) => a - b);
+        pillarRefBaseline = sorted[Math.floor(sorted.length / 2)];
         // Keep a rolling window
-        window.pillarRefBaselineSamples.shift();
-        window.pillarRefBaselineSamples.push(pillarRefEnergy);
+        pillarRefBaselineSamples.shift();
+        pillarRefBaselineSamples.push(pillarRefEnergy);
     }
 
-    const threshold = window.pillarRefBaseline * BASELINE_THRESHOLD_MULTIPLIER;
+    const threshold = pillarRefBaseline * BASELINE_THRESHOLD_MULTIPLIER;
 
-    // Find all pillar notes that should be playing now (reference notes, after measure 9)
+    // Find all pillar notes that should be playing now (reference notes, after Phase 1)
     const candidatePillarNotes = pillarNoteSchedule.filter(note => {
         // Only listen for reference notes AFTER Phase 1 calibration windows
-        // Phase 1 windows end at 20571.4ms (end of measure 8)
-        // Reference notes start at measure 9 (20571.4ms)
-        if (note.ms_offset < 20571.4) return false;
+        if (note.ms_offset < phase1EndMs) return false;
 
         const expectedTime = note.ms_offset;
         const timeDiff = Math.abs(songPosition - expectedTime);
@@ -2906,7 +2950,8 @@ document.getElementById('ready-btn').onclick = async () => {
         startHeartbeat();
     }
     setTimeout(async () => {
-        log("📊 ===== DIAGNOSTIC SUMMARY =====");
+        const serverTimestamp = Date.now() + serverOffset;
+        log(`📊 ===== DIAGNOSTIC SUMMARY (server time: ${new Date(serverTimestamp).toISOString()}) =====`);
         const pillarDetections = await db.ref(`diagnostics/${mySeat.id}/pillar_detections`).once('value');
         if (pillarDetections.exists()) { const detections = pillarDetections.val(); const delays = Object.values(detections).map(d => d.rawDelay).filter(d => d > 0 && d < 200); if (delays.length > 0) log(`📊 Phase 1: ${delays.length} pillar detections, median mic delay: ${calculateMedian(delays).toFixed(1)}ms`); }
         else log(`📊 Phase 1: No pillar detections recorded`);
