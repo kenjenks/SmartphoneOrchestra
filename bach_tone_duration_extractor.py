@@ -400,7 +400,7 @@ class BachToneExtractor:
         """Create the final tuning_mode.json manifest."""
 
         # Build asset URLs
-        flute_full_url = self.urls["flute"]
+        piccolo_full_url = self.urls["piccolo"]
         test_pulse_full_url = self.urls["test_pulse"]
         pillar_full_urls = self.urls["pillars"]
 
@@ -408,7 +408,7 @@ class BachToneExtractor:
             "metadata": {
                 "source_musicxml": os.path.basename(self.piccolo_path),
                 "source_musicxml_pillars": os.path.basename(self.pillars_path),
-                "source_audio_url": flute_full_url,
+                "source_audio_url": piccolo_full_url,
                 "test_pulse_url": test_pulse_full_url,
                 **{f"source_audio_{pos}": url for pos, url in pillar_full_urls.items()},
                 "tempo": self.tempo_bpm,
@@ -429,7 +429,7 @@ class BachToneExtractor:
             },
             "piano_notes": piccolo_timeline,
             "assets": {
-                "flute": flute_full_url,
+                "piccolo": piccolo_full_url,
                 "test_pulse": test_pulse_full_url,
                 "pillars": pillar_full_urls,
             },
