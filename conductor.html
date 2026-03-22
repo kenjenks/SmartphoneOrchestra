@@ -1187,16 +1187,18 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
     }
 
     async function startTuningMovement() {
-        const configSnap = await db.ref('tuning_mode').once('value');
-        const configData = configSnap.val();
+        // Load the full tuning_mode config first
+        const tuningModeSnap = await db.ref('tuning_mode').once('value');
+        const tuningModeData = tuningModeSnap.val();
 
-        if (!configData || !configData.piano_notes) {
+        if (!tuningModeData || !tuningModeData.piano_notes) {
             conductorLog("No tuning configuration found. Please upload via admin.html", 'error');
             alert("No tuning configuration found. Please upload via admin.html");
             return;
         }
 
-        noteTimings = configData.piano_notes.map((note, index) => ({
+        // Extract notes from tuning_mode
+        noteTimings = tuningModeData.piano_notes.map((note, index) => ({
             index: index,
             startMs: note.ms_offset,
             durationMs: note.duration_ms || 500,
@@ -1204,6 +1206,13 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             id: note.id,
             pitch: note.pitch
         }));
+
+        // Get piccolo URL from tuning_mode
+        if (tuningModeData.assets && tuningModeData.assets.piccolo) {
+            PICCOLO_URL = tuningModeData.assets.piccolo;
+        } else if (tuningModeData.metadata && tuningModeData.metadata.source_audio_url) {
+            PICCOLO_URL = tuningModeData.metadata.source_audio_url;
+        }
 
         if (!PICCOLO_URL) {
             conductorLog("No piccolo URL configured in tuning_mode.json", 'error');
@@ -1237,7 +1246,8 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
 
         await startPillars(tuningStartTime);
 
-        await db.ref('tuning/current').set({
+        // Build the tuning/current object with ALL data from tuning_mode.json
+        const tuningCurrentObj = {
             status: 'ACTIVE',
             piccoloUrl: PICCOLO_URL,
             pillars: PILLAR_URLS,
@@ -1253,7 +1263,48 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
                 y: d.y,
                 isPillar: d.isPillar
             }))
-        });
+        };
+
+        // ADD THE PILLAR DATA FROM tuning_mode.json
+        if (tuningModeData.pillar_notes && tuningModeData.pillar_notes.length > 0) {
+            tuningCurrentObj.pillar_notes = tuningModeData.pillar_notes;
+            conductorLog(`📡 Added ${tuningModeData.pillar_notes.length} pillar notes to tuning schedule`, 'info');
+        } else {
+            conductorLog("⚠️ No pillar_notes found in tuning_mode.json", 'warning');
+        }
+
+        // Add pillar calibration windows
+        let windowsAdded = false;
+        if (tuningModeData.metadata && tuningModeData.metadata.pillar_cal_windows) {
+            tuningCurrentObj.metadata = tuningCurrentObj.metadata || {};
+            tuningCurrentObj.metadata.pillar_cal_windows = tuningModeData.metadata.pillar_cal_windows;
+            conductorLog(`📡 Added ${tuningModeData.metadata.pillar_cal_windows.length} pillar calibration windows from metadata`, 'info');
+            windowsAdded = true;
+        }
+
+        // Also check if pillar_cal_windows is at root level (some versions)
+        if (!windowsAdded && tuningModeData.pillar_cal_windows) {
+            tuningCurrentObj.metadata = tuningCurrentObj.metadata || {};
+            tuningCurrentObj.metadata.pillar_cal_windows = tuningModeData.pillar_cal_windows;
+            conductorLog(`📡 Added ${tuningModeData.pillar_cal_windows.length} pillar calibration windows (root)`, 'info');
+            windowsAdded = true;
+        }
+
+        if (!windowsAdded) {
+            conductorLog("⚠️ No pillar_cal_windows found in tuning_mode.json", 'warning');
+        }
+
+        // Also include the original metadata for reference
+        if (tuningModeData.metadata) {
+            tuningCurrentObj.metadata = tuningCurrentObj.metadata || {};
+            tuningCurrentObj.metadata.tempo = tuningModeData.metadata.tempo;
+            tuningCurrentObj.metadata.time_signature = tuningModeData.metadata.time_signature;
+            tuningCurrentObj.metadata.total_notes = tuningModeData.metadata.total_notes;
+            tuningCurrentObj.metadata.total_measures = tuningModeData.metadata.total_measures;
+            tuningCurrentObj.metadata.total_duration_ms = tuningModeData.metadata.total_duration_ms;
+        }
+
+        await db.ref('tuning/current').set(tuningCurrentObj);
 
         await db.ref('show/currentCue').set({
             type: "TUNING_MOVEMENT",
