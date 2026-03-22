@@ -1730,10 +1730,10 @@ async function runCalibrationIteration() {
 
     log(`   Listening for neighbor reports... (using existing tuning playback)`);
 
-    // FIX: Wait until the tuning piece ends OR we have enough samples, not a fixed 35s timer
+    // Always wait for the piece to end before evaluating
     const totalDurationMs = currentTuningSchedule?.totalDurationMs || 182571; // Default from tuning_mode
     const timeUntilPieceEnds = (tuningStartTime + totalDurationMs) - (Date.now() + serverOffset);
-    const evaluationDelay = Math.min(35000, Math.max(5000, timeUntilPieceEnds + 2000));
+    const evaluationDelay = Math.max(5000, timeUntilPieceEnds + 2000);
 
     if (currentIterationTimeout) clearTimeout(currentIterationTimeout);
     currentIterationTimeout = setTimeout(() => evaluateIteration(), evaluationDelay);
