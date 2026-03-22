@@ -1187,6 +1187,10 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
     }
 
     async function startTuningMovement() {
+        // FIX: Clear any stale tuning schedule first to prevent devices from using outdated start times
+        conductorLog("🗑️ Clearing any stale tuning schedule before starting new session", 'info');
+        await db.ref('tuning/current').remove();
+
         // Load the full tuning_mode config first
         const tuningModeSnap = await db.ref('tuning_mode').once('value');
         const tuningModeData = tuningModeSnap.val();
@@ -1237,7 +1241,9 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         }
 
         tuningSchedule = distributeNotes(deviceOrder);
-        tuningStartTime = Date.now() + 3000;
+        // FIX: Use Date.now() + serverOffset for consistent time reference across all devices
+        const nowWall = Date.now() + serverOffset;
+        tuningStartTime = nowWall + 3000;
 
         if (Object.keys(PILLAR_URLS).length === 0) {
             conductorLog("No pillar URLs from movement, loading defaults", 'info');
@@ -1253,10 +1259,10 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             pillars: PILLAR_URLS,
             schedule: tuningSchedule.notes,
             deviceOrder: deviceOrder,
-            startTime: tuningStartTime,
+            startTime: tuningStartTime,  // This is the single reference time for all devices
             totalNotes: tuningSchedule.totalNotes,
             deviceCount: tuningSchedule.deviceCount,
-            generatedAt: Date.now(),
+            generatedAt: Date.now() + serverOffset,
             activeDevices: activeDevices.map(d => ({
                 id: d.id,
                 x: d.x,
@@ -1314,16 +1320,24 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
 
         isTuningActive = true;
         document.getElementById('tuning-progress').style.display = 'block';
-        conductorLog(`🎯 Tuning started: ${deviceOrder.length} devices, ${noteTimings.length} notes`, 'match');
+        conductorLog(`🎯 Tuning started: ${deviceOrder.length} devices, ${noteTimings.length} notes, startTime=${new Date(tuningStartTime).toLocaleTimeString()}`, 'match');
         renderMap();
     }
 
-    async function stopTuning() {
-        await db.ref('show/currentCue').set({
-            action: 'KILL',
-            triggerTime: Date.now()
-        });
+    async function stopTuning(manualStop = true) {
+        if (manualStop) {
+            // Manual stop - send KILL to all devices
+            await db.ref('show/currentCue').set({
+                action: 'KILL',
+                triggerTime: Date.now() + serverOffset
+            });
+            conductorLog("⏹️ Tuning stopped manually", 'info');
+        } else {
+            // Natural completion - just clear the tuning state without KILL
+            conductorLog("🎯 Tuning completed naturally", 'match');
+        }
 
+        // Clear the tuning schedule so devices don't try to use stale data
         await db.ref('tuning/current').remove();
 
         isTuningActive = false;
@@ -1331,8 +1345,6 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
 
         document.getElementById('tuning-progress').style.display = 'none';
         document.getElementById('song-progress').innerText = '0%';
-
-        conductorLog("⏹️ Tuning stopped", 'info');
     }
 
     // --- UI BINDINGS ---
@@ -1349,7 +1361,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
     };
     document.getElementById('kill-all-btn').onclick = () => {
         if(confirm("Refresh all patron devices?")) {
-            db.ref('show/currentCue').set({ action: 'KILL', triggerTime: Date.now() });
+            db.ref('show/currentCue').set({ action: 'KILL', triggerTime: Date.now() + serverOffset });
             conductorLog("COMMAND: Global Kill Signal sent.", 'info');
         }
     };
