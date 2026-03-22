@@ -51,7 +51,7 @@ devicedist.html: Feature List
   allowing overlapping light cues to mix colors mathematically
   (e.g., Red + Blue = Magenta).
 
-- Spatial Light Mapping: Scales screen brightness based on the patron’s
+- Spatial Light Mapping: Scales screen brightness based on the patron's
   proximity to the light's originX/Y, allowing for sweeps and pulses.
 
 4. Two-Phase Distributed Mic/Speaker Calibration
@@ -1104,13 +1104,25 @@ function calculateMedian(values) {
     }
 }
 
-// --- TUNING SCHEDULE HANDLER (UPDATED with iterative calibration and feedback) ---
+// --- TUNING SCHEDULE HANDLER (UPDATED with stale schedule detection) ---
 function initTuningListener() {
     db.ref('tuning/current').on('value', snap => {
         const schedule = snap.val();
+
+        // FIX: Ignore stale schedules (more than 10 seconds in the past)
+        const now = Date.now() + serverOffset;
+        if (schedule && schedule.startTime && (now - schedule.startTime > 10000)) {
+            log(`⚠️ Ignoring stale tuning schedule (started ${((now - schedule.startTime)/1000).toFixed(0)}s ago)`);
+            return;
+        }
+
         if (schedule && schedule.status === 'ACTIVE') {
             calibrationMode = true;
             currentTuningSchedule = schedule;
+
+            // FIX: Use the schedule's startTime as the single reference
+            tuningStartTime = schedule.startTime;
+            log(`🎵 Tuning schedule loaded with startTime: ${new Date(tuningStartTime).toLocaleTimeString()}`);
 
             // RESET ITERATIVE CALIBRATION STATE
             calibrationIteration = 0;
@@ -1124,8 +1136,8 @@ function initTuningListener() {
             processedTimingReports.clear();
             previousIterationReports = [];
 
-            // Start listening for timing reports about this device
-            if (!reportListenerActive) {
+            // Start listening for timing reports about this device (skip for pillars)
+            if (!reportListenerActive && !mySeat.id.startsWith('PILLAR_')) {
                 listenForTimingReports();
                 reportListenerActive = true;
             }
@@ -1134,8 +1146,6 @@ function initTuningListener() {
                 clearTimeout(currentIterationTimeout);
                 currentIterationTimeout = null;
             }
-
-            tuningStartTime = schedule.startTime;
 
             if (schedule.schedule) {
                 noteSchedule = schedule.schedule.map(note => ({
@@ -1176,7 +1186,7 @@ function initTuningListener() {
                 log(`⚠️ No pillar_notes found in tuning schedule - Phase 1 mic calibration will be skipped`);
             }
 
-            // FIXED: Read pillar_cal_windows from metadata
+            // Read pillar_cal_windows from metadata
             if (schedule.metadata && schedule.metadata.pillar_cal_windows) {
                 pillarWindows = schedule.metadata.pillar_cal_windows;
                 log(`🎯 Loaded ${pillarWindows.length} pillar calibration windows from metadata`);
@@ -1241,10 +1251,39 @@ function initTuningListener() {
                 PICCOLO_URL = schedule.piccoloUrl;
             }
 
-            // Enable microphone for neighbor listening
+            // FIX: Skip iterative calibration for pillars - they already know their delays
+            if (mySeat.id.startsWith('PILLAR_')) {
+                log(`🏛️ ${mySeat.id} is a pillar - skipping calibration loop, using known delays`);
+
+                // Set delays from pillar config if available
+                if (pillarConfig[mySeat.id]) {
+                    calibratedSpeakerDelay = pillarConfig[mySeat.id].speakerDelayMs || 0;
+                    myMicDelayMs = pillarConfig[mySeat.id].micDelayMs || 0;
+                    phase1Complete = true;
+                    calibrationComplete = true;
+                    isHappy = true;
+                    log(`✅ Pillar delays set: speaker=${calibratedSpeakerDelay}ms, mic=${myMicDelayMs}ms`);
+
+                    db.ref(`devices/${mySeat.id}/calibration`).update({
+                        speakerDelayMs: Math.round(calibratedSpeakerDelay),
+                        micDelayMs: Math.round(myMicDelayMs),
+                        isPillar: true,
+                        converged: true
+                    });
+                } else {
+                    log(`⚠️ No pillar config found for ${mySeat.id}, using 0ms delays`);
+                    calibratedSpeakerDelay = 0;
+                    myMicDelayMs = 0;
+                    phase1Complete = true;
+                    calibrationComplete = true;
+                }
+                return; // Exit early - no calibration loop for pillars
+            }
+
+            // Enable microphone for neighbor listening (only for patron devices)
             enableMicrophone();
 
-            // Start iterative calibration (will handle Phase 2 with feedback loop)
+            // Start iterative calibration (only for patron devices)
             startIterativeCalibration();
 
         } else {
@@ -1350,7 +1389,8 @@ async function playTuningMovement(cue) {
         return;
     }
 
-    const movementStartTime = cue.startTime;
+    // FIX: Use the schedule's startTime, not cue.startTime which might be different
+    const movementStartTime = tuningStartTime;
 
     if (mySeat.id.startsWith('PILLAR_')) {
         startPillarFabric(movementStartTime);
@@ -1407,7 +1447,8 @@ async function playTuningMovement(cue) {
     log(`   Using mic delay: ${(myMicDelayMs || 0).toFixed(1)}ms, speaker delay: ${(calibratedSpeakerDelay || 0).toFixed(1)}ms`);
 
     blocks.forEach((block, blockIndex) => {
-        const blockStartWall = movementStartTime + block.startMs;
+        // FIX: Use tuningStartTime as the single reference
+        const blockStartWall = tuningStartTime + block.startMs;
 
         let adjustedStartWall = blockStartWall;
 
@@ -1422,7 +1463,7 @@ async function playTuningMovement(cue) {
 
         if (delayMs > 0) {
             const timeoutId = setTimeout(() => {
-                playAudioBlock(PICCOLO_URL, block, movementStartTime, blockIndex);
+                playAudioBlock(PICCOLO_URL, block, tuningStartTime, blockIndex);
                 activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
             }, delayMs);
             activeTimeouts.push(timeoutId);
@@ -1433,7 +1474,7 @@ async function playTuningMovement(cue) {
             }
         } else if (delayMs > -500) {
             log(`⚠️ Block ${blockIndex} is ${Math.round(-delayMs)}ms late, playing immediately`);
-            playAudioBlock(PICCOLO_URL, block, movementStartTime, blockIndex);
+            playAudioBlock(PICCOLO_URL, block, tuningStartTime, blockIndex);
         } else {
             log(`❌ Block ${blockIndex} is too late (${Math.round(-delayMs)}ms), skipping`);
         }
@@ -1442,6 +1483,11 @@ async function playTuningMovement(cue) {
 
 // --- TIMING REPORTS LISTENER (receives neighbor reports about OUR timing) ---
 function listenForTimingReports() {
+    // Skip for pillars - they don't need timing feedback
+    if (mySeat.id.startsWith('PILLAR_')) {
+        return;
+    }
+
     log("👂 Starting to listen for timing reports about this device");
 
     // Listen for any measurement where we are the target
@@ -1681,9 +1727,14 @@ async function runCalibrationIteration() {
 
     log(`   Listening for neighbor reports... (using existing tuning playback)`);
 
+    // FIX: Wait until the tuning piece ends OR we have enough samples, not a fixed 35s timer
+    const totalDurationMs = currentTuningSchedule?.totalDurationMs || 182571; // Default from tuning_mode
+    const timeUntilPieceEnds = (tuningStartTime + totalDurationMs) - (Date.now() + serverOffset);
+    const evaluationDelay = Math.min(35000, Math.max(5000, timeUntilPieceEnds + 2000));
+
     if (currentIterationTimeout) clearTimeout(currentIterationTimeout);
-    currentIterationTimeout = setTimeout(() => evaluateIteration(), 35000);
-    log(`⏱️ Evaluation scheduled in 35s`);
+    currentIterationTimeout = setTimeout(() => evaluateIteration(), evaluationDelay);
+    log(`⏱️ Evaluation scheduled in ${Math.round(evaluationDelay/1000)}s (piece ends in ${Math.round(timeUntilPieceEnds/1000)}s)`);
 }
 
 function evaluateIteration() {
