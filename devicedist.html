@@ -1129,6 +1129,12 @@ function initTuningListener() {
         log(`🎵 Tuning listener triggered at server time: ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
 
         if (!pillarPlaybackStarted && (schedule && schedule.status === 'ACTIVE')) {
+            // Validate startTime is reasonable
+            if (!schedule.startTime || schedule.startTime < now - 60000 || schedule.startTime > now + 60000) {
+                log(`❌ Invalid startTime in schedule: ${schedule.startTime} (now: ${now}) - rejecting schedule`);
+                return;
+            }
+
             calibrationMode = true;
             currentTuningSchedule = schedule;
 
@@ -1311,7 +1317,7 @@ function initTuningListener() {
                 }
 
                 // Start pillar playback
-                if (!pillarPlaybackStarted && PICCOLO_URL) {
+                if (!tuningPlaybackStarted && PICCOLO_URL) {
                     const nowWall = Date.now() + serverOffset;
                     const startDelay = schedule.startTime - nowWall - calibratedSpeakerDelay - myMicDelayMs;
 
@@ -1325,6 +1331,7 @@ function initTuningListener() {
                     } else {
                         log(`❌ Pillar start is too late (${Math.round(-startDelay)}ms), skipping`);
                     }
+                    tuningPlaybackStarted = true;
                 }
 
                 pillarPlaybackStarted = true;
@@ -1336,8 +1343,6 @@ function initTuningListener() {
 
             // Start iterative calibration (only for patron devices)
             startIterativeCalibration();
-
-            pillarPlaybackStarted = true;
             return;
 
         } else {
@@ -1349,9 +1354,6 @@ function initTuningListener() {
                 expectedNoteMap.clear();
                 phase1WindowActive = false;
                 calibrationComplete = false;
-
-                // Reset playback flag when tuning ends
-                pillarPlaybackStarted = false;
 
                 if (reportListenerActive) {
                     reportListenerActive = false;
@@ -1873,6 +1875,17 @@ function evaluateIteration() {
         return;
     }
 
+    // Clamp speaker delay to reasonable range
+    const MIN_SPEAKER_DELAY = -50;
+    const MAX_SPEAKER_DELAY = 200;
+    const originalDelay = finalDelay;
+
+    if (finalDelay < MIN_SPEAKER_DELAY || finalDelay > MAX_SPEAKER_DELAY) {
+        log(`⚠️ Unreasonable speaker delay: ${finalDelay.toFixed(1)}ms, clamping to range [${MIN_SPEAKER_DELAY}, ${MAX_SPEAKER_DELAY}]`);
+        finalDelay = Math.max(MIN_SPEAKER_DELAY, Math.min(MAX_SPEAKER_DELAY, finalDelay));
+        log(`   Clamped: ${originalDelay.toFixed(1)}ms → ${finalDelay.toFixed(1)}ms`);
+    }
+
     // Update calibrated speaker delay with smoothing
     if (calibratedSpeakerDelay === null) {
         calibratedSpeakerDelay = finalDelay;
@@ -2261,11 +2274,12 @@ function processPillarReferenceDetection(now, avgEnergy, dominantFreq, ratioToBa
 
     const songPosition = now - tuningStartTime;
 
-    // Find all pillar notes that should be playing now (one octave lower, indices 17+)
+    // Find all pillar notes that should be playing now
     const candidatePillarNotes = pillarNoteSchedule.filter(note => {
-        // Only listen for lower octave notes (indices >= 17 for PILLAR_FL)
-        // This ensures we're using the reference signal, not the Phase 1 calibration notes
-        if (note.pillar_id === 'PILLAR_FL' && note.index < 17) return false;
+        // FIX: Only listen for reference notes AFTER Phase 1 calibration windows
+        // Phase 1 windows end at 20571.4ms (end of measure 8)
+        // Reference notes start at measure 9 (20571.4ms)
+        if (note.ms_offset < 20571.4) return false;
 
         const expectedTime = note.ms_offset;
         const timeDiff = Math.abs(songPosition - expectedTime);
@@ -2286,8 +2300,9 @@ function processPillarReferenceDetection(now, avgEnergy, dominantFreq, ratioToBa
             const propagationMs = pillarDistanceMap.get(pillarId) || 0;
             const speakerDelayEstimate = rawDelay - (myMicDelayMs || 0) - propagationMs;
 
+            // Sanity check - reject unrealistic values
             if (Math.abs(speakerDelayEstimate) < 500) {
-                log(`🎯 Pillar reference: ${pillarId} note ${note.index} → speaker=${speakerDelayEstimate.toFixed(1)}ms (iter ${calibrationIteration})`);
+                log(`🎯 Pillar reference: ${pillarId} note ${note.index} → raw=${rawDelay.toFixed(1)}ms, prop=${propagationMs.toFixed(1)}ms, speaker=${speakerDelayEstimate.toFixed(1)}ms (iter ${calibrationIteration})`);
 
                 if (!pillarDelays.has(pillarId)) {
                     pillarDelays.set(pillarId, []);
@@ -2295,10 +2310,13 @@ function processPillarReferenceDetection(now, avgEnergy, dominantFreq, ratioToBa
                 pillarDelays.get(pillarId).push(speakerDelayEstimate);
 
                 let samples = pillarDelays.get(pillarId);
+                // Keep last 20 samples per pillar
                 if (samples.length > 20) samples.shift();
                 pillarDelays.set(pillarId, samples);
 
                 processedMeasurements.add(noteKey);
+            } else {
+                log(`⚠️ Pillar reference rejected: speaker delay ${speakerDelayEstimate.toFixed(1)}ms out of range`);
             }
         }
     });
