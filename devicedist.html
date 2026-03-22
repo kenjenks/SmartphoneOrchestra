@@ -559,11 +559,14 @@ function flushLogs() {
 }
 
 function log(message, type = 'info') {
-    console.log(`[${new Date().toLocaleTimeString()}] ${message}`);
+    const serverTimestamp = Date.now() + (serverOffset || 0);
+    const timeStr = new Date(serverTimestamp).toLocaleTimeString();
+
+    console.log(`[${timeStr}] ${message}`);
 
     const logEntry = {
-        timestamp: Date.now() + (serverOffset || 0),
-        timeStr: new Date().toLocaleTimeString(),
+        timestamp: serverTimestamp,
+        timeStr: timeStr,
         message: message,
         seatId: mySeat ? mySeat.id : 'unknown',
         type: type,
@@ -583,7 +586,7 @@ function log(message, type = 'info') {
 
     const logDiv = document.getElementById('log');
     if (logDiv) {
-        logDiv.innerHTML = `<div class="log-entry">[${logEntry.timeStr}] ${message}</div>` + logDiv.innerHTML;
+        logDiv.innerHTML = `<div class="log-entry">[${timeStr}] ${message}</div>` + logDiv.innerHTML;
         if (logDiv.children.length > 100) {
             while (logDiv.children.length > 100) {
                 logDiv.removeChild(logDiv.lastChild);
