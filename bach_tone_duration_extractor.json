@@ -63,13 +63,13 @@
   "_window_start_measures_comment": "Starting measure numbers for each pillar's calibration window (2 measures each, in pillar_order sequence)",
   
   "urls": {
-    "piccolo": "https://static.wixstatic.com/mp3/9178d1_704b40e60fc349c6bb6eb03e054f0a03.mp3",
+    "piccolo": "https://static.wixstatic.com/mp3/9178d1_ea10303dca3c4f3883471ceff5d6649b.mp3",
     "test_pulse": "https://static.wixstatic.com/mp3/9178d1_63e58ac50ec7434eba6785cd3291c227.mp3",
     "pillars": {
-      "FL": "https://static.wixstatic.com/mp3/9178d1_e8108138dfb346baaeb9f82576895522.mp3",
-      "FR": "https://static.wixstatic.com/mp3/9178d1_66dae9e9165842ac9a57f03c1171d2d4.mp3",
-      "BL": "https://static.wixstatic.com/mp3/9178d1_00a16606545245e2a1fe1795ade453fe.mp3",
-      "BR": "https://static.wixstatic.com/mp3/9178d1_91f02965c1564b8f81de165f49c8ec00.mp3"
+      "FL": "https://static.wixstatic.com/mp3/9178d1_d0d2899b9bb8403e8e7ebec28d53060d.mp3",
+      "FR": "https://static.wixstatic.com/mp3/9178d1_f2fb55f02d204f55b8c9e8b711a8a290.mp3",
+      "BL": "https://static.wixstatic.com/mp3/9178d1_dfdab53807c5453fb1009568960e94c6.mp3",
+      "BR": "https://static.wixstatic.com/mp3/9178d1_0f17b2b18ea74f7db54ce3ca3d10c0f6.mp3"
     },
     "_comment": "URLs for audio assets on Wix CDN"
   },
