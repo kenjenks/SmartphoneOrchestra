@@ -1720,8 +1720,9 @@ async function runCalibrationIteration() {
         previousIterationReports = [...incomingTimingErrors];
     }
 
+    // Don't clear incomingTimingErrors - they accumulate across iterations
+    // processedMeasurements should be cleared per iteration to allow re-measurement
     processedMeasurements.clear();
-    incomingTimingErrors = [];
 
     if (calibrationIteration > 1) {
         selfSamples = [];
@@ -1730,8 +1731,8 @@ async function runCalibrationIteration() {
 
     log(`   Listening for neighbor reports... (using existing tuning playback)`);
 
-    // Always wait for the piece to end before evaluating
-    const totalDurationMs = currentTuningSchedule?.totalDurationMs || 182571; // Default from tuning_mode
+    // Always wait for piece to end
+    const totalDurationMs = currentTuningSchedule?.totalDurationMs || 182571;
     const timeUntilPieceEnds = (tuningStartTime + totalDurationMs) - (Date.now() + serverOffset);
     const evaluationDelay = Math.max(5000, timeUntilPieceEnds + 2000);
 
