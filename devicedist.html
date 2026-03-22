@@ -342,12 +342,17 @@ devicedist.html: Feature List
     // GLOBAL STATE VARIABLES AND CONSTANTS
     // ============================================================================
 
-    let tuningPlaybackStarted = false;          // Tracks if playTuningMovement() has been called
     let pillarPlaybackStarted = false;
+    let tuningPlaybackStarted = false;
     let pillarReferenceDetections = new Map();  // Track detections from pillars
     let pillarDelays = new Map();               // Store delay estimates from each pillar
     let pillarDistanceMap = new Map();          // Cache distances to each pillar
     let pillarReferenceWindows = new Map();     // Track active listening windows for pillars
+
+    // Pillar reference frequency range (computed from tuning data)
+    let pillarRefMinFreq = 262;   // Will be updated from tuning data
+    let pillarRefMaxFreq = 500;   // Will be updated from tuning data
+    let pillarRefBinIndices = { start: 0, end: 0 };
 
     // --- AUDIO AND MICROPHONE STATE ---
     let audioCtx = null;
@@ -532,7 +537,9 @@ function initLogging() {
     if (logFlushTimer) clearInterval(logFlushTimer);
     logFlushTimer = setInterval(flushLogs, LOG_FLUSH_INTERVAL_MS);
 
-    log(`🚀 Device ${mySeat.id} started at ${new Date().toISOString()}`);
+    const serverTimestamp = Date.now() + (serverOffset || 0);
+    const timeStr = new Date(serverTimestamp).toISOString().substr(11, 12);
+    log(`🚀 Device ${mySeat.id} started at ${new Date(serverTimestamp).toISOString()}`);
     log(`   Platform: ${navigator.platform}, User Agent: ${navigator.userAgent.substring(0, 100)}`);
     log(`   Location: (${mySeat.x}, ${mySeat.y}) in ${mySeat.section}`);
 
@@ -567,7 +574,8 @@ function flushLogs() {
 
 function log(message, type = 'info') {
     const serverTimestamp = Date.now() + (serverOffset || 0);
-    const timeStr = new Date(serverTimestamp).toLocaleTimeString();
+    // Use ISO format for consistent timezone-independent logging
+    const timeStr = new Date(serverTimestamp).toISOString().substr(11, 12); // "HH:MM:SS.mmm"
 
     console.log(`[${timeStr}] ${message}`);
 
@@ -734,8 +742,26 @@ async function setupMicrophone() {
         sampleRate = audioCtx.sampleRate;
 
         const nyquist = sampleRate / 2;
+
+        // Piccolo band (patron neighbor detection)
         binIndices.start = Math.floor(PICCOLO_MIN_FREQ / nyquist * (FFT_SIZE / 2));
         binIndices.end = Math.ceil(PICCOLO_MAX_FREQ / nyquist * (FFT_SIZE / 2));
+
+        // Pillar reference band (computed from tuning data)
+        if (pillarRefMinFreq && pillarRefMaxFreq) {
+            const startBin = Math.floor(pillarRefMinFreq / nyquist * (FFT_SIZE / 2));
+            const endBin = Math.ceil(pillarRefMaxFreq / nyquist * (FFT_SIZE / 2));
+            pillarRefBinIndices.start = Math.max(0, Math.min(FFT_SIZE / 2, startBin));
+            pillarRefBinIndices.end = Math.max(0, Math.min(FFT_SIZE / 2, endBin));
+            log(`🎵 Pillar reference bins: ${pillarRefBinIndices.start}-${pillarRefBinIndices.end} (${pillarRefMinFreq.toFixed(0)}-${pillarRefMaxFreq.toFixed(0)}Hz)`);
+        } else {
+            // Fallback if not computed yet
+            const fallbackMin = 262;
+            const fallbackMax = 500;
+            pillarRefBinIndices.start = Math.floor(fallbackMin / nyquist * (FFT_SIZE / 2));
+            pillarRefBinIndices.end = Math.ceil(fallbackMax / nyquist * (FFT_SIZE / 2));
+            log(`⚠️ Using fallback pillar reference bins: ${pillarRefBinIndices.start}-${pillarRefBinIndices.end} (${fallbackMin}-${fallbackMax}Hz)`);
+        }
 
         frequencyData = new Uint8Array(analyser.frequencyBinCount);
         timeDomainData = new Float32Array(analyser.fftSize);
@@ -746,6 +772,7 @@ async function setupMicrophone() {
 
         log(`🎤 Microphone active (${allListeningTargets.length} listening targets)`);
         log(`   Piccolo band: ${PICCOLO_MIN_FREQ}-${PICCOLO_MAX_FREQ}Hz (bins ${binIndices.start}-${binIndices.end})`);
+        log(`   Pillar reference band: ${pillarRefMinFreq?.toFixed(0) || 262}-${pillarRefMaxFreq?.toFixed(0) || 500}Hz (bins ${pillarRefBinIndices.start}-${pillarRefBinIndices.end})`);
 
         requestAnimationFrame(detectNeighborNotes);
 
@@ -914,6 +941,12 @@ async function loadPillarConfig() {
     }
 }
 
+// --- MIDI TO FREQUENCY CONVERSION ---
+function midiToFrequency(midi) {
+    // A4 = 440Hz, MIDI 69
+    return 440 * Math.pow(2, (midi - 69) / 12);
+}
+
 // --- LOAD PICCOLO ASSET URLS ---
 async function loadPiccoloAssetUrls() {
     try {
@@ -951,6 +984,48 @@ async function loadPiccoloAssetUrls() {
             if (!TEST_PULSE_URL && tuningData.metadata.test_pulse_url) {
                 TEST_PULSE_URL = tuningData.metadata.test_pulse_url;
             }
+        }
+
+        // Compute pillar reference frequency range from pillar_notes (after measure 9)
+        if (tuningData.pillar_notes && tuningData.pillar_notes.length > 0) {
+            // Phase 1 windows end at 20571.4ms (end of measure 8)
+            const PHASE1_END_MS = 20571.4;
+
+            let minMidi = Infinity;
+            let maxMidi = -Infinity;
+            let referenceNoteCount = 0;
+
+            tuningData.pillar_notes.forEach(note => {
+                // Only consider reference notes (after Phase 1 windows)
+                if (note.ms_offset >= PHASE1_END_MS && note.midi !== undefined) {
+                    minMidi = Math.min(minMidi, note.midi);
+                    maxMidi = Math.max(maxMidi, note.midi);
+                    referenceNoteCount++;
+                }
+            });
+
+            if (referenceNoteCount > 0 && minMidi !== Infinity && maxMidi !== -Infinity) {
+                pillarRefMinFreq = midiToFrequency(minMidi);
+                pillarRefMaxFreq = midiToFrequency(maxMidi);
+
+                // Add a small buffer (10%) to account for harmonics and detection
+                const buffer = 0.1;
+                const freqRange = pillarRefMaxFreq - pillarRefMinFreq;
+                pillarRefMinFreq = Math.max(20, pillarRefMinFreq - freqRange * buffer);
+                pillarRefMaxFreq = pillarRefMaxFreq + freqRange * buffer;
+
+                log(`🎵 Pillar reference frequency range: ${pillarRefMinFreq.toFixed(0)}Hz - ${pillarRefMaxFreq.toFixed(0)}Hz (from ${referenceNoteCount} notes, MIDI ${minMidi}-${maxMidi})`);
+            } else {
+                // Fallback to safe range
+                pillarRefMinFreq = 262;  // C4
+                pillarRefMaxFreq = 500;  // Below piccolo
+                log(`⚠️ No pillar reference notes found, using fallback range: ${pillarRefMinFreq}Hz - ${pillarRefMaxFreq}Hz`);
+            }
+        } else {
+            // No pillar notes at all - fallback
+            pillarRefMinFreq = 262;
+            pillarRefMaxFreq = 500;
+            log(`⚠️ No pillar_notes found, using fallback reference range: ${pillarRefMinFreq}Hz - ${pillarRefMaxFreq}Hz`);
         }
 
         if (PICCOLO_URL && !bufferCache[PICCOLO_URL]) {
@@ -1126,7 +1201,8 @@ function initTuningListener() {
         const schedule = snap.val();
 
         const now = Date.now() + serverOffset;
-        log(`🎵 Tuning listener triggered at server time: ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
+        const timeStr = new Date(now).toISOString().substr(11, 12);
+        log(`🎵 Tuning listener triggered at server time: ${timeStr}.${String(now % 1000).padStart(3, '0')}`);
 
         if (!pillarPlaybackStarted && (schedule && schedule.status === 'ACTIVE')) {
             // Validate startTime is reasonable
@@ -1150,7 +1226,8 @@ function initTuningListener() {
 
             // Use the schedule's startTime as the single reference
             tuningStartTime = schedule.startTime;
-            log(`🎵 Tuning schedule loaded with startTime: ${new Date(tuningStartTime).toLocaleTimeString()}`);
+            const startTimeStr = new Date(tuningStartTime).toISOString().substr(11, 12);
+            log(`🎵 Tuning schedule loaded with startTime: ${startTimeStr}.${String(tuningStartTime % 1000).padStart(3, '0')}`);
 
             // RESET ITERATIVE CALIBRATION STATE
             calibrationIteration = 0;
@@ -1229,7 +1306,9 @@ function initTuningListener() {
                 pillarWindows = schedule.metadata.pillar_cal_windows;
                 log(`🎯 Loaded ${pillarWindows.length} pillar calibration windows from metadata`);
                 pillarWindows.forEach(w => {
-                    log(`   ${w.pillar_id}: ${w.start_ms}ms → ${w.end_ms}ms (${w.note_count} notes)`);
+                    const startStr = new Date(tuningStartTime + w.start_ms).toISOString().substr(11, 12);
+                    const endStr = new Date(tuningStartTime + w.end_ms).toISOString().substr(11, 12);
+                    log(`   ${w.pillar_id}: ${w.start_ms}ms → ${w.end_ms}ms (${w.note_count} notes) [${startStr} → ${endStr}]`);
                 });
             } else {
                 log(`⚠️ No pillar_cal_windows found in metadata - Phase 1 mic calibration will be skipped`);
@@ -1247,8 +1326,10 @@ function initTuningListener() {
                 const windowStartAbs = tuningStartTime + currentPillarWindow.start_ms;
                 const windowEndAbs = tuningStartTime + currentPillarWindow.end_ms;
                 currentWindowEndTime = windowEndAbs;
+                const startStr = new Date(windowStartAbs).toISOString().substr(11, 12);
+                const endStr = new Date(windowEndAbs).toISOString().substr(11, 12);
                 log(`🎤 Phase 1 window open: listening for ${currentPillarWindow.pillar_id} from ${(currentPillarWindow.start_ms/1000).toFixed(1)}s to ${(currentPillarWindow.end_ms/1000).toFixed(1)}s`);
-                log(`   (${new Date(windowStartAbs).toLocaleTimeString()} → ${new Date(windowEndAbs).toLocaleTimeString()})`);
+                log(`   (${startStr}.${String(windowStartAbs % 1000).padStart(3, '0')} → ${endStr}.${String(windowEndAbs % 1000).padStart(3, '0')})`);
             } else {
                 log(`⚠️ No pillar windows available - Phase 1 mic calibration will be skipped`);
                 phase1Complete = true;
@@ -1291,7 +1372,8 @@ function initTuningListener() {
 
             // Handle pillars - they already know their delays
             if (mySeat.id.startsWith('PILLAR_')) {
-                log(`🏛️ Pillar received startTime: ${schedule.startTime} (${new Date(schedule.startTime).toLocaleTimeString()})`);
+                const pillarStartStr = new Date(schedule.startTime).toISOString().substr(11, 12);
+                log(`🏛️ Pillar received startTime: ${schedule.startTime} (${pillarStartStr}.${String(schedule.startTime % 1000).padStart(3, '0')})`);
                 log(`🏛️ ${mySeat.id} is a pillar - skipping calibration loop, using known delays`);
 
                 if (pillarConfig[mySeat.id]) {
@@ -1343,6 +1425,9 @@ function initTuningListener() {
 
             // Start iterative calibration (only for patron devices)
             startIterativeCalibration();
+
+            // IMPORTANT: Do NOT set pillarPlaybackStarted for patrons
+            // pillarPlaybackStarted remains false so the show/currentCue listener can trigger
             return;
 
         } else {
@@ -1354,6 +1439,8 @@ function initTuningListener() {
                 expectedNoteMap.clear();
                 phase1WindowActive = false;
                 calibrationComplete = false;
+
+                // DO NOT reset flags - they persist to prevent re-running tuning
 
                 if (reportListenerActive) {
                     reportListenerActive = false;
@@ -1443,6 +1530,12 @@ function findNoteInHistory(expectedTime, expectedFreq, toleranceMs, freqToleranc
 
 // --- PICCOLO PLAYBACK with progressive timing improvement ---
 async function playTuningMovement(cue) {
+    // Prevent duplicate playback for patrons
+    if (tuningPlaybackStarted) {
+        log(`⚠️ Tuning playback already started, skipping duplicate`);
+        return;
+    }
+
     log("🎵 Starting tuning movement with distributed calibration");
 
     if (!PICCOLO_URL) {
@@ -1454,7 +1547,8 @@ async function playTuningMovement(cue) {
     const movementStartTime = tuningStartTime;
 
     if (mySeat.id.startsWith('PILLAR_')) {
-        startPillarFabric(movementStartTime);
+        // Pillar playback is handled in initTuningListener, not here
+        log(`🏛️ Pillar playback already handled in initTuningListener, skipping`);
         return;
     }
 
@@ -1540,6 +1634,8 @@ async function playTuningMovement(cue) {
             log(`❌ Block ${blockIndex} is too late (${Math.round(-delayMs)}ms), skipping`);
         }
     });
+
+    tuningPlaybackStarted = true;
 }
 
 // --- TIMING REPORTS LISTENER (receives neighbor reports about OUR timing) ---
@@ -1847,7 +1943,6 @@ function evaluateIteration() {
 
     // Combine estimates
     let finalDelay = null;
-    let confidence = 0;
 
     if (pillarDelayEstimate !== null && neighborDelayEstimate !== null) {
         // Both available - weight by confidence (lower stdDev = higher confidence)
@@ -1894,9 +1989,8 @@ function evaluateIteration() {
         calibratedSpeakerDelay = calibratedSpeakerDelay * 0.3 + finalDelay * 0.7;
     }
 
-    // Add to selfSamples for consistency
-    selfSamples.push(calibratedSpeakerDelay);
-    if (selfSamples.length > MAX_SELF_SAMPLES) selfSamples.shift();
+    // DO NOT push into selfSamples - keep measurement streams separate!
+    // selfSamples should only contain neighbor measurements
 
     document.getElementById('debug-speaker-delay').innerText = calibratedSpeakerDelay.toFixed(1) + 'ms';
     document.getElementById('debug-samples').innerText = selfSamples.length;
@@ -1995,6 +2089,8 @@ function evaluateIteration() {
                 db.ref('show/currentCue').once('value', snap => {
                     const cue = snap.val();
                     if (cue && cue.type === 'TUNING_MOVEMENT') {
+                        // Reset playback flag for new iteration
+                        tuningPlaybackStarted = false;
                         playTuningMovement(cue);
                     }
                 });
@@ -2256,9 +2352,6 @@ function processSelfMeasurement(speakerDelay, reportedAt, reporterId) {
     const median = calculateMedian(selfSamples);
     document.getElementById('debug-speaker-delay').innerText = median.toFixed(1) + 'ms';
     document.getElementById('debug-samples').innerText = selfSamples.length;
-
-    // Combine with pillar data if available
-    updateSpeakerDelayFromPillars();
 }
 
 // SECTION 4 END ============================================================
@@ -2268,15 +2361,34 @@ function processSelfMeasurement(speakerDelay, reportedAt, reporterId) {
 // ============================================================================
 
 // And PILLAR-CAL, too
-function processPillarReferenceDetection(now, avgEnergy, dominantFreq, ratioToBaseline) {
+function processPillarReferenceDetection(now, pillarRefEnergy) {
     if (!phase1Complete) return;
     if (calibrationComplete) return;
 
     const songPosition = now - tuningStartTime;
 
-    // Find all pillar notes that should be playing now
+    // Maintain a separate baseline for pillar reference energy
+    if (typeof window.pillarRefBaseline === 'undefined') {
+        window.pillarRefBaseline = 0;
+        window.pillarRefBaselineSamples = [];
+    }
+
+    // Update baseline for pillar reference energy (slowly adapting)
+    if (window.pillarRefBaselineSamples.length < 50) {
+        window.pillarRefBaselineSamples.push(pillarRefEnergy);
+    } else {
+        const sorted = [...window.pillarRefBaselineSamples].sort((a, b) => a - b);
+        window.pillarRefBaseline = sorted[Math.floor(sorted.length / 2)];
+        // Keep a rolling window
+        window.pillarRefBaselineSamples.shift();
+        window.pillarRefBaselineSamples.push(pillarRefEnergy);
+    }
+
+    const threshold = window.pillarRefBaseline * BASELINE_THRESHOLD_MULTIPLIER;
+
+    // Find all pillar notes that should be playing now (reference notes, after measure 9)
     const candidatePillarNotes = pillarNoteSchedule.filter(note => {
-        // FIX: Only listen for reference notes AFTER Phase 1 calibration windows
+        // Only listen for reference notes AFTER Phase 1 calibration windows
         // Phase 1 windows end at 20571.4ms (end of measure 8)
         // Reference notes start at measure 9 (20571.4ms)
         if (note.ms_offset < 20571.4) return false;
@@ -2292,8 +2404,8 @@ function processPillarReferenceDetection(now, avgEnergy, dominantFreq, ratioToBa
 
         if (processedMeasurements.has(noteKey)) return;
 
-        // Check if energy exceeds threshold
-        if (avgEnergy > baselineEnergy * BASELINE_THRESHOLD_MULTIPLIER) {
+        // Check if energy exceeds threshold (using pillar-specific energy)
+        if (pillarRefEnergy > threshold) {
             const expectedTimeAbs = tuningStartTime + note.ms_offset;
             const rawDelay = now - expectedTimeAbs;
 
@@ -2302,7 +2414,7 @@ function processPillarReferenceDetection(now, avgEnergy, dominantFreq, ratioToBa
 
             // Sanity check - reject unrealistic values
             if (Math.abs(speakerDelayEstimate) < 500) {
-                log(`🎯 Pillar reference: ${pillarId} note ${note.index} → raw=${rawDelay.toFixed(1)}ms, prop=${propagationMs.toFixed(1)}ms, speaker=${speakerDelayEstimate.toFixed(1)}ms (iter ${calibrationIteration})`);
+                log(`🎯 Pillar reference: ${pillarId} note ${note.index} → pillarEnergy=${pillarRefEnergy.toFixed(4)}, raw=${rawDelay.toFixed(1)}ms, prop=${propagationMs.toFixed(1)}ms, speaker=${speakerDelayEstimate.toFixed(1)}ms (iter ${calibrationIteration})`);
 
                 if (!pillarDelays.has(pillarId)) {
                     pillarDelays.set(pillarId, []);
@@ -2320,87 +2432,6 @@ function processPillarReferenceDetection(now, avgEnergy, dominantFreq, ratioToBa
             }
         }
     });
-}
-
-function updateSpeakerDelayFromPillars() {
-    // Collect all valid pillar delay estimates
-    let allEstimates = [];
-    for (let [pillarId, samples] of pillarDelays.entries()) {
-        if (samples.length >= 3) {
-            const sorted = [...samples].sort((a, b) => a - b);
-            const median = sorted[Math.floor(sorted.length / 2)];
-            allEstimates.push(median);
-            log(`📊 Pillar ${pillarId}: ${median.toFixed(1)}ms (${samples.length} samples)`);
-        }
-    }
-
-    if (allEstimates.length > 0) {
-        // Combine with neighbor estimates if available
-        let finalEstimate;
-
-        if (selfSamples.length >= MIN_SELF_SAMPLES) {
-            // Have both pillar and neighbor data
-            const neighborMedian = calculateMedian(selfSamples);
-            const pillarMedian = calculateMedian(allEstimates);
-
-            // Weighted average (pillars might be more reliable as they're fixed)
-            finalEstimate = (pillarMedian * 0.7) + (neighborMedian * 0.3);
-            log(`📊 Combined calibration: pillar=${pillarMedian.toFixed(1)}ms, neighbor=${neighborMedian.toFixed(1)}ms → final=${finalEstimate.toFixed(1)}ms`);
-        } else {
-            // Only pillar data available
-            finalEstimate = calculateMedian(allEstimates);
-            log(`📊 Pillar-only calibration: ${finalEstimate.toFixed(1)}ms (no neighbors yet)`);
-        }
-
-        // Update calibrated speaker delay
-        if (calibratedSpeakerDelay === null) {
-            calibratedSpeakerDelay = finalEstimate;
-        } else {
-            // Smooth update
-            calibratedSpeakerDelay = calibratedSpeakerDelay * 0.7 + finalEstimate * 0.3;
-        }
-
-        // Add to selfSamples for consistency
-        selfSamples.push(calibratedSpeakerDelay);
-        if (selfSamples.length > MAX_SELF_SAMPLES) selfSamples.shift();
-
-        document.getElementById('debug-speaker-delay').innerText = calibratedSpeakerDelay.toFixed(1) + 'ms';
-        document.getElementById('debug-samples').innerText = selfSamples.length;
-
-        // Update Firebase
-        db.ref(`devices/${mySeat.id}/calibration`).update({
-            speakerDelayMs: Math.round(calibratedSpeakerDelay),
-            speakerSamples: selfSamples.length,
-            pillarSamples: allEstimates.length,
-            lastPillarUpdate: Date.now() + serverOffset
-        });
-
-        // Check if we're converged
-        if (selfSamples.length >= MIN_SELF_SAMPLES) {
-            const recentSamples = selfSamples.slice(-MIN_SELF_SAMPLES);
-            const mean = recentSamples.reduce((a, b) => a + b, 0) / recentSamples.length;
-            const variance = recentSamples.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / recentSamples.length;
-            const stdDev = Math.sqrt(variance);
-            document.getElementById('debug-stddev').innerText = stdDev.toFixed(1) + 'ms';
-
-            if (stdDev < HAPPY_STDDEV_THRESHOLD && !calibrationComplete) {
-                calibrationComplete = true;
-                isHappy = true;
-                log(`✅✅✅ Calibration CONVERGED! Final delay: ${calibratedSpeakerDelay.toFixed(1)}ms (σ=${stdDev.toFixed(1)}ms) ✅✅✅`);
-
-                db.ref(`devices/${mySeat.id}`).update({
-                    status: 'HAPPY',
-                    finalDelay: Math.round(calibratedSpeakerDelay),
-                    finalStdDev: Math.round(stdDev),
-                    convergedAt: Date.now() + serverOffset
-                });
-
-                document.getElementById('debug-status').innerHTML = 'HAPPY ✓';
-            }
-        }
-
-        updatePerformanceOverlay();
-    }
 }
 
 // --- ONSET DETECTION LOOP (main entry point) ---
@@ -2421,6 +2452,15 @@ function detectNeighborNotes() {
     piccoloEnergy = piccoloEnergy / (binIndices.end - binIndices.start + 1);
     currentAvgEnergy = piccoloEnergy;
 
+    // Calculate pillar reference band energy (using computed bins)
+    let pillarRefEnergy = 0;
+    const startBin = pillarRefBinIndices.start;
+    const endBin = Math.min(pillarRefBinIndices.end, frequencyData.length - 1);
+    for (let i = startBin; i <= endBin; i++) {
+        pillarRefEnergy += frequencyData[i] / 255;
+    }
+    pillarRefEnergy = pillarRefEnergy / (endBin - startBin + 1);
+
     // Calculate dominant frequency in piccolo band
     let maxVal = 0, maxIdx = binIndices.start;
     for (let i = binIndices.start; i <= binIndices.end && i < frequencyData.length; i++) {
@@ -2430,7 +2470,7 @@ function detectNeighborNotes() {
     const dominantFreq = (maxIdx / (FFT_SIZE / 2)) * nyquist;
     currentDominantFreq = dominantFreq;
 
-    // Update UI meters
+    // Update UI meters (using piccolo energy)
     const energyFill = document.getElementById('energy-fill');
     const energyValue = document.getElementById('energy-value');
     const baselineValue = document.getElementById('baseline-value');
@@ -2444,11 +2484,11 @@ function detectNeighborNotes() {
     recordSpectrum(now, piccoloEnergy, dominantFreq);
 
     if (noteSchedule && noteSchedule.length > 0 && tuningStartTime) {
-        // Process neighbor detections
+        // Process neighbor detections (uses piccolo energy)
         processDetectionWindows(now, piccoloEnergy, dominantFreq, ratioToBaseline);
 
-        // Process pillar reference detections
-        processPillarReferenceDetection(now, piccoloEnergy, dominantFreq, ratioToBaseline);
+        // Process pillar reference detections (uses pillar reference energy)
+        processPillarReferenceDetection(now, pillarRefEnergy);
     }
 
     requestAnimationFrame(detectNeighborNotes);
@@ -2847,22 +2887,15 @@ document.getElementById('ready-btn').onclick = async () => {
         if (cue.action === 'KILL') { log("💀 KILL signal received - reloading"); location.reload(); }
         else if (cue.action === 'GO') handleMovementStart(cue);
         else if (cue.type === 'TUNING_MOVEMENT') {
-        // Prevent duplicate playback for pillars, but allow patrons
-        if (mySeat.id.startsWith('PILLAR_') && tuningPlaybackStarted) {
-            log(`🏛️ Pillar tuning playback already started, skipping duplicate`);
-            return;
+            // Prevent duplicate playback
+            if (tuningPlaybackStarted) {
+                log(`⚠️ Tuning playback already started, skipping duplicate`);
+                return;
+            }
+            calibrationMode = true;
+            playTuningMovement(cue);
         }
-        if (!mySeat.id.startsWith('PILLAR_') && tuningPlaybackStarted) {
-            log(`⚠️ Patron tuning playback already started, skipping duplicate`);
-            return;
-        }
-        calibrationMode = true;
-        playTuningMovement(cue);
-        tuningPlaybackStarted = true;
-    }
-    else if (cue.type === 'AUDIO' && cue.metadata?.purpose === 'seat_test') {
-        if (cue.metadata.seatId === mySeat.id) handleSeatTest(cue);
-    }
+        else if (cue.type === 'AUDIO' && cue.metadata?.purpose === 'seat_test') { if (cue.metadata.seatId === mySeat.id) handleSeatTest(cue); }
     });
     initTuningListener();
     initSelfCalibrationListener();
