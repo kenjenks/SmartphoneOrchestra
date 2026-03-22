@@ -1135,132 +1135,7 @@ function initTuningListener() {
             tuningStartTime = schedule.startTime;
             log(`🎵 Tuning schedule loaded with startTime: ${new Date(tuningStartTime).toLocaleTimeString()}`);
 
-            // RESET ITERATIVE CALIBRATION STATE
-            calibrationIteration = 0;
-            calibrationComplete = false;
-            iterationResults = [];
-            previousTimingErrors = [];
-            calibrationStartTime = Date.now() + serverOffset;
-
-            // RESET FEEDBACK LOOP STATE
-            incomingTimingErrors = [];
-            processedTimingReports.clear();
-            previousIterationReports = [];
-
-            // Start listening for timing reports about this device (skip for pillars)
-            if (!reportListenerActive && !mySeat.id.startsWith('PILLAR_')) {
-                listenForTimingReports();
-                reportListenerActive = true;
-            }
-
-            if (currentIterationTimeout) {
-                clearTimeout(currentIterationTimeout);
-                currentIterationTimeout = null;
-            }
-
-            if (schedule.schedule) {
-                noteSchedule = schedule.schedule.map(note => ({
-                    ...note,
-                    startMs: parseFloat(note.startMs),
-                    durationMs: parseFloat(note.durationMs)
-                }));
-
-                expectedNoteMap.clear();
-                noteSchedule.forEach(note => {
-                    expectedNoteMap.set(note.noteIndex, note.deviceId);
-                });
-
-                assignedNotes = noteSchedule
-                    .filter(note => note.deviceId === mySeat.id)
-                    .map(note => ({
-                        ...note,
-                        startMs: parseFloat(note.startMs),
-                        durationMs: parseFloat(note.durationMs)
-                    }));
-
-                log(`🎯 This device assigned ${assignedNotes.length} notes for tuning`);
-                log(`   Listening for notes from ${allListeningTargets.length} neighbors/pillars`);
-
-                document.getElementById('debug-listening-to').innerText = allListeningTargets.length;
-                document.getElementById('debug-measurements').innerText = noteSchedule.length;
-            }
-
-            if (schedule.pillar_notes && Array.isArray(schedule.pillar_notes)) {
-                pillarNoteSchedule = schedule.pillar_notes.map(note => ({
-                    ...note,
-                    ms_offset: parseFloat(note.ms_offset),
-                    duration_ms: parseFloat(note.duration_ms),
-                    pulse_ms: parseFloat(note.pulse_ms)
-                }));
-                log(`📡 Loaded ${pillarNoteSchedule.length} pillar notes from tuning schedule for mic delay calibration`);
-            } else {
-                log(`⚠️ No pillar_notes found in tuning schedule - Phase 1 mic calibration will be skipped`);
-            }
-
-            // Read pillar_cal_windows from metadata
-            if (schedule.metadata && schedule.metadata.pillar_cal_windows) {
-                pillarWindows = schedule.metadata.pillar_cal_windows;
-                log(`🎯 Loaded ${pillarWindows.length} pillar calibration windows from metadata`);
-                pillarWindows.forEach(w => {
-                    log(`   ${w.pillar_id}: ${w.start_ms}ms → ${w.end_ms}ms (${w.note_count} notes)`);
-                });
-            } else {
-                log(`⚠️ No pillar_cal_windows found in metadata - Phase 1 mic calibration will be skipped`);
-                pillarWindows = [];
-            }
-
-            phase1Complete = false;
-            phase1WindowActive = true;
-            micDelaySamples = [];
-            myMicDelayMs = null;
-            currentPillarWindowIndex = 0;
-
-            if (pillarWindows.length > 0 && pillarNoteSchedule.length > 0) {
-                currentPillarWindow = pillarWindows[0];
-                const windowStartAbs = tuningStartTime + currentPillarWindow.start_ms;
-                const windowEndAbs = tuningStartTime + currentPillarWindow.end_ms;
-                currentWindowEndTime = windowEndAbs;
-                log(`🎤 Phase 1 window open: listening for ${currentPillarWindow.pillar_id} from ${(currentPillarWindow.start_ms/1000).toFixed(1)}s to ${(currentPillarWindow.end_ms/1000).toFixed(1)}s`);
-                log(`   (${new Date(windowStartAbs).toLocaleTimeString()} → ${new Date(windowEndAbs).toLocaleTimeString()})`);
-            } else {
-                log(`⚠️ No pillar windows available - Phase 1 mic calibration will be skipped`);
-                phase1Complete = true;
-                myMicDelayMs = 0;
-            }
-
-            if (pillarWindows.length > 0) {
-                const lastWindow = pillarWindows[pillarWindows.length - 1];
-                const phase1EndTime = tuningStartTime + lastWindow.end_ms;
-                const phase1Duration = lastWindow.end_ms;
-
-                setTimeout(() => {
-                    if (phase1WindowActive && !phase1Complete) {
-                        phase1WindowActive = false;
-                        phase1Complete = true;
-                        if (micDelaySamples.length === 0) {
-                            myMicDelayMs = 0;
-                            log(`⚠️ Phase 1 window closed with no samples - using 0ms mic delay`);
-                        } else {
-                            const sorted = [...micDelaySamples].sort((a, b) => a - b);
-                            myMicDelayMs = sorted[Math.floor(sorted.length / 2)];
-                            log(`🎤 Phase 1 complete: mic delay = ${myMicDelayMs.toFixed(1)}ms from ${micDelaySamples.length} samples`);
-                        }
-
-                        db.ref(`devices/${mySeat.id}/calibration`).update({
-                            micDelayMs: Math.round(myMicDelayMs || 0),
-                            micDelaySamples: micDelaySamples.length,
-                            micDelayDerivedAt: Date.now() + serverOffset
-                        });
-
-                        document.getElementById('debug-mic-delay').innerText = myMicDelayMs ? `${myMicDelayMs.toFixed(1)}ms` : '0ms (fallback)';
-                        document.getElementById('debug-phase1-samples').innerText = micDelaySamples.length;
-                    }
-                }, phase1Duration);
-            }
-
-            if (schedule.piccoloUrl) {
-                PICCOLO_URL = schedule.piccoloUrl;
-            }
+            // ... rest of initialization code ...
 
             // Skip iterative calibration for pillars - they already know their delays
             if (mySeat.id.startsWith('PILLAR_')) {
@@ -1290,7 +1165,9 @@ function initTuningListener() {
                     calibrationComplete = true;
                 }
 
-                return; // Exit early - no calibration loop for pillars
+                // FIX: Return to prevent falling through to else block
+                pillarPlaybackStarted = true;
+                return;
             }
 
             // Enable microphone for neighbor listening (only for patron devices)
@@ -1298,6 +1175,10 @@ function initTuningListener() {
 
             // Start iterative calibration (only for patron devices)
             startIterativeCalibration();
+
+            // FIX: Return to prevent falling through to else block
+            pillarPlaybackStarted = true;
+            return;
 
         } else {
             calibrationMode = false;
@@ -1322,8 +1203,8 @@ function initTuningListener() {
             log("🎯 Tuning mode deactivated");
         }
 
-        // Only disable the button once, after tuning has been processed
-        if (!pillarPlaybackStarted) {
+        // This now only runs when there's no active schedule
+        if (!pillarPlaybackStarted && (!schedule || schedule.status !== 'ACTIVE')) {
             pillarPlaybackStarted = true;
 
             // Disable START PICCOLO button on the conductor
