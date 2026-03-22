@@ -14,6 +14,7 @@ Features:
 - Heartbeat monitoring: devices marked dead if no heartbeat for 12.1s
 - Spiral distribution: Each device receives notes in a spiral pattern
 - LOG VIEWER: Displays logs from all devices (including conductor) in real-time
+- COPY LOGS: Copy all device logs to clipboard
 
 Note: All configuration uploads (seat_config.tsv, tuning_mode.json,
 pillar_config.json, visual_timeline.json) are handled by admin.html
@@ -48,6 +49,8 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         button.secondary { background: #2a2a2a; border-color: #446; }
         button.danger { background: #600; border-color: #a00; color: #fff; }
         button.danger:hover { background: #800; }
+        button.copy-btn { background: #00ffcc20; border-color: #00ffcc; color: #00ffcc; }
+        button.copy-btn:hover { background: #00ffcc40; }
 
         /* Performance Registry UI Block */
         #performance-registry { font-family: monospace; font-size: 11px; background: #000; padding: 10px; border-radius: 4px; height: 180px; overflow-y: auto; border: 1px solid #333; }
@@ -86,6 +89,10 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             margin: 0;
             font-size: 0.7rem;
             background: #333;
+        }
+        .log-viewer-controls button.copy-btn {
+            background: #00ffcc20;
+            border-color: #00ffcc;
         }
         .log-viewer-controls button.clear-btn {
             background: #600;
@@ -152,6 +159,27 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         .log-timestamp {
             color: #666;
             margin-right: 8px;
+        }
+
+        /* Toast notification for copy success */
+        .toast-notification {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: #00ffcc;
+            color: #000;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            font-weight: bold;
+            z-index: 1000;
+            animation: fadeOut 2s ease-in-out forwards;
+            pointer-events: none;
+        }
+        @keyframes fadeOut {
+            0% { opacity: 1; transform: translateY(0); }
+            70% { opacity: 1; transform: translateY(0); }
+            100% { opacity: 0; transform: translateY(-20px); visibility: hidden; }
         }
 
         /* Legend */
@@ -262,7 +290,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
                 <div class="log-viewer-header">
                     <h3>📋 Device Logs</h3>
                     <div class="log-viewer-controls">
-                        <button id="refresh-logs-btn" class="secondary" style="width: auto;">🔄 Refresh</button>
+                        <button id="copy-logs-btn" class="copy-btn" style="width: auto;">📋 Copy All Logs</button>
                         <button id="clear-logs-btn" class="clear-btn" style="width: auto;">🗑️ Clear All</button>
                     </div>
                 </div>
@@ -366,6 +394,64 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         serverOffset = snap.val() || 0;
     });
 
+    // --- HELPER: Show toast notification ---
+    function showToast(message, isError = false) {
+        const toast = document.createElement('div');
+        toast.className = 'toast-notification';
+        toast.textContent = message;
+        if (isError) {
+            toast.style.background = '#ff4444';
+            toast.style.color = '#fff';
+        }
+        document.body.appendChild(toast);
+        setTimeout(() => {
+            if (toast.parentNode) toast.parentNode.removeChild(toast);
+        }, 2000);
+    }
+
+    // --- COPY LOGS TO CLIPBOARD ---
+    async function copyLogsToClipboard() {
+        if (allLogs.length === 0) {
+            showToast("No logs to copy", true);
+            return;
+        }
+
+        // Apply current filters to logs being copied
+        let filteredLogs = allLogs.filter(log => {
+            if (logFilterText && !log.message.toLowerCase().includes(logFilterText.toLowerCase())) {
+                return false;
+            }
+            if (logFilterDevice && log.seatId !== logFilterDevice) {
+                return false;
+            }
+            return true;
+        });
+
+        if (filteredLogs.length === 0) {
+            showToast("No logs match current filter", true);
+            return;
+        }
+
+        // Format logs for clipboard
+        const header = `=== SmartphoneOrchestra Device Logs ===\nGenerated: ${new Date().toLocaleString()}\nTotal logs: ${filteredLogs.length}\nFilter: ${logFilterText || 'none'} | Device: ${logFilterDevice || 'all'}\n${'='.repeat(50)}\n\n`;
+
+        const logLines = filteredLogs.map(log => {
+            return `[${log.timeStr}] [${log.seatId}] ${log.message}`;
+        }).join('\n');
+
+        const clipboardContent = header + logLines + '\n\n=== End of Logs ===';
+
+        try {
+            await navigator.clipboard.writeText(clipboardContent);
+            showToast(`✅ Copied ${filteredLogs.length} logs to clipboard`);
+            conductorLog(`📋 Copied ${filteredLogs.length} logs to clipboard (filter: ${logFilterText || 'none'}, device: ${logFilterDevice || 'all'})`, 'info');
+        } catch (err) {
+            console.error('Failed to copy logs:', err);
+            showToast("Failed to copy logs to clipboard", true);
+            conductorLog(`❌ Failed to copy logs: ${err.message}`, 'error');
+        }
+    }
+
     // --- CONDUCTOR LOGGING FUNCTION ---
     function conductorLog(message, type = 'info') {
         const timestamp = Date.now() + serverOffset;
@@ -449,7 +535,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         const container = document.getElementById('log-entries');
         if (!container) return;
 
-        // Update device filter dropdown from deviceData (not a separate listener)
+        // Update device filter dropdown from deviceData
         const deviceSelect = document.getElementById('log-filter-device');
         if (deviceSelect && deviceData) {
             const currentValue = deviceSelect.value;
@@ -575,7 +661,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         }
 
         // Set up button listeners
-        document.getElementById('refresh-logs-btn').onclick = refreshLogs;
+        document.getElementById('copy-logs-btn').onclick = copyLogsToClipboard;
         document.getElementById('clear-logs-btn').onclick = clearAllLogs;
 
         // Add limitToLast(50) to only get recent logs, not full history
@@ -618,9 +704,6 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
                 });
             }
         });
-
-        // FIX 3: Remove the separate devices listener from here
-        // The device dropdown will be populated from deviceData in scheduleLogDisplayUpdate
 
         // Start conductor log flusher
         if (conductorLogFlushTimer) clearInterval(conductorLogFlushTimer);
