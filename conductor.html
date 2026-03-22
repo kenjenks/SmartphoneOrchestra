@@ -1242,9 +1242,12 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         }
 
         tuningSchedule = distributeNotes(deviceOrder);
-        // FIX: Use Date.now() + serverOffset for consistent time reference across all devices
+        // Use Date.now() + serverOffset for consistent time reference across all devices
         const nowWall = Date.now() + serverOffset;
         tuningStartTime = nowWall + 3000;
+
+        // DEBUG: Log what we're about to write
+        conductorLog(`📡 Writing tuning/current with startTime: ${tuningStartTime} (${new Date(tuningStartTime).toLocaleTimeString()}.${String(tuningStartTime % 1000).padStart(3, '0')})`, 'info');
 
         if (Object.keys(PILLAR_URLS).length === 0) {
             conductorLog("No pillar URLs from movement, loading defaults", 'info');
@@ -1312,6 +1315,15 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         }
 
         await db.ref('tuning/current').set(tuningCurrentObj);
+
+        // DEBUG: Verify what was actually written
+        const verifySnap = await db.ref('tuning/current/startTime').once('value');
+        const writtenStartTime = verifySnap.val();
+        conductorLog(`📡 Verified startTime in Firebase: ${writtenStartTime} (${new Date(writtenStartTime).toLocaleTimeString()}.${String(writtenStartTime % 1000).padStart(3, '0')})`, 'info');
+
+        if (writtenStartTime !== tuningStartTime) {
+            conductorLog(`❌❌❌ CRITICAL: startTime mismatch! Expected ${tuningStartTime}, got ${writtenStartTime}`, 'error');
+        }
 
         await db.ref('show/currentCue').set({
             type: "TUNING_MOVEMENT",

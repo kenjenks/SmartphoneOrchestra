@@ -1112,18 +1112,14 @@ function initTuningListener() {
     db.ref('tuning/current').on('value', snap => {
         const schedule = snap.val();
 
-        // FIX: Ignore stale schedules (more than 10 seconds in the past)
         const now = Date.now() + serverOffset;
-        if (schedule && schedule.startTime && (now - schedule.startTime > 10000)) {
-            log(`⚠️ Ignoring stale tuning schedule (started ${((now - schedule.startTime)/1000).toFixed(0)}s ago)`);
-            return;
-        }
+        log(`🎵 Tuning listener triggered at server time: ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
 
         if (schedule && schedule.status === 'ACTIVE') {
             calibrationMode = true;
             currentTuningSchedule = schedule;
 
-            // FIX: Use the schedule's startTime as the single reference
+            // Use the schedule's startTime as the single reference
             tuningStartTime = schedule.startTime;
             log(`🎵 Tuning schedule loaded with startTime: ${new Date(tuningStartTime).toLocaleTimeString()}`);
 
@@ -1254,9 +1250,11 @@ function initTuningListener() {
                 PICCOLO_URL = schedule.piccoloUrl;
             }
 
-            // FIX: Skip iterative calibration for pillars - they already know their delays
+            // Skip iterative calibration for pillars - they already know their delays
             if (mySeat.id.startsWith('PILLAR_')) {
+                log(`🏛️ Pillar received startTime: ${schedule.startTime} (${new Date(schedule.startTime).toLocaleTimeString()})`);
                 log(`🏛️ ${mySeat.id} is a pillar - skipping calibration loop, using known delays`);
+
 
                 // Set delays from pillar config if available
                 if (pillarConfig[mySeat.id]) {
