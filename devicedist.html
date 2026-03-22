@@ -932,6 +932,9 @@ async function loadPillarConfig() {
         });
 
         log(`📡 Loaded pillar config for ${Object.keys(pillarConfig).length} pillars`);
+        Object.values(pillarConfig).forEach(p => {
+            log(`   ${p.id}: speaker=${p.speakerDelayMs}ms, mic=${p.micDelayMs}ms at (${p.x}, ${p.y})`);
+        });
     } catch (e) {
         log(`⚠️ Failed to load pillar config: ${e.message}`);
     }
@@ -1036,7 +1039,7 @@ async function loadPiccoloAssetUrls() {
                 pillarRefMinFreq = Math.max(20, pillarRefMinFreq - freqRange * buffer);
                 pillarRefMaxFreq = pillarRefMaxFreq + freqRange * buffer;
 
-                // CRITICAL FIX: Cap at (PICCOLO_MIN_FREQ - 1) to avoid overlap with patron piccolo
+                // Cap at (PICCOLO_MIN_FREQ - 1) to avoid overlap with patron piccolo
                 pillarRefMaxFreq = Math.min(pillarRefMaxFreq, PICCOLO_MIN_FREQ - 1);
 
                 log(`🎵 Pillar reference frequency range: ${pillarRefMinFreq.toFixed(0)}Hz - ${pillarRefMaxFreq.toFixed(0)}Hz (from ${referenceNoteCount} notes, MIDI ${minMidi}-${maxMidi})`);
@@ -1781,25 +1784,22 @@ function detectPillarOnsets(now, avgEnergy, dominantFreq, ratioToBaseline) {
     if (processedMeasurements.has(noteKey)) return;
 
     const expectedDetection = tuningStartTime + closestNote.ms_offset;
-    const micDelayEstimate = now - expectedDetection;
+    const rawDelay = now - expectedDetection;
 
-    // DIAGNOSTIC: Record detection
-    const detectionRecord = {
-        pillarId: closestNote.pillar_id,
-        noteIndex: closestNote.index,
-        expectedTime: expectedDetection,
-        actualTime: now,
-        rawDelay: micDelayEstimate,
-        sampleCount: micDelaySamples.length,
-        timestamp: now
-    };
-    db.ref(`diagnostics/${mySeat.id}/pillar_detections/${closestNote.pillar_id}_${closestNote.index}`).set(detectionRecord);
+    // Get pillar's documented speaker delay and propagation
+    const pillarSpeakerDelay = pillarConfig[currentPillarWindow.pillar_id]?.speakerDelayMs || 0;
+    const propagationMs = pillarDistanceMap.get(currentPillarWindow.pillar_id) || 0;
 
-    if (micDelayEstimate >= MIC_DELAY_SANITY_MIN && micDelayEstimate <= MIC_DELAY_SANITY_MAX) {
-        micDelaySamples.push(micDelayEstimate);
+    // For Phase 1, the patron is listening to a pillar that is playing
+    // rawDelay = pillarSpeakerDelay + propagationMs + patronMicDelay
+    // So:
+    const patronMicDelay = rawDelay - pillarSpeakerDelay - propagationMs;
+
+    if (patronMicDelay >= MIC_DELAY_SANITY_MIN && patronMicDelay <= MIC_DELAY_SANITY_MAX) {
+        micDelaySamples.push(patronMicDelay);
         processedMeasurements.add(noteKey);
 
-        log(`🎤 Pillar ${closestNote.pillar_id} detected: delay ${micDelayEstimate.toFixed(1)}ms (sample ${micDelaySamples.length}/${MIN_MIC_SAMPLES})`);
+        log(`🎤 Pillar ${closestNote.pillar_id} detected: raw=${rawDelay.toFixed(1)}ms, pillarSpkr=${pillarSpeakerDelay}ms, prop=${propagationMs.toFixed(1)}ms, micDelay=${patronMicDelay.toFixed(1)}ms (sample ${micDelaySamples.length}/${MIN_MIC_SAMPLES})`);
 
         document.getElementById('debug-phase1-samples').innerText = micDelaySamples.length;
 
@@ -1826,7 +1826,7 @@ function detectPillarOnsets(now, avgEnergy, dominantFreq, ratioToBaseline) {
             }
         }
     } else {
-        log(`⚠️ Pillar detection rejected: mic delay ${micDelayEstimate.toFixed(1)}ms outside sane range`);
+        log(`⚠️ Pillar detection rejected: mic delay ${patronMicDelay.toFixed(1)}ms outside sane range (raw=${rawDelay.toFixed(1)}ms, pillarSpkr=${pillarSpeakerDelay}ms, prop=${propagationMs.toFixed(1)}ms)`);
     }
 }
 
@@ -1935,10 +1935,9 @@ async function runCalibrationIteration() {
     const totalDurationMs = currentTuningSchedule?.metadata?.total_duration_ms || 182571;
     const timeUntilPieceEnds = (tuningStartTime + totalDurationMs) - (Date.now() + serverOffset);
 
-    // FIX: If piece already ended, stop calibration iterations
-    if (timeUntilPieceEnds < -5000) {
+    // If piece already ended, stop calibration iterations
+    if (timeUntilPieceEnds < -5000 && calibrationIteration > 1) {
         log('⚠️ Piece already ended, stopping calibration iterations');
-        // Use best result so far if any
         if (iterationResults.length > 0) {
             const bestIteration = iterationResults.reduce((best, current) =>
                 (current.stdDev < best.stdDev) ? current : best, iterationResults[0]);
@@ -1964,7 +1963,7 @@ function evaluateIteration() {
     let pillarDelayEstimate = null;
     let pillarSampleCount = 0;
     let allPillarEstimates = [];
-    let allPillarSamples = []; // Collect all raw pillar samples for std dev
+    let allPillarSamples = [];
 
     for (let [pillarId, samples] of pillarDelays.entries()) {
         if (samples.length > 0) {
@@ -2008,51 +2007,31 @@ function evaluateIteration() {
     let finalDelay = null;
 
     if (pillarDelayEstimate !== null && neighborDelayEstimate !== null) {
-        // Both available - weight by confidence (lower stdDev = higher confidence)
-        const pillarConfidence = 1.0; // Pillars are fixed, always high confidence
+        const pillarConfidence = 1.0;
         const neighborConfidence = Math.max(0, Math.min(1, 1 - (stdDev / 100)));
-
         finalDelay = (pillarDelayEstimate * pillarConfidence + neighborDelayEstimate * neighborConfidence) /
                      (pillarConfidence + neighborConfidence);
         log(`📊 Combined estimate: pillar=${pillarDelayEstimate.toFixed(1)}ms (conf=${pillarConfidence.toFixed(2)}), neighbor=${neighborDelayEstimate.toFixed(1)}ms (conf=${neighborConfidence.toFixed(2)}) → final=${finalDelay.toFixed(1)}ms`);
-
     } else if (pillarDelayEstimate !== null) {
-        // Only pillar data
         finalDelay = pillarDelayEstimate;
         log(`📊 Pillar-only estimate: ${finalDelay.toFixed(1)}ms`);
-
     } else if (neighborDelayEstimate !== null) {
-        // Only neighbor data
         finalDelay = neighborDelayEstimate;
         log(`📊 Neighbor-only estimate: ${finalDelay.toFixed(1)}ms`);
-
     } else {
-        // No data - retry
         log(`⚠️ No calibration data this iteration, retrying`);
         scheduleIterationRetry();
         return;
     }
 
-    // Clamp speaker delay to reasonable range
-    const MIN_SPEAKER_DELAY = -50;
-    const MAX_SPEAKER_DELAY = 200;
-    const originalDelay = finalDelay;
-
-    if (finalDelay < MIN_SPEAKER_DELAY || finalDelay > MAX_SPEAKER_DELAY) {
-        log(`⚠️ Unreasonable speaker delay: ${finalDelay.toFixed(1)}ms, clamping to range [${MIN_SPEAKER_DELAY}, ${MAX_SPEAKER_DELAY}]`);
-        finalDelay = Math.max(MIN_SPEAKER_DELAY, Math.min(MAX_SPEAKER_DELAY, finalDelay));
-        log(`   Clamped: ${originalDelay.toFixed(1)}ms → ${finalDelay.toFixed(1)}ms`);
-    }
+    // No clamping - let the value be what it is (typically 0-200ms)
 
     // Update calibrated speaker delay with smoothing
     if (calibratedSpeakerDelay === null) {
         calibratedSpeakerDelay = finalDelay;
     } else {
-        // Smooth update - 70% new, 30% old
         calibratedSpeakerDelay = calibratedSpeakerDelay * 0.3 + finalDelay * 0.7;
     }
-
-    // DO NOT push into selfSamples - keep measurement streams separate!
 
     document.getElementById('debug-speaker-delay').innerText = calibratedSpeakerDelay.toFixed(1) + 'ms';
     document.getElementById('debug-samples').innerText = selfSamples.length;
@@ -2093,7 +2072,6 @@ function evaluateIteration() {
     const hasPillarData = pillarSampleCount >= 4;
     const isPillarStable = pillarStdDev < HAPPY_STDDEV_THRESHOLD && hasPillarData;
 
-    // FIX: Use pillar-specific stability check for single-device case
     if ((isStable && isSynced && calibrationIteration >= 2) ||
         (isPillarStable && calibrationIteration >= 1)) {
         calibrationComplete = true;
@@ -2130,8 +2108,6 @@ function evaluateIteration() {
         }
 
         if (currentIterationTimeout) clearTimeout(currentIterationTimeout);
-
-        // Stop the calibration check interval if running
         if (window.calibrationCheckInterval) clearInterval(window.calibrationCheckInterval);
 
         return;
@@ -2143,7 +2119,6 @@ function evaluateIteration() {
 
         if (currentIterationTimeout) clearTimeout(currentIterationTimeout);
         currentIterationTimeout = setTimeout(() => {
-            // Clean up current playback state (but don't restart audio)
             activeAudioCues.forEach(cue => { if (cue.source) try { cue.source.stop(); } catch(e) {} });
             activeAudioCues = [];
             activeTimeouts.forEach(timeout => clearTimeout(timeout));
@@ -2151,8 +2126,6 @@ function evaluateIteration() {
 
             log(`⏸️ Pausing ${iterationPauseMs/1000}s before next iteration...`);
 
-            // FIX: Do NOT restart playback - the tuning movement plays once and runs to completion
-            // Just run the next calibration iteration which will re-evaluate the existing measurements
             setTimeout(() => {
                 runCalibrationIteration();
             }, iterationPauseMs);
@@ -2160,7 +2133,6 @@ function evaluateIteration() {
             currentIterationTimeout = null;
         }, 2000);
     } else {
-        // Max iterations reached
         const bestIteration = iterationResults.reduce((best, current) =>
             (current.stdDev < best.stdDev) ? current : best, iterationResults[0]);
 
@@ -2409,7 +2381,6 @@ function processSelfMeasurement(speakerDelay, reportedAt, reporterId) {
     selfSamples.push(speakerDelay);
     if (selfSamples.length > MAX_SELF_SAMPLES) selfSamples.shift();
 
-    // Update display
     const median = calculateMedian(selfSamples);
     document.getElementById('debug-speaker-delay').innerText = median.toFixed(1) + 'ms';
     document.getElementById('debug-samples').innerText = selfSamples.length;
@@ -2434,26 +2405,20 @@ function processPillarReferenceDetection(now, pillarRefEnergy) {
     } else {
         const sorted = [...pillarRefBaselineSamples].sort((a, b) => a - b);
         pillarRefBaseline = sorted[Math.floor(sorted.length / 2)];
-        // Keep a rolling window
         pillarRefBaselineSamples.shift();
         pillarRefBaselineSamples.push(pillarRefEnergy);
     }
 
     const threshold = pillarRefBaseline * BASELINE_THRESHOLD_MULTIPLIER;
 
-    // Find all pillar notes that should be playing now (reference notes, after Phase 1)
     const candidatePillarNotes = pillarNoteSchedule.filter(note => {
-        // Only listen for reference notes AFTER Phase 1 calibration windows
         if (note.ms_offset < phase1EndMs) return false;
-
-        const expectedTime = note.ms_offset;
-        const timeDiff = Math.abs(songPosition - expectedTime);
-        return timeDiff <= 500; // 500ms window for pillar reference
+        const timeDiff = Math.abs(songPosition - note.ms_offset);
+        return timeDiff <= 500;
     });
 
     if (candidatePillarNotes.length === 0) return;
 
-    // FIX: Pick only the closest note to current song position
     const closest = candidatePillarNotes.reduce((best, note) =>
         Math.abs(songPosition - note.ms_offset) < Math.abs(songPosition - best.ms_offset)
         ? note : best
@@ -2464,31 +2429,31 @@ function processPillarReferenceDetection(now, pillarRefEnergy) {
 
     if (processedMeasurements.has(noteKey)) return;
 
-    // Check if energy exceeds threshold (using pillar-specific energy)
     if (pillarRefEnergy > threshold) {
         const expectedTimeAbs = tuningStartTime + closest.ms_offset;
         const rawDelay = now - expectedTimeAbs;
 
         const propagationMs = pillarDistanceMap.get(pillarId) || 0;
-        const speakerDelayEstimate = rawDelay - (myMicDelayMs || 0) - propagationMs;
+        const pillarSpeakerDelay = pillarConfig[pillarId]?.speakerDelayMs || 0;
 
-        // Sanity check - reject unrealistic values
-        if (Math.abs(speakerDelayEstimate) < 500) {
-            log(`🎯 Pillar reference: ${pillarId} note ${closest.index} → pillarEnergy=${pillarRefEnergy.toFixed(4)}, raw=${rawDelay.toFixed(1)}ms, prop=${propagationMs.toFixed(1)}ms, speaker=${speakerDelayEstimate.toFixed(1)}ms (iter ${calibrationIteration})`);
+        // rawDelay = pillarSpeakerDelay + propagationMs + myMicDelayMs + patronSpeakerDelay
+        const patronSpeakerDelay = rawDelay - (myMicDelayMs || 0) - propagationMs - pillarSpeakerDelay;
+
+        if (Math.abs(patronSpeakerDelay) < 500) {
+            log(`🎯 Pillar reference: ${pillarId} note ${closest.index} → pillarEnergy=${pillarRefEnergy.toFixed(4)}, raw=${rawDelay.toFixed(1)}ms, pillarSpkr=${pillarSpeakerDelay}ms, prop=${propagationMs.toFixed(1)}ms, patronSpkr=${patronSpeakerDelay.toFixed(1)}ms (iter ${calibrationIteration})`);
 
             if (!pillarDelays.has(pillarId)) {
                 pillarDelays.set(pillarId, []);
             }
-            pillarDelays.get(pillarId).push(speakerDelayEstimate);
+            pillarDelays.get(pillarId).push(patronSpeakerDelay);
 
             let samples = pillarDelays.get(pillarId);
-            // Keep last 20 samples per pillar
             if (samples.length > 20) samples.shift();
             pillarDelays.set(pillarId, samples);
 
             processedMeasurements.add(noteKey);
         } else {
-            log(`⚠️ Pillar reference rejected: speaker delay ${speakerDelayEstimate.toFixed(1)}ms out of range`);
+            log(`⚠️ Pillar reference rejected: patron speaker delay ${patronSpeakerDelay.toFixed(1)}ms out of range`);
         }
     }
 }
@@ -2543,10 +2508,7 @@ function detectNeighborNotes() {
     recordSpectrum(now, piccoloEnergy, dominantFreq);
 
     if (noteSchedule && noteSchedule.length > 0 && tuningStartTime) {
-        // Process neighbor detections (uses piccolo energy)
         processDetectionWindows(now, piccoloEnergy, dominantFreq, ratioToBaseline);
-
-        // Process pillar reference detections (uses pillar reference energy)
         processPillarReferenceDetection(now, pillarRefEnergy);
     }
 
@@ -2630,7 +2592,16 @@ function processDetectionWindows(now, avgEnergy, dominantFreq, ratioToBaseline) 
 async function reportMeasurement(noteIndex, playingSeatId, speakerDelay, rawDelay, propagationMs, detectionTime) {
     try {
         const now = Date.now() + serverOffset;
-        const timingError = rawDelay - propagationMs - (myMicDelayMs || 0);
+
+        let timingError;
+        if (playingSeatId.startsWith('PILLAR_')) {
+            const pillarMicDelay = pillarConfig[playingSeatId]?.micDelayMs || 0;
+            // For pillar listening to patron: rawDelay = patronSpeakerDelay + propagationMs + pillarMicDelay
+            timingError = rawDelay - propagationMs - pillarMicDelay;
+        } else {
+            timingError = rawDelay - propagationMs - (myMicDelayMs || 0);
+        }
+
         await db.ref(`measurements/${noteIndex}/reporters/${mySeat.id}`).set({
             targetSeatId: playingSeatId,
             reporterSeatId: mySeat.id,
@@ -2639,6 +2610,8 @@ async function reportMeasurement(noteIndex, playingSeatId, speakerDelay, rawDela
             rawDelay: Math.round(rawDelay),
             propagationMs: Math.round(propagationMs),
             micDelayMs: myMicDelayMs || 0,
+            pillarSpeakerDelay: playingSeatId.startsWith('PILLAR_') ? (pillarConfig[playingSeatId]?.speakerDelayMs || 0) : undefined,
+            pillarMicDelay: playingSeatId.startsWith('PILLAR_') ? (pillarConfig[playingSeatId]?.micDelayMs || 0) : undefined,
             reportedAt: now,
             detectedAt: detectionTime,
             noteIndex: noteIndex,
@@ -2646,7 +2619,8 @@ async function reportMeasurement(noteIndex, playingSeatId, speakerDelay, rawDela
             estimatedDelay: Math.round(estimatedDeviceDelayMs),
             adaptiveWindow: Math.round(adaptiveWindowMs)
         });
-        log(`📝 Reported for note ${noteIndex} to ${playingSeatId}: ${timingError > 0 ? '+' : ''}${timingError.toFixed(1)}ms`);
+
+        log(`📝 Reported for note ${noteIndex} to ${playingSeatId}: timingError=${timingError > 0 ? '+' : ''}${timingError.toFixed(1)}ms`);
 
         const summaryRef = db.ref(`measurements/summary/${playingSeatId}`);
         summaryRef.transaction(current => {
@@ -2946,7 +2920,6 @@ document.getElementById('ready-btn').onclick = async () => {
         if (cue.action === 'KILL') { log("💀 KILL signal received - reloading"); location.reload(); }
         else if (cue.action === 'GO') handleMovementStart(cue);
         else if (cue.type === 'TUNING_MOVEMENT') {
-            // Prevent duplicate playback
             if (tuningPlaybackStarted) {
                 log(`⚠️ Tuning playback already started, skipping duplicate`);
                 return;
@@ -2989,12 +2962,12 @@ document.head.appendChild(flashStyle);
 
 window.onload = async () => {
     syncClock();
-    await loadPillarConfig();        // loads coordinates only
+    await loadPillarConfig();
     await loadPiccoloAssetUrls();
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     const idOk = await resolveIdentity();
     const neighborOk = await loadNeighborMap();
-    computePillarDistances();        // now mySeat is known
+    computePillarDistances();
     const assetsOk = await preloadAssets();
     if (idOk && mySeat) initLogging();
     if (idOk && neighborOk && assetsOk) {
