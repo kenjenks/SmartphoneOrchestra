@@ -658,30 +658,36 @@ Operational SOP for Admin:
 
                     log(`Uploading tuning config with ${data.piano_notes.length} notes...`);
 
-                    // Upload to both locations for compatibility
+                    // Check if pillar_notes exists
+                    if (data.pillar_notes && data.pillar_notes.length > 0) {
+                        log(`📡 Found ${data.pillar_notes.length} pillar notes in config`);
+                    } else {
+                        log(`⚠️ No pillar_notes found in tuning_mode.json - Phase 1 calibration may fail`);
+                    }
+
+                    // Check for pillar_cal_windows
+                    if (data.metadata?.pillar_cal_windows && data.metadata.pillar_cal_windows.length > 0) {
+                        log(`🎯 Found ${data.metadata.pillar_cal_windows.length} pillar calibration windows`);
+                    }
+
+                    // ONLY upload to tuning_mode - DO NOT create tuning/current placeholder
                     await db.ref('tuning_mode').set(data);
 
-                    // Also create the tuning/current structure that devicedist.html expects
-                    const currentTuning = {
-                        status: 'ACTIVE',
-                        startTime: Date.now(),
-                        generatedAt: Date.now(),
-                        piccoloUrl: data.assets?.piccolo || data.metadata?.source_audio_url,
+                    // Also store a separate reference to the assets for quick access (optional)
+                    await db.ref('tuning/assets').set({
+                        piccolo: data.assets?.piccolo || data.metadata?.source_audio_url,
+                        test_pulse: data.assets?.test_pulse || data.metadata?.test_pulse_url,
                         pillars: data.assets?.pillars || {
                             FL: data.metadata?.source_audio_FL,
                             FR: data.metadata?.source_audio_FR,
                             BL: data.metadata?.source_audio_BL,
                             BR: data.metadata?.source_audio_BR
                         },
-                        schedule: [], // Will be populated when tuning starts
-                        deviceOrder: [],
-                        activeDevices: [],
-                        deviceCount: 0
-                    };
+                        has_pillar_notes: !!(data.pillar_notes && data.pillar_notes.length > 0),
+                        pillar_notes_count: data.pillar_notes?.length || 0
+                    });
 
-                    await db.ref('tuning/current').set(currentTuning);
-
-                    log("SUCCESS: Tuning configuration uploaded.");
+                    log("SUCCESS: Tuning configuration uploaded. Ready for conductor to start tuning.");
                 } catch (err) { log(`ERROR: ${err.message}`); }
             };
             reader.readAsText(file);
@@ -754,11 +760,11 @@ Operational SOP for Admin:
 
                 const updates = {};
 
-                // List of realtime paths to wipe
+                // List of realtime paths to wipe (static configs are preserved)
                 const realtimePaths = [
                     'devices',
-                    'tuning/current',
-                    'tuning/last_heard', // Legacy, but clean it
+                    'tuning/current',      // Clear current tuning session, but NOT tuning_mode
+                    'tuning/last_heard',   // Legacy, but clean it
                     'measurements',
                     'show/currentCue',
                     'survey_results'
