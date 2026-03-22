@@ -342,6 +342,8 @@ devicedist.html: Feature List
     // GLOBAL STATE VARIABLES AND CONSTANTS
     // ============================================================================
 
+    let pillarPlaybackStarted = false;
+
     // --- AUDIO AND MICROPHONE STATE ---
     let audioCtx = null;
     let mySeat = null;
@@ -1107,7 +1109,7 @@ function calculateMedian(values) {
     }
 }
 
-// --- TUNING SCHEDULE HANDLER (UPDATED with stale schedule detection) ---
+// --- TUNING SCHEDULE HANDLER ---
 function initTuningListener() {
     db.ref('tuning/current').on('value', snap => {
         const schedule = snap.val();
@@ -1115,7 +1117,7 @@ function initTuningListener() {
         const now = Date.now() + serverOffset;
         log(`🎵 Tuning listener triggered at server time: ${new Date(now).toLocaleTimeString()}.${String(now % 1000).padStart(3, '0')}`);
 
-        if (schedule && schedule.status === 'ACTIVE') {
+        if (!pillarPlaybackStarted && (schedule && schedule.status === 'ACTIVE')) {
             calibrationMode = true;
             currentTuningSchedule = schedule;
 
@@ -1255,7 +1257,6 @@ function initTuningListener() {
                 log(`🏛️ Pillar received startTime: ${schedule.startTime} (${new Date(schedule.startTime).toLocaleTimeString()})`);
                 log(`🏛️ ${mySeat.id} is a pillar - skipping calibration loop, using known delays`);
 
-
                 // Set delays from pillar config if available
                 if (pillarConfig[mySeat.id]) {
                     calibratedSpeakerDelay = pillarConfig[mySeat.id].speakerDelayMs || 0;
@@ -1278,6 +1279,7 @@ function initTuningListener() {
                     phase1Complete = true;
                     calibrationComplete = true;
                 }
+
                 return; // Exit early - no calibration loop for pillars
             }
 
@@ -1308,6 +1310,21 @@ function initTuningListener() {
             disableMicrophone();
 
             log("🎯 Tuning mode deactivated");
+        }
+
+        // Only disable the button once, after tuning has been processed
+        if (!pillarPlaybackStarted) {
+            pillarPlaybackStarted = true;
+
+            // Disable START PICCOLO button on the conductor
+            const startTuningBtn = document.getElementById('start-tuning-btn');
+            if (startTuningBtn && startTuningBtn.disabled === false) {
+                startTuningBtn.disabled = true;
+                startTuningBtn.textContent = '✅ PICCOLO COMPLETE';
+                startTuningBtn.style.background = '#1e4d1e';
+                startTuningBtn.style.color = '#8bc34a';
+                log(`🔘 START PICCOLO button disabled (tuning completed once)`, 'info');
+            }
         }
     });
 }
