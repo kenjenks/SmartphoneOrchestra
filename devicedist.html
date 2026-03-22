@@ -342,6 +342,7 @@ devicedist.html: Feature List
     // GLOBAL STATE VARIABLES AND CONSTANTS
     // ============================================================================
 
+    let tuningPlaybackStarted = false;          // Tracks if playTuningMovement() has been called
     let pillarPlaybackStarted = false;
     let pillarReferenceDetections = new Map();  // Track detections from pillars
     let pillarDelays = new Map();               // Store delay estimates from each pillar
@@ -1282,7 +1283,7 @@ function initTuningListener() {
                 PICCOLO_URL = schedule.piccoloUrl;
             }
 
-            // Skip iterative calibration for pillars - they already know their delays
+            // Handle pillars - they already know their delays
             if (mySeat.id.startsWith('PILLAR_')) {
                 log(`🏛️ Pillar received startTime: ${schedule.startTime} (${new Date(schedule.startTime).toLocaleTimeString()})`);
                 log(`🏛️ ${mySeat.id} is a pillar - skipping calibration loop, using known delays`);
@@ -1309,6 +1310,7 @@ function initTuningListener() {
                     calibrationComplete = true;
                 }
 
+                // Start pillar playback
                 if (!pillarPlaybackStarted && PICCOLO_URL) {
                     const nowWall = Date.now() + serverOffset;
                     const startDelay = schedule.startTime - nowWall - calibratedSpeakerDelay - myMicDelayMs;
@@ -1339,7 +1341,7 @@ function initTuningListener() {
             return;
 
         } else {
-            // Only run cleanup if we're not already in an active session
+            // Only run cleanup if we're actually in calibration mode
             if (calibrationMode) {
                 calibrationMode = false;
                 currentTuningSchedule = null;
@@ -1347,6 +1349,9 @@ function initTuningListener() {
                 expectedNoteMap.clear();
                 phase1WindowActive = false;
                 calibrationComplete = false;
+
+                // Reset playback flag when tuning ends
+                pillarPlaybackStarted = false;
 
                 if (reportListenerActive) {
                     reportListenerActive = false;
@@ -2823,8 +2828,23 @@ document.getElementById('ready-btn').onclick = async () => {
         if (!cue) return;
         if (cue.action === 'KILL') { log("💀 KILL signal received - reloading"); location.reload(); }
         else if (cue.action === 'GO') handleMovementStart(cue);
-        else if (cue.type === 'TUNING_MOVEMENT') { calibrationMode = true; playTuningMovement(cue); }
-        else if (cue.type === 'AUDIO' && cue.metadata?.purpose === 'seat_test') { if (cue.metadata.seatId === mySeat.id) handleSeatTest(cue); }
+        else if (cue.type === 'TUNING_MOVEMENT') {
+        // Prevent duplicate playback for pillars, but allow patrons
+        if (mySeat.id.startsWith('PILLAR_') && tuningPlaybackStarted) {
+            log(`🏛️ Pillar tuning playback already started, skipping duplicate`);
+            return;
+        }
+        if (!mySeat.id.startsWith('PILLAR_') && tuningPlaybackStarted) {
+            log(`⚠️ Patron tuning playback already started, skipping duplicate`);
+            return;
+        }
+        calibrationMode = true;
+        playTuningMovement(cue);
+        tuningPlaybackStarted = true;
+    }
+    else if (cue.type === 'AUDIO' && cue.metadata?.purpose === 'seat_test') {
+        if (cue.metadata.seatId === mySeat.id) handleSeatTest(cue);
+    }
     });
     initTuningListener();
     initSelfCalibrationListener();
