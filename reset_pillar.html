@@ -417,11 +417,26 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
             return false;
         }
 
-        // Load pillar data from the 'pillars' object
-        pillarData = config.pillars;
-        pillarOrder = config.pillarOrder || allPillars;
+        // Convert array to object keyed by id
+        pillarData = {};
+        for (let p of config.pillars) {
+            pillarData[p.id] = {
+                id: p.id,
+                label: p.label,
+                x: p.x,
+                y: p.y,
+                preferred_freq: p.preferred_freq || 440,
+                stagger: p.stagger || 0,
+                audioUrl: p.audioUrl,
+                speakerDelayMs: p.speakerDelayMs ?? null,
+                micDelayMs: p.micDelayMs ?? null
+            };
+        }
 
-        // Verify all required fields exist
+        pillarOrder = config.pillarOrder || Object.keys(pillarData);
+        speedOfSound = config.speed_of_sound || 344;
+
+        // Verify all required fields
         for (let id of pillarOrder) {
             const p = pillarData[id];
             if (!p) {
@@ -431,11 +446,6 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
             if (!p.audioUrl) {
                 addLog(`⚠️ Missing audioUrl for ${id}`, 'warn');
                 return false;
-            }
-            if (!p.testFreq) {
-                p.testFreq = (id === 'PILLAR_FL') ? 440 :
-                             (id === 'PILLAR_FR') ? 523 :
-                             (id === 'PILLAR_BR') ? 659 : 784;
             }
         }
 
