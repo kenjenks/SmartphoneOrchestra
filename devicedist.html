@@ -1225,6 +1225,7 @@ function calculateMedian(values) {
 }
 
 // --- TUNING SCHEDULE HANDLER ---
+// SECTION 2 (continued) - TUNING SCHEDULE HANDLER
 function initTuningListener() {
     db.ref('tuning/current').on('value', snap => {
         const schedule = snap.val();
@@ -1232,6 +1233,12 @@ function initTuningListener() {
         const now = Date.now() + serverOffset;
         const timeStr = new Date(now).toISOString().substr(11, 12);
         log(`🎵 Tuning listener triggered at server time: ${timeStr}.${String(now % 1000).padStart(3, '0')}`);
+
+        // EARLY EXIT: If tuning playback has already started, ignore this trigger
+        if (tuningPlaybackStarted) {
+            log(`⚠️ Tuning playback already started, skipping duplicate tuning/current trigger`);
+            return;
+        }
 
         if (!pillarPlaybackStarted && (schedule && schedule.status === 'ACTIVE')) {
             // Validate startTime is reasonable
@@ -1264,8 +1271,6 @@ function initTuningListener() {
             iterationResults = [];
             previousTimingErrors = [];
             calibrationStartTime = Date.now() + serverOffset;
-
-
 
             // RESET FEEDBACK LOOP STATE
             incomingTimingErrors = [];
@@ -1352,13 +1357,13 @@ function initTuningListener() {
             myMicDelayMs = null;
             currentPillarWindowIndex = 0;
 
-            if (pillarWindows.length > 0 && pillarNoteSchedule.length > 0) {
-                // Set initial estimate BEFORE Phase 1 starts (so it's ready if Phase 1 fails)
-                if (myMicDelayMs === null && typeof estimatedMicDelayMs !== 'undefined' && estimatedMicDelayMs !== null) {
-                    myMicDelayMs = estimatedMicDelayMs;
-                    log(`📊 Using initial mic delay estimate: ${myMicDelayMs}ms (will refine in Phase 1)`);
-                }
+            // Set initial mic delay estimate if available
+            if (myMicDelayMs === null && typeof estimatedMicDelayMs !== 'undefined' && estimatedMicDelayMs !== null) {
+                myMicDelayMs = estimatedMicDelayMs;
+                log(`📊 Using initial mic delay estimate: ${myMicDelayMs}ms (will refine in Phase 1)`);
+            }
 
+            if (pillarWindows.length > 0 && pillarNoteSchedule.length > 0) {
                 currentPillarWindow = pillarWindows[0];
                 const windowStartAbs = tuningStartTime + currentPillarWindow.start_ms;
                 const windowEndAbs = tuningStartTime + currentPillarWindow.end_ms;
@@ -1385,8 +1390,9 @@ function initTuningListener() {
                         phase1WindowActive = false;
                         phase1Complete = true;
                         if (micDelaySamples.length === 0) {
-                            myMicDelayMs = 0;
-                            log(`⚠️ Phase 1 window closed with no samples - using 0ms mic delay`);
+                            // Use estimate if available, otherwise 0
+                            myMicDelayMs = (typeof estimatedMicDelayMs !== 'undefined' && estimatedMicDelayMs !== null) ? estimatedMicDelayMs : 0;
+                            log(`⚠️ Phase 1 window closed with no samples - using ${myMicDelayMs === 0 ? 'fallback' : 'initial estimate'} mic delay: ${myMicDelayMs}ms`);
                         } else {
                             const sorted = [...micDelaySamples].sort((a, b) => a - b);
                             myMicDelayMs = sorted[Math.floor(sorted.length / 2)];
@@ -1459,9 +1465,7 @@ function initTuningListener() {
                 return;
             }
 
-            // For patron devices - process schedule but DO NOT set pillarPlaybackStarted
-            // The flag remains false so that show/currentCue listener can call playTuningMovement()
-
+            // For patron devices - process schedule
             // Reset pillar reference baseline for this tuning session
             pillarRefBaseline = 0;
             pillarRefBaselineSamples = [];
@@ -1472,8 +1476,10 @@ function initTuningListener() {
             // Start iterative calibration (only for patron devices)
             startIterativeCalibration();
 
-            // IMPORTANT: Do NOT set pillarPlaybackStarted for patrons
-            // pillarPlaybackStarted remains false so the show/currentCue listener can trigger
+            // IMPORTANT: Set tuningPlaybackStarted to prevent duplicate triggers
+            tuningPlaybackStarted = true;
+
+            // Note: pillarPlaybackStarted remains false for patrons
             return;
 
         } else {
@@ -1485,8 +1491,6 @@ function initTuningListener() {
                 expectedNoteMap.clear();
                 phase1WindowActive = false;
                 calibrationComplete = false;
-
-                // DO NOT reset flags - they persist to prevent re-running tuning
 
                 if (reportListenerActive) {
                     reportListenerActive = false;
