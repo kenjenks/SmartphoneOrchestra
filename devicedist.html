@@ -399,7 +399,7 @@ devicedist.html: Feature List
 
     // --- ADAPTIVE DELAY LEARNING ---
     let estimatedDeviceDelayMs = 261;        // Start with known value from a Google Pixel 6
-    let estimatedMicDelayMs = 13;            // Start with known value from a Google Pixel 6
+    let estimatedMicDelayMs = 6;             // Start with known value from a Google Pixel 6
     let delayMeasurements = [];              // Store successful measurements
     let adaptiveWindowMs = 1000;             // Start with 1s window
     let consecutiveMisses = 0;               // Track misses for window adaptation
@@ -2441,7 +2441,12 @@ function processPillarReferenceDetection(now, pillarRefEnergy) {
     if (processedMeasurements.has(noteKey)) return;
 
     if (pillarRefEnergy > threshold) {
-        const expectedTimeAbs = tuningStartTime + closest.ms_offset;
+        // Use calibrated delay if available, otherwise fall back to initial estimate
+        const speakerDelayForAdjustment = (calibratedSpeakerDelay !== null)
+            ? calibratedSpeakerDelay
+            : estimatedDeviceDelayMs;
+
+        const expectedTimeAbs = tuningStartTime + closest.ms_offset - speakerDelayForAdjustment;
         const rawDelay = now - expectedTimeAbs;
 
         const propagationMs = pillarDistanceMap.get(pillarId) || 0;
