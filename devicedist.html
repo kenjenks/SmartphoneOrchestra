@@ -2720,15 +2720,35 @@ async function requestWakeLock() {
 }
 
 // --- MOVEMENT HANDLER ---
+// SECTION 6 - SHOW PLAYBACK (continued)
 function handleMovementStart(cue) {
-    if (!cue.startTime || !cue.movement || !cue.cues) { log("❌ Invalid GO signal"); return; }
+    if (!cue.startTime || !cue.movement || !cue.cues) {
+        log("❌ Invalid GO signal");
+        return;
+    }
+
+    // Log the speaker delay being used for show playback
+    const speakerDelayMs = calibratedSpeakerDelay !== null ? calibratedSpeakerDelay : 0;
+    const micDelayMs = myMicDelayMs !== null ? myMicDelayMs : 0;
+    const totalDelayMs = speakerDelayMs + micDelayMs;
+
+    log(`🎬 MOVEMENT START: "${cue.movement}"`);
+    log(`   Speaker delay = ${speakerDelayMs.toFixed(1)}ms, Mic delay = ${micDelayMs.toFixed(1)}ms, Total = ${totalDelayMs.toFixed(1)}ms`);
+    log(`   Scheduled start: ${new Date(cue.startTime).toISOString().substr(11, 12)}.${String(cue.startTime % 1000).padStart(3, '0')}`);
+    log(`   Adjusted start: ${new Date(cue.startTime - totalDelayMs).toISOString().substr(11, 12)}.${String((cue.startTime - totalDelayMs) % 1000).padStart(3, '0')}`);
+
     clearAllScheduledCues();
+
     currentMovement = cue.movement;
     movementStartTime = cue.startTime;
     movementBuffer = cue.bufferMs / 1000 || 1.0;
+
     document.getElementById('movement-indicator').innerText = `🎭 ${currentMovement} (buffer: ${movementBuffer}s)`;
     log(`🎬 Movement "${currentMovement}" starting at ${new Date(movementStartTime).toISOString()}`);
-    if (cue.cues) scheduleTimelineCues(cue.cues);
+
+    if (cue.cues) {
+        scheduleTimelineCues(cue.cues);
+    }
 }
 
 function clearAllScheduledCues() {
