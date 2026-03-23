@@ -931,6 +931,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         const offsetX = (canvas.width - (maxX - minX) * scale) / 2 - minX * scale;
         const offsetY = (canvas.height - (maxY - minY) * scale) / 2 - minY * scale;
 
+        // Draw stage area
         ctx.strokeStyle = '#333';
         ctx.lineWidth = 2;
         ctx.strokeRect(minX * scale + offsetX, minY * scale + offsetY,
@@ -951,24 +952,39 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             const status = deviceInfo?.status || 'OFFLINE';
             const isPillar = seat.id.startsWith('PILLAR_');
 
+            // Determine color based on status and device type
             if (isPillar) {
-                ctx.fillStyle = '#8844cc';
-            } else if (status === 'HAPPY') {
-                ctx.fillStyle = '#00ffcc';
-            } else if (status === 'CALIBRATING' || status === 'SYNCING') {
-                ctx.fillStyle = '#ffcc00';
-            } else if (status === 'DEAD' || (deviceInfo && deviceInfo.lastSeen && (Date.now() + serverOffset - deviceInfo.lastSeen > HEARTBEAT_TIMEOUT_MS))) {
-                ctx.fillStyle = '#ff4444';
-            } else if (status === 'ACTIVE') {
-                ctx.fillStyle = '#00ffcc';
+                // Pillars: use status-based colors, but with a distinct green shade
+                if (status === 'HAPPY' || status === 'ACTIVE') {
+                    ctx.fillStyle = '#44ff88';   // Lighter green for active pillars
+                } else if (status === 'CALIBRATING' || status === 'SYNCING') {
+                    ctx.fillStyle = '#ffcc00';   // Yellow
+                } else if (status === 'DEAD' || (deviceInfo && deviceInfo.lastSeen && (Date.now() + serverOffset - deviceInfo.lastSeen > HEARTBEAT_TIMEOUT_MS))) {
+                    ctx.fillStyle = '#ff4444';   // Red
+                } else {
+                    ctx.fillStyle = '#8844cc';   // Purple for offline pillars
+                }
             } else {
-                ctx.fillStyle = '#333';
+                // Patron devices: use standard color scheme
+                if (status === 'HAPPY') {
+                    ctx.fillStyle = '#00ffcc';   // Green
+                } else if (status === 'CALIBRATING' || status === 'SYNCING') {
+                    ctx.fillStyle = '#ffcc00';   // Yellow
+                } else if (status === 'DEAD' || (deviceInfo && deviceInfo.lastSeen && (Date.now() + serverOffset - deviceInfo.lastSeen > HEARTBEAT_TIMEOUT_MS))) {
+                    ctx.fillStyle = '#ff4444';   // Red
+                } else if (status === 'ACTIVE') {
+                    ctx.fillStyle = '#00ffcc';   // Green
+                } else {
+                    ctx.fillStyle = '#333';      // Gray (offline)
+                }
             }
 
+            // Draw the seat dot
             ctx.beginPath();
             ctx.arc(screenX, screenY, isPillar ? 8 : 5, 0, Math.PI * 2);
             ctx.fill();
 
+            // Add seat label for front row seats (y < 10)
             if (seat.y < 10) {
                 ctx.fillStyle = '#888';
                 ctx.font = '8px Arial';
