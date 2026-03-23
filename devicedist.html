@@ -398,7 +398,8 @@ devicedist.html: Feature List
     const MAX_HISTORY_SAMPLES = SPECTRUM_HISTORY_SECONDS * SPECTRUM_SAMPLES_PER_SECOND;
 
     // --- ADAPTIVE DELAY LEARNING ---
-    let estimatedDeviceDelayMs = 1800;      // Start with known value
+    let estimatedDeviceDelayMs = 261;        // Start with known value from a Google Pixel 6
+    let estimatedMicDelayMs = 13;            // Start with known value from a Google Pixel 6
     let delayMeasurements = [];              // Store successful measurements
     let adaptiveWindowMs = 1000;             // Start with 1s window
     let consecutiveMisses = 0;               // Track misses for window adaptation
@@ -1264,6 +1265,8 @@ function initTuningListener() {
             previousTimingErrors = [];
             calibrationStartTime = Date.now() + serverOffset;
 
+
+
             // RESET FEEDBACK LOOP STATE
             incomingTimingErrors = [];
             processedTimingReports.clear();
@@ -1350,6 +1353,12 @@ function initTuningListener() {
             currentPillarWindowIndex = 0;
 
             if (pillarWindows.length > 0 && pillarNoteSchedule.length > 0) {
+                // Set initial estimate BEFORE Phase 1 starts (so it's ready if Phase 1 fails)
+                if (myMicDelayMs === null && typeof estimatedMicDelayMs !== 'undefined' && estimatedMicDelayMs !== null) {
+                    myMicDelayMs = estimatedMicDelayMs;
+                    log(`📊 Using initial mic delay estimate: ${myMicDelayMs}ms (will refine in Phase 1)`);
+                }
+
                 currentPillarWindow = pillarWindows[0];
                 const windowStartAbs = tuningStartTime + currentPillarWindow.start_ms;
                 const windowEndAbs = tuningStartTime + currentPillarWindow.end_ms;
@@ -1361,7 +1370,9 @@ function initTuningListener() {
             } else {
                 log(`⚠️ No pillar windows available - Phase 1 mic calibration will be skipped`);
                 phase1Complete = true;
-                myMicDelayMs = 0;
+                // Use estimate if available, otherwise 0
+                myMicDelayMs = (typeof estimatedMicDelayMs !== 'undefined' && estimatedMicDelayMs !== null) ? estimatedMicDelayMs : 0;
+                log(`📊 Using ${myMicDelayMs === 0 ? 'fallback' : 'initial estimate'} mic delay: ${myMicDelayMs}ms`);
             }
 
             if (pillarWindows.length > 0) {
