@@ -207,7 +207,7 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
     </h1>
     <div class="status-panel" id="main-status">
         <div class="flex-between">
-            <span><span class="status-led" id="state-led"></span> <span id="state-text">Loading...</span></span>
+            <span><span class="status-led" id="state-led"></span> <span id="state-text">Waiting for pillars</span></span>
             <span id="round-info" class="small-text"></span>
         </div>
         <div id="progress-detail" class="small-text" style="margin-top: 8px;"></div>
@@ -243,22 +243,17 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
     // --------------------------------------------------------------
     let myId = null;
     let allPillars = ['PILLAR_FL', 'PILLAR_FR', 'PILLAR_BR', 'PILLAR_BL'];
-    let pillarPositions = {};
+    let pillarData = {};           // keyed by pillar ID, contains all config
+    let pillarOrder = [];          // from config
     let audioCtx = null;
     let bufferCache = {};
     let calibrationActive = false;
     let currentRoundRobin = null;
-    let allResultsReady = false;
+
+    // Active test tone oscillators
     let activeTestTones = {};
 
     const SPEED_OF_SOUND = 343;
-
-    const PILLAR_FREQUENCIES = {
-        'PILLAR_FL': 440,
-        'PILLAR_FR': 523,
-        'PILLAR_BR': 659,
-        'PILLAR_BL': 784
-    };
 
     // UI elements
     const calibrateBtn = document.getElementById('calibrate-btn');
@@ -296,50 +291,21 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
         return (dist / SPEED_OF_SOUND) * 1000;
     }
 
-    // Create fallback pillar data if Firebase config not loaded yet
-    function getDefaultPillarData() {
-        const defaults = {};
-        const positions = {
-            'PILLAR_FL': { x: 0, y: 0 },
-            'PILLAR_FR': { x: 15.5, y: 0 },
-            'PILLAR_BR': { x: 15.5, y: 25 },
-            'PILLAR_BL': { x: 0, y: 25 }
-        };
-        for (let id of allPillars) {
-            defaults[id] = {
-                x: positions[id].x,
-                y: positions[id].y,
-                speakerDelayMs: null,
-                micDelayMs: null,
-                audioUrl: null,
-                testFreq: PILLAR_FREQUENCIES[id]
-            };
-        }
-        return defaults;
-    }
-
     function renderCards() {
         if (!pillarGrid) return;
-
-        // Use fallback data if pillarPositions is empty
-        const dataSource = Object.keys(pillarPositions).length > 0 ? pillarPositions : getDefaultPillarData();
-
         let html = '';
-        for (let id of allPillars) {
-            const info = dataSource[id] || {
-                x: 0, y: 0, speakerDelayMs: null, micDelayMs: null,
-                testFreq: PILLAR_FREQUENCIES[id]
-            };
+        for (let id of pillarOrder) {
+            const p = pillarData[id];
+            if (!p) continue;
             const isMe = (id === myId);
-            const speakerVal = (info.speakerDelayMs !== null && info.speakerDelayMs !== undefined) ? `${info.speakerDelayMs} ms` : '—';
-            const micVal = (info.micDelayMs !== null && info.micDelayMs !== undefined) ? `${info.micDelayMs} ms` : '—';
-            const freqVal = info.testFreq || PILLAR_FREQUENCIES[id];
+            const speakerVal = (p.speakerDelayMs !== null && p.speakerDelayMs !== undefined) ? `${p.speakerDelayMs} ms` : '—';
+            const micVal = (p.micDelayMs !== null && p.micDelayMs !== undefined) ? `${p.micDelayMs} ms` : '—';
+            const freqVal = p.testFreq || 440;
             const activeClass = (calibrationActive && currentRoundRobin?.currentPlayer === id) ? 'active' : '';
             const isTonePlaying = activeTestTones[id] ? true : false;
-
             html += `
                 <div class="pillar-card ${activeClass}" data-pillar="${id}">
-                    <div class="pillar-id">${id} ${isMe ? '📍 (this device)' : ''}</div>
+                    <div class="pillar-id">${p.label || id} ${isMe ? '📍' : ''}</div>
                     <div class="delay-row">🔊 Speaker: <span class="value" id="spk-${id}">${speakerVal}</span></div>
                     <div class="delay-row">🎤 Mic: <span class="value" id="mic-${id}">${micVal}</span></div>
                     <div class="delay-row">🎵 Test freq: <span class="value">${freqVal} Hz</span></div>
@@ -348,13 +314,12 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
                             ${isTonePlaying ? '🔊 Stop' : '▶️ Tone'}
                         </button>
                     </div>
-                    <div class="small-text" style="margin-top:5px;">📌 (${info.x?.toFixed(1) || '?'}, ${info.y?.toFixed(1) || '?'})</div>
+                    <div class="small-text">📌 (${p.x}, ${p.y})</div>
                 </div>
             `;
         }
         pillarGrid.innerHTML = html;
 
-        // Attach event listeners to test tone buttons
         document.querySelectorAll('.test-tone-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -368,8 +333,9 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
     function updateCardValue(pillarId, field, value) {
         const el = document.getElementById(`${field}-${pillarId}`);
         if (el) el.innerText = value;
-        if (pillarPositions[pillarId]) {
-            pillarPositions[pillarId][field === 'spk' ? 'speakerDelayMs' : 'micDelayMs'] = value;
+        if (pillarData[pillarId]) {
+            if (field === 'spk') pillarData[pillarId].speakerDelayMs = value;
+            else if (field === 'mic') pillarData[pillarId].micDelayMs = value;
         }
     }
 
@@ -390,7 +356,6 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
         await ensureAudioContext();
 
         if (activeTestTones[pillarId]) {
-            // Stop the tone
             const tone = activeTestTones[pillarId];
             try {
                 tone.gain.gain.setValueAtTime(tone.gain.gain.value, audioCtx.currentTime);
@@ -402,10 +367,9 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
                 }, 100);
             } catch(e) { /* ignore */ }
             delete activeTestTones[pillarId];
-            addLog(`🔇 Stopped test tone for ${pillarId} (${frequency} Hz)`, 'info');
+            addLog(`🔇 Stopped test tone for ${pillarId}`, 'info');
             renderCards();
         } else {
-            // Start new tone
             try {
                 const oscillator = audioCtx.createOscillator();
                 const gain = audioCtx.createGain();
@@ -416,7 +380,7 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
                 gain.connect(audioCtx.destination);
                 oscillator.start();
                 activeTestTones[pillarId] = { oscillator, gain };
-                addLog(`🔊 Playing test tone for ${pillarId} at ${frequency} Hz (click again to stop)`, 'success');
+                addLog(`🔊 Playing test tone for ${pillarId} at ${frequency} Hz`, 'success');
                 renderCards();
             } catch(e) {
                 addLog(`❌ Failed to start tone for ${pillarId}: ${e.message}`, 'warn');
@@ -443,88 +407,94 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
     }
 
     // --------------------------------------------------------------
-    //  LOAD PILLAR CONFIG
+    //  LOAD PILLAR CONFIG (single object per pillar)
     // --------------------------------------------------------------
-    async function loadPillarAssets() {
-        try {
-            const snap = await db.ref('pillar_config').once('value');
-            const config = snap.val();
-            if (config && config.pillars) {
-                for (let p of config.pillars) {
-                    pillarPositions[p.id] = {
-                        x: p.x,
-                        y: p.y,
-                        speakerDelayMs: p.speakerDelayMs ?? null,
-                        micDelayMs: p.micDelayMs ?? null,
-                        audioUrl: config.assets?.[p.id.replace('PILLAR_', '')] || null,
-                        testFreq: PILLAR_FREQUENCIES[p.id]
-                    };
-                }
-                addLog(`✅ Loaded pillar positions from Firebase`, 'success');
-            } else {
-                addLog(`⚠️ No pillar_config found, using default positions`, 'warn');
-                pillarPositions = getDefaultPillarData();
-            }
-        } catch(e) {
-            addLog(`⚠️ Failed to load pillar_config: ${e.message}`, 'warn');
-            pillarPositions = getDefaultPillarData();
+    async function loadPillarConfig() {
+        const snap = await db.ref('pillar_config').once('value');
+        const config = snap.val();
+        if (!config || !config.pillars) {
+            addLog('❌ No pillar_config found in Firebase', 'warn');
+            return false;
         }
+
+        // Load pillar data from the 'pillars' object
+        pillarData = config.pillars;
+        pillarOrder = config.pillarOrder || allPillars;
+
+        // Verify all required fields exist
+        for (let id of pillarOrder) {
+            const p = pillarData[id];
+            if (!p) {
+                addLog(`⚠️ Missing config for ${id}`, 'warn');
+                return false;
+            }
+            if (!p.audioUrl) {
+                addLog(`⚠️ Missing audioUrl for ${id}`, 'warn');
+                return false;
+            }
+            if (!p.testFreq) {
+                p.testFreq = (id === 'PILLAR_FL') ? 440 :
+                             (id === 'PILLAR_FR') ? 523 :
+                             (id === 'PILLAR_BR') ? 659 : 784;
+            }
+        }
+
+        addLog(`✅ Loaded ${pillarOrder.length} pillar configurations`, 'success');
         renderCards();
         return true;
     }
 
     async function preloadAudio(url, pillarId) {
-        if (!url || bufferCache[url]) return;
+        if (bufferCache[url]) return;
         try {
             const res = await fetch(url);
             const buf = await res.arrayBuffer();
             bufferCache[url] = await audioCtx.decodeAudioData(buf);
             addLog(`📦 Preloaded ${pillarId} tone`);
         } catch(e) {
-            addLog(`⚠️ Could not preload ${pillarId}: ${e.message}`, 'warn');
+            addLog(`❌ Failed to load audio for ${pillarId}: ${e.message}`, 'warn');
         }
     }
 
     // --------------------------------------------------------------
-    //  CHECK PRESENCE
+    //  CHECK PRESENCE (all pillars online)
     // --------------------------------------------------------------
     let allPillarsPresent = false;
     let presenceCheckInterval = null;
 
     async function checkAllPillarsOnline() {
-        try {
-            const snap = await db.ref('devices').once('value');
-            const devices = snap.val() || {};
-            const now = Date.now() + (window.serverOffset || 0);
-            const timeout = 12100;
-            let missing = [];
-            for (let id of allPillars) {
-                const dev = devices[id];
-                if (!dev || !dev.lastSeen || (now - dev.lastSeen) > timeout) missing.push(id);
+        const snap = await db.ref('devices').once('value');
+        const devices = snap.val() || {};
+        const now = Date.now() + (window.serverOffset || 0);
+        const timeout = 12100;
+        let missing = [];
+        for (let id of pillarOrder) {
+            const dev = devices[id];
+            if (!dev || !dev.lastSeen || (now - dev.lastSeen) > timeout) missing.push(id);
+        }
+        const allOnline = missing.length === 0;
+        if (allOnline !== allPillarsPresent) {
+            allPillarsPresent = allOnline;
+            if (allOnline) {
+                addLog(`✅ All ${pillarOrder.length} pillars are online — ready to calibrate`, 'success');
+                stateTextSpan.innerText = 'All pillars ready';
+                stateLed.className = 'status-led led-green';
+                calibrateBtn.disabled = false;
+            } else {
+                addLog(`⏳ Waiting for pillars: ${missing.join(', ')}`, 'warn');
+                stateTextSpan.innerText = `Waiting: ${missing.join(', ')}`;
+                stateLed.className = 'status-led led-red';
+                calibrateBtn.disabled = true;
             }
-            const allOnline = missing.length === 0;
-            if (allOnline !== allPillarsPresent) {
-                allPillarsPresent = allOnline;
-                if (allOnline) {
-                    addLog(`✅ All 4 pillars are online — ready to calibrate`, 'success');
-                    stateTextSpan.innerText = 'All pillars ready';
-                    stateLed.className = 'status-led led-green';
-                    calibrateBtn.disabled = false;
-                } else {
-                    addLog(`⏳ Waiting for pillars: ${missing.join(', ')}`, 'warn');
-                    stateTextSpan.innerText = `Waiting: ${missing.join(', ')}`;
-                    stateLed.className = 'status-led led-red';
-                    calibrateBtn.disabled = true;
-                }
-            }
-        } catch(e) {
-            addLog(`⚠️ Error checking pillar presence: ${e.message}`, 'warn');
         }
     }
 
     // --------------------------------------------------------------
-    //  ROUND-ROBIN CALIBRATION (simplified for now)
+    //  ROUND-ROBIN COORDINATION
     // --------------------------------------------------------------
+    const CAL_PATH = 'pillar_calibration';
+    let calRef = null;
+
     async function startRoundRobin() {
         if (calibrationActive) {
             addLog('Calibration already active', 'warn');
@@ -535,15 +505,202 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
             return;
         }
         stopAllTestTones();
-        addLog(`🔊 Round-robin calibration started by ${myId}`, 'success');
-        calibrationActive = true;
-        stateTextSpan.innerText = 'Calibrating...';
-        // Placeholder for actual calibration logic
+
+        await db.ref(CAL_PATH).remove();
+        const startTime = Date.now() + (window.serverOffset || 0) + 2000;
+        const initState = {
+            status: 'running',
+            currentPlayer: pillarOrder[0],
+            round: 0,
+            startTime: startTime,
+            measurements: {}
+        };
+        await db.ref(CAL_PATH).set(initState);
+        addLog(`🔊 Round-robin initiated by ${myId} — first player ${pillarOrder[0]}`, 'success');
+    }
+
+    function listenCalibration() {
+        calRef = db.ref(CAL_PATH);
+        calRef.on('value', async (snap) => {
+            const data = snap.val();
+            if (!data || data.status !== 'running') {
+                if (calibrationActive && (!data || data.status === 'complete')) {
+                    addLog('🏁 Calibration sequence finished — computing results', 'success');
+                    calibrationActive = false;
+                    computeAllDelays();
+                } else if (!data) {
+                    calibrationActive = false;
+                }
+                return;
+            }
+            calibrationActive = true;
+            const { currentPlayer, startTime, round } = data;
+            roundInfoSpan.innerText = `Round ${round+1}/${pillarOrder.length} · playing: ${currentPlayer}`;
+            progressDetail.innerText = `Next play at ${new Date(startTime).toLocaleTimeString()}`;
+            renderCards();
+
+            if (myId === currentPlayer && !window._scheduledPlay) {
+                window._scheduledPlay = true;
+                const now = Date.now() + (window.serverOffset || 0);
+                let delay = startTime - now - (pillarData[myId]?.speakerDelayMs || 0);
+                if (delay < 0) delay = 0;
+                addLog(`🎵 ${myId} will play its tone in ${Math.round(delay)}ms`);
+                setTimeout(async () => {
+                    const url = pillarData[myId]?.audioUrl;
+                    if (!url) return;
+                    if (!bufferCache[url]) await preloadAudio(url, myId);
+                    const source = audioCtx.createBufferSource();
+                    source.buffer = bufferCache[url];
+                    const gain = audioCtx.createGain();
+                    gain.gain.setValueAtTime(1.0, audioCtx.currentTime);
+                    source.connect(gain).connect(audioCtx.destination);
+                    source.start(0);
+                    addLog(`🔊 ${myId} tone played`);
+                }, delay);
+                setTimeout(() => { window._scheduledPlay = false; }, 5000);
+            }
+
+            if (!window._listeningForTone && startTime) {
+                window._listeningForTone = true;
+                const expectedPlayTime = startTime;
+                const nowMicro = Date.now() + (window.serverOffset || 0);
+                if (Math.abs(expectedPlayTime - nowMicro) < 4000) {
+                    await ensureMicrophone();
+                    scheduleOnsetDetection(expectedPlayTime, currentPlayer);
+                }
+                setTimeout(() => { window._listeningForTone = false; }, 6000);
+            }
+        });
+    }
+
+    // Microphone setup
+    let analyser = null;
+    let micStream = null;
+    let isMicActive = false;
+
+    async function ensureMicrophone() {
+        if (isMicActive) return;
+        await ensureAudioContext();
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+            micStream = stream;
+            const source = audioCtx.createMediaStreamSource(stream);
+            analyser = audioCtx.createAnalyser();
+            analyser.fftSize = 1024;
+            source.connect(analyser);
+            isMicActive = true;
+            addLog('🎤 Microphone ready for onset detection');
+        } catch(e) {
+            addLog(`❌ Microphone error: ${e.message}`, 'warn');
+        }
+    }
+
+    function scheduleOnsetDetection(expectedTimeAbs, playerId) {
+        const now = Date.now() + (window.serverOffset || 0);
+        let delay = expectedTimeAbs - now;
+        if (delay < 0) delay = 0;
         setTimeout(() => {
-            addLog(`✅ Calibration simulation complete — use test tones for balance`, 'success');
-            calibrationActive = false;
-            stateTextSpan.innerText = 'Calibration complete';
-        }, 3000);
+            detectOnset(playerId, expectedTimeAbs);
+        }, delay);
+    }
+
+    async function detectOnset(playerId, expectedTimeAbs) {
+        if (!analyser) return;
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        let maxEnergy = 0;
+        let onsetTime = null;
+        const startSearch = performance.now();
+        const timeout = 1500;
+        while ((performance.now() - startSearch) < timeout && !onsetTime) {
+            analyser.getByteFrequencyData(dataArray);
+            let sum = 0;
+            for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+            const avg = sum / dataArray.length;
+            if (avg > 15 && avg > maxEnergy) {
+                maxEnergy = avg;
+                onsetTime = Date.now() + (window.serverOffset || 0);
+            }
+            await new Promise(r => setTimeout(r, 10));
+        }
+        if (onsetTime) {
+            const rawDelay = onsetTime - expectedTimeAbs;
+            addLog(`🔍 Detected ${playerId} tone → raw delay = ${rawDelay.toFixed(1)} ms`);
+            const roundPath = `${CAL_PATH}/measurements/${playerId}/${myId}`;
+            await db.ref(roundPath).set({
+                rawDelayMs: rawDelay,
+                listenerId: myId,
+                timestamp: onsetTime,
+                expectedTime: expectedTimeAbs
+            });
+        } else {
+            addLog(`⚠️ Could not detect tone from ${playerId} (timeout)`, 'warn');
+        }
+    }
+
+    // --------------------------------------------------------------
+    //  SOLVE DELAYS
+    // --------------------------------------------------------------
+    async function computeAllDelays() {
+        const snap = await db.ref(`${CAL_PATH}/measurements`).once('value');
+        const allMeas = snap.val() || {};
+        if (Object.keys(allMeas).length < pillarOrder.length * (pillarOrder.length - 1)) {
+            addLog(`⚠️ Not enough measurements – try again`, 'warn');
+            return;
+        }
+
+        let spk = {}, mic = {};
+        for (let id of pillarOrder) { spk[id] = 0; mic[id] = 0; }
+        const iterations = 6;
+        for (let iter = 0; iter < iterations; iter++) {
+            for (let player of pillarOrder) {
+                let values = [];
+                for (let listener of pillarOrder) {
+                    if (listener === player) continue;
+                    const raw = allMeas[player]?.[listener]?.rawDelayMs;
+                    if (raw === undefined) continue;
+                    const dist = distanceBetween(pillarData[player], pillarData[listener]);
+                    const prop = propagationMs(dist);
+                    const est = raw - prop - mic[listener];
+                    if (isFinite(est)) values.push(est);
+                }
+                if (values.length) spk[player] = median(values);
+            }
+            for (let listener of pillarOrder) {
+                let values = [];
+                for (let player of pillarOrder) {
+                    if (player === listener) continue;
+                    const raw = allMeas[player]?.[listener]?.rawDelayMs;
+                    if (raw === undefined) continue;
+                    const dist = distanceBetween(pillarData[player], pillarData[listener]);
+                    const prop = propagationMs(dist);
+                    const est = raw - spk[player] - prop;
+                    if (isFinite(est)) values.push(est);
+                }
+                if (values.length) mic[listener] = median(values);
+            }
+        }
+
+        for (let id of pillarOrder) {
+            let spkVal = Math.round(Math.max(5, Math.min(300, spk[id])));
+            let micVal = Math.round(Math.max(2, Math.min(150, mic[id])));
+            updateCardValue(id, 'spk', `${spkVal} ms`);
+            updateCardValue(id, 'mic', `${micVal} ms`);
+            pillarData[id].speakerDelayMs = spkVal;
+            pillarData[id].micDelayMs = micVal;
+        }
+        addLog(`✅ Calibration solved! Speaker & mic delays displayed above.`, 'success');
+        addLog(`📋 Copy these values into pillar_config.json manually.`, 'success');
+        stateTextSpan.innerText = 'Calibration complete';
+        stateLed.className = 'status-led led-green';
+        roundInfoSpan.innerText = '';
+        progressDetail.innerText = '✅ Ready — copy values to pillar_config.json';
+    }
+
+    function median(arr) {
+        if (!arr.length) return 0;
+        const sorted = [...arr].sort((a,b)=>a-b);
+        const mid = Math.floor(sorted.length/2);
+        return sorted.length % 2 ? sorted[mid] : (sorted[mid-1] + sorted[mid])/2;
     }
 
     // --------------------------------------------------------------
@@ -563,21 +720,25 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
         offsetRef.on("value", snap => { window.serverOffset = snap.val() || 0; });
 
         await ensureAudioContext();
-        await loadPillarAssets();
+        const configOk = await loadPillarConfig();
+        if (!configOk) return;
 
-        // Preload MP3s if URLs exist
-        for (let id of allPillars) {
-            const url = pillarPositions[id]?.audioUrl;
+        await ensureMicrophone();
+        for (let id of pillarOrder) {
+            const url = pillarData[id]?.audioUrl;
             if (url) await preloadAudio(url, id);
         }
 
-        // Monitor presence
         checkAllPillarsOnline();
         presenceCheckInterval = setInterval(checkAllPillarsOnline, 5000);
+        listenCalibration();
 
-        calibrateBtn.onclick = startRoundRobin;
-
-        addLog(`🚀 ${myId} ready. Test tone buttons are always active for sound check.`, 'success');
+        calibrateBtn.onclick = async () => {
+            if (!allPillarsPresent) { addLog('Waiting for all pillars to be online', 'warn'); return; }
+            await startRoundRobin();
+        };
+        renderCards();
+        addLog(`🚀 ${myId} ready. Use test tone buttons for audio balance.`, 'success');
     }
 
     window.onload = init;
