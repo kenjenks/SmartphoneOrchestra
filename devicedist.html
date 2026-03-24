@@ -2298,7 +2298,7 @@ async function startPillarFabric(startTime) {
             try {
                 const source = audioCtx.createBufferSource();
                 source.buffer = bufferCache[myUrl];
-                source.loop = true;
+                source.loop = false;
                 const gainNode = audioCtx.createGain();
                 gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime);
                 source.connect(gainNode).connect(audioCtx.destination);
