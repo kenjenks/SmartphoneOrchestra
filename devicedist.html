@@ -2251,6 +2251,7 @@ async function startPillarFabric(startTime) {
     const scheduledStartTime = startTime;
     const timeUntilStart = scheduledStartTime - nowWall;
     log(`📊 DIAGNOSTIC: Pillar ${mySeat.id} - scheduled start at ${new Date(scheduledStartTime).toISOString().substr(11, 12)}.${String(scheduledStartTime % 1000).padStart(3, '0')}, in ${timeUntilStart.toFixed(0)}ms`);
+    log(`📊 AudioContext state before playback: ${audioCtx?.state || 'NOT CREATED'}`);
 
     const warmUpTime = startTime - WARMUP_ADVANCE_MS;
     const warmUpDelay = warmUpTime - nowWall - (calibratedSpeakerDelay || 0) - (myMicDelayMs || 0);
@@ -2262,10 +2263,36 @@ async function startPillarFabric(startTime) {
             log(`📦 Loading pillar audio: ${myUrl.split('/').pop()}`);
             const res = await fetch(myUrl);
             const arrayBuf = await res.arrayBuffer();
+
+            // Check if the array buffer has any data
+            log(`📦 Downloaded ${arrayBuf.byteLength} bytes from ${myUrl.split('/').pop()}`);
+
             bufferCache[myUrl] = await audioCtx.decodeAudioData(arrayBuf);
             const loadTime = performance.now() - loadStart;
+
+            // Check decoded audio buffer details
+            const decodedBuffer = bufferCache[myUrl];
             log(`✅ Pillar audio loaded in ${loadTime.toFixed(0)}ms`);
-            db.ref(`diagnostics/${mySeat.id}/audio_load`).set({ url: myUrl, loadTimeMs: loadTime, timestamp: Date.now() + serverOffset });
+            log(`   Duration: ${decodedBuffer.duration.toFixed(2)}s, Channels: ${decodedBuffer.numberOfChannels}, Sample rate: ${decodedBuffer.sampleRate}Hz`);
+
+            // Quick check: is the buffer silent? (max amplitude near zero)
+            let maxSample = 0;
+            for (let channel = 0; channel < decodedBuffer.numberOfChannels; channel++) {
+                const channelData = decodedBuffer.getChannelData(channel);
+                for (let i = 0; i < Math.min(1000, channelData.length); i++) {
+                    maxSample = Math.max(maxSample, Math.abs(channelData[i]));
+                }
+            }
+            log(`   Peak sample amplitude (first 1000 samples): ${maxSample.toFixed(4)} ${maxSample < 0.01 ? '(⚠️ POSSIBLY SILENT)' : '(✅ has audio)'}`);
+
+            db.ref(`diagnostics/${mySeat.id}/audio_load`).set({
+                url: myUrl,
+                loadTimeMs: loadTime,
+                bytes: arrayBuf.byteLength,
+                duration: decodedBuffer.duration,
+                maxSample: maxSample,
+                timestamp: Date.now() + serverOffset
+            });
         } catch (e) {
             log(`❌ Failed to load pillar audio: ${e.message}`);
             return;
@@ -2284,6 +2311,7 @@ async function startPillarFabric(startTime) {
                 source.connect(gainNode).connect(audioCtx.destination);
                 source.start(0);
                 source.stop(audioCtx.currentTime + (SILENT_WARMUP_MS / 1000));
+                log(`🔇 Warm-up pulse source started (silent)`);
             } catch (e) { log(`❌ Warm-up failed: ${e.message}`); }
             activeTimeouts = activeTimeouts.filter(id => id !== warmUpTimeoutId);
         }, warmUpDelay);
@@ -2294,24 +2322,38 @@ async function startPillarFabric(startTime) {
         const startTimeoutId = setTimeout(() => {
             const actualStartTime = Date.now() + serverOffset;
             log(`🏛️ ${mySeat.id} STARTED at ${new Date(actualStartTime).toISOString().substr(11, 12)}`);
-            db.ref(`diagnostics/${mySeat.id}/start`).set({ scheduledTime: scheduledStartTime, actualTime: actualStartTime, errorMs: actualStartTime - scheduledStartTime, timestamp: actualStartTime });
+            log(`📊 AudioContext state at start: ${audioCtx?.state}`);
+            db.ref(`diagnostics/${mySeat.id}/start`).set({
+                scheduledTime: scheduledStartTime,
+                actualTime: actualStartTime,
+                errorMs: actualStartTime - scheduledStartTime,
+                timestamp: actualStartTime
+            });
             try {
                 const source = audioCtx.createBufferSource();
                 source.buffer = bufferCache[myUrl];
-                source.loop = false;
+                source.loop = true;
                 const gainNode = audioCtx.createGain();
                 gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime);
                 source.connect(gainNode).connect(audioCtx.destination);
                 source.start(0);
                 activeAudioCues.push({ type: 'pillar', source: source, gainNode: gainNode, startTime: startTime, actualStartTime: actualStartTime, id: mySeat.id, position: pillar });
-                db.ref(`diagnostics/${mySeat.id}/playing`).set({ status: 'playing', since: actualStartTime, timestamp: actualStartTime });
-            } catch (e) { log(`❌ Pillar start failed: ${e.message}`); }
+                log(`🏛️ ${mySeat.id} source.start() called, loop=${source.loop}`);
+                db.ref(`diagnostics/${mySeat.id}/playing`).set({
+                    status: 'playing',
+                    since: actualStartTime,
+                    timestamp: actualStartTime
+                });
+            } catch (e) {
+                log(`❌ Pillar start failed: ${e.message}`);
+            }
             activeTimeouts = activeTimeouts.filter(id => id !== startTimeoutId);
         }, startDelay);
         activeTimeouts.push(startTimeoutId);
     } else if (startDelay > -1000) {
         log(`⚠️ ${mySeat.id} start is ${Math.round(-startDelay)}ms late, playing immediately`);
         const actualStartTime = Date.now() + serverOffset;
+        log(`📊 AudioContext state: ${audioCtx?.state}`);
         try {
             const source = audioCtx.createBufferSource();
             source.buffer = bufferCache[myUrl];
@@ -2321,7 +2363,10 @@ async function startPillarFabric(startTime) {
             source.connect(gainNode).connect(audioCtx.destination);
             source.start(0);
             activeAudioCues.push({ type: 'pillar', source: source, gainNode: gainNode, startTime: startTime, actualStartTime: actualStartTime, id: mySeat.id, position: pillar });
-        } catch (e) { log(`❌ Pillar start failed: ${e.message}`); }
+            log(`🏛️ ${mySeat.id} source.start() called immediately`);
+        } catch (e) {
+            log(`❌ Pillar start failed: ${e.message}`);
+        }
     } else {
         log(`❌ ${mySeat.id} start is too late (${Math.round(-startDelay)}ms), skipping`);
     }
