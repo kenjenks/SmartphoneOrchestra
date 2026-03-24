@@ -1225,7 +1225,6 @@ function calculateMedian(values) {
 }
 
 // --- TUNING SCHEDULE HANDLER ---
-// SECTION 2 (continued) - TUNING SCHEDULE HANDLER
 function initTuningListener() {
     db.ref('tuning/current').on('value', snap => {
         const schedule = snap.val();
@@ -1865,18 +1864,22 @@ async function startIterativeCalibration() {
                 return;
             }
 
-            const timeoutId = setTimeout(() => {
-                clearInterval(checkInterval);
-                log('⚠️ Phase 1 timeout after 25 seconds - proceeding with micDelay=0');
-                phase1Complete = true;
-                myMicDelayMs = 0;
-                resolve();
-            }, 25000);
+            // FALLBACK TIMEOUT - Phase 1 should complete within pillarWindows duration
+            const FALLBACK_TIMEOUT_MS = 25000; // 25 seconds (covers all 4 pillar windows + margin)
+            const fallbackTimeout = setTimeout(() => {
+                if (!phase1Complete) {
+                    log(`⚠️ Phase 1 timeout after ${FALLBACK_TIMEOUT_MS/1000}s - proceeding with micDelay=0`);
+                    phase1Complete = true;
+                    myMicDelayMs = 0;
+                    clearInterval(checkInterval);
+                    resolve();
+                }
+            }, FALLBACK_TIMEOUT_MS);
 
             const checkInterval = setInterval(() => {
                 if (phase1Complete) {
                     clearInterval(checkInterval);
-                    clearTimeout(timeoutId);
+                    clearTimeout(fallbackTimeout);
                     resolve();
                 }
             }, 100);
