@@ -2622,7 +2622,8 @@ async function reportMeasurement(noteIndex, playingSeatId, speakerDelay, rawDela
             timingError = rawDelay - propagationMs - (myMicDelayMs || 0);
         }
 
-        await db.ref(`measurements/${noteIndex}/reporters/${mySeat.id}`).set({
+        // Build the report object WITHOUT pillar fields first
+        const reportData = {
             targetSeatId: playingSeatId,
             reporterSeatId: mySeat.id,
             timingError: timingError,
@@ -2630,23 +2631,38 @@ async function reportMeasurement(noteIndex, playingSeatId, speakerDelay, rawDela
             rawDelay: Math.round(rawDelay),
             propagationMs: Math.round(propagationMs),
             micDelayMs: myMicDelayMs || 0,
-            pillarSpeakerDelay: playingSeatId.startsWith('PILLAR_') ? (pillarConfig[playingSeatId]?.speakerDelayMs || 0) : undefined,
-            pillarMicDelay: playingSeatId.startsWith('PILLAR_') ? (pillarConfig[playingSeatId]?.micDelayMs || 0) : undefined,
             reportedAt: now,
             detectedAt: detectionTime,
             noteIndex: noteIndex,
-            distance: Math.round(Math.sqrt(Math.pow(mySeat.x - (pillarConfig[playingSeatId]?.x || 0), 2) + Math.pow(mySeat.y - (pillarConfig[playingSeatId]?.y || 0), 2)) * 100) / 100,
             estimatedDelay: Math.round(estimatedDeviceDelayMs),
             adaptiveWindow: Math.round(adaptiveWindowMs)
-        });
+        };
+
+        // Only add pillar-specific fields if the playing device is actually a pillar
+        if (playingSeatId.startsWith('PILLAR_')) {
+            reportData.pillarSpeakerDelay = pillarConfig[playingSeatId]?.speakerDelayMs || 0;
+            reportData.pillarMicDelay = pillarConfig[playingSeatId]?.micDelayMs || 0;
+            // Compute distance to pillar
+            const dx = mySeat.x - (pillarConfig[playingSeatId]?.x || 0);
+            const dy = mySeat.y - (pillarConfig[playingSeatId]?.y || 0);
+            reportData.distance = Math.round(Math.sqrt(dx*dx + dy*dy) * 100) / 100;
+        }
+
+        await db.ref(`measurements/${noteIndex}/reporters/${mySeat.id}`).set(reportData);
 
         log(`📝 Reported for note ${noteIndex} to ${playingSeatId}: timingError=${timingError > 0 ? '+' : ''}${timingError.toFixed(1)}ms`);
 
+        // Update summary for the playing device
         const summaryRef = db.ref(`measurements/summary/${playingSeatId}`);
         summaryRef.transaction(current => {
             const newData = current || {};
             const reports = newData.reports || {};
-            reports[mySeat.id] = { speakerDelay: Math.round(speakerDelay), timingError: timingError, reportedAt: now, noteIndex: noteIndex };
+            reports[mySeat.id] = {
+                speakerDelay: Math.round(speakerDelay),
+                timingError: timingError,
+                reportedAt: now,
+                noteIndex: noteIndex
+            };
             const reportValues = Object.values(reports).map(r => r.speakerDelay).filter(v => v);
             if (reportValues.length > 0) {
                 const sorted = [...reportValues].sort((a, b) => a - b);
@@ -2658,7 +2674,9 @@ async function reportMeasurement(noteIndex, playingSeatId, speakerDelay, rawDela
             newData.reports = reports;
             return newData;
         });
-    } catch (e) { log(`❌ Failed to report measurement: ${e.message}`); }
+    } catch (e) {
+        log(`❌ Failed to report measurement: ${e.message}`);
+    }
 }
 
 // --- LOOKBACK FOR MISSED DETECTIONS ---
