@@ -524,9 +524,9 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
 
         allLogs.push(logEntry);
 
-        // Keep last 500 logs
-        if (allLogs.length > 500) {
-            allLogs = allLogs.slice(-500);
+        // Keep last MAX_LOG_ENTRIES logs
+        if (allLogs.length > MAX_LOG_ENTRIES) {
+            allLogs = allLogs.slice(-1 * MAX_LOG_ENTRIES);
         }
 
         // Use debounced update instead of immediate
