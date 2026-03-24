@@ -28,7 +28,7 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
             min-height: 100vh;
         }
         .card {
-            max-width: 800px;
+            max-width: 850px;
             width: 100%;
             background: #111;
             border-radius: 32px;
@@ -131,18 +131,26 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
             color: white;
             box-shadow: 0 0 6px #ffaa66;
         }
+        button.cal-tone {
+            background: #2a3a2a;
+            border-color: #88cc88;
+            color: #88cc88;
+        }
+        button.cal-tone:active {
+            transform: scale(0.97);
+        }
         button:disabled {
             opacity: 0.4;
             transform: none;
             cursor: not-allowed;
         }
-        .test-buttons {
+        .button-group {
             display: flex;
             gap: 6px;
             margin-top: 8px;
             flex-wrap: wrap;
         }
-        .test-buttons button {
+        .button-group button {
             flex: 1;
             font-size: 0.7rem;
             padding: 5px 6px;
@@ -192,9 +200,9 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
         .led-red { background: #ff6666; }
         .small-text { font-size: 0.7rem; color: #888; }
         .section-title {
-            font-size: 0.85rem;
+            font-size: 0.8rem;
             font-weight: bold;
-            margin: 12px 0 6px 0;
+            margin: 8px 0 4px 0;
             color: #ffaa66;
         }
     </style>
@@ -217,7 +225,7 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
         <!-- populated dynamically -->
     </div>
 
-    <button id="calibrate-btn" class="primary" disabled>🔊 Start Round‑Robin Calibration</button>
+    <button id="calibrate-btn" class="primary" disabled>🔊 Start Round‑Robin Calibration (MP3)</button>
     <div class="small-text" style="margin-top: 8px; text-align: center;">All four pillars must be online. Pressing start on ANY pillar triggers the sequence.</div>
 
     <div class="log" id="log-panel">
@@ -250,10 +258,12 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
     let calibrationActive = false;
     let currentRoundRobin = null;
 
-    // Active test tone oscillators
+    // Active test tone oscillators (synthesized for audio balance only)
     let activeTestTones = {};
 
-    const SPEED_OF_SOUND = 343;
+    const SPEED_OF_SOUND = 344;    // from your config
+    const SILENT_WARMUP_MS = 100;
+    const WARMUP_ADVANCE_MS = 500;
 
     // UI elements
     const calibrateBtn = document.getElementById('calibrate-btn');
@@ -300,32 +310,49 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
             const isMe = (id === myId);
             const speakerVal = (p.speakerDelayMs !== null && p.speakerDelayMs !== undefined) ? `${p.speakerDelayMs} ms` : '—';
             const micVal = (p.micDelayMs !== null && p.micDelayMs !== undefined) ? `${p.micDelayMs} ms` : '—';
-            const freqVal = p.testFreq || 440;
+            const freqVal = p.preferred_freq || 440;
             const activeClass = (calibrationActive && currentRoundRobin?.currentPlayer === id) ? 'active' : '';
             const isTonePlaying = activeTestTones[id] ? true : false;
+            const hasMp3 = !!p.audioUrl;
             html += `
                 <div class="pillar-card ${activeClass}" data-pillar="${id}">
                     <div class="pillar-id">${p.label || id} ${isMe ? '📍' : ''}</div>
                     <div class="delay-row">🔊 Speaker: <span class="value" id="spk-${id}">${speakerVal}</span></div>
                     <div class="delay-row">🎤 Mic: <span class="value" id="mic-${id}">${micVal}</span></div>
                     <div class="delay-row">🎵 Test freq: <span class="value">${freqVal} Hz</span></div>
-                    <div class="test-buttons">
+                    <div class="button-group">
                         <button class="test-tone-btn test-tone ${isTonePlaying ? 'active' : ''}" data-pillar="${id}" data-freq="${freqVal}">
-                            ${isTonePlaying ? '🔊 Stop' : '▶️ Tone'}
+                            ${isTonePlaying ? '🔊 Stop Balance Tone' : '▶️ Balance Tone'}
+                        </button>
+                        <button class="cal-tone-btn cal-tone" data-pillar="${id}" data-url="${p.audioUrl || ''}" ${!hasMp3 ? 'disabled' : ''}>
+                            🎵 Play Cal MP3
                         </button>
                     </div>
-                    <div class="small-text">📌 (${p.x}, ${p.y})</div>
+                    <div class="small-text">📌 (${p.x}, ${p.y}) | stagger: ${p.stagger || 0}ms</div>
                 </div>
             `;
         }
         pillarGrid.innerHTML = html;
 
+        // Attach balance tone buttons (synthesized)
         document.querySelectorAll('.test-tone-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 const pillarId = btn.dataset.pillar;
                 const freq = parseFloat(btn.dataset.freq);
-                toggleTestTone(pillarId, freq);
+                toggleBalanceTone(pillarId, freq);
+            });
+        });
+
+        // Attach calibration MP3 buttons (for manual testing)
+        document.querySelectorAll('.cal-tone-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const pillarId = btn.dataset.pillar;
+                const url = btn.dataset.url;
+                if (url) {
+                    playCalibrationMp3(pillarId, url);
+                }
             });
         });
     }
@@ -340,7 +367,7 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
     }
 
     // --------------------------------------------------------------
-    //  TEST TONE CONTROL
+    //  BALANCE TONE (synthesized, continuous, for audio balance)
     // --------------------------------------------------------------
     async function ensureAudioContext() {
         if (!audioCtx) {
@@ -352,7 +379,7 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
         return audioCtx;
     }
 
-    async function toggleTestTone(pillarId, frequency) {
+    async function toggleBalanceTone(pillarId, frequency) {
         await ensureAudioContext();
 
         if (activeTestTones[pillarId]) {
@@ -367,7 +394,7 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
                 }, 100);
             } catch(e) { /* ignore */ }
             delete activeTestTones[pillarId];
-            addLog(`🔇 Stopped test tone for ${pillarId}`, 'info');
+            addLog(`🔇 Stopped balance tone for ${pillarId}`, 'info');
             renderCards();
         } else {
             try {
@@ -375,20 +402,20 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
                 const gain = audioCtx.createGain();
                 oscillator.type = 'sine';
                 oscillator.frequency.value = frequency;
-                gain.gain.value = 0.3;
+                gain.gain.value = 0.25;  // comfortable listening level
                 oscillator.connect(gain);
                 gain.connect(audioCtx.destination);
                 oscillator.start();
                 activeTestTones[pillarId] = { oscillator, gain };
-                addLog(`🔊 Playing test tone for ${pillarId} at ${frequency} Hz`, 'success');
+                addLog(`🔊 Playing balance tone for ${pillarId} at ${frequency} Hz (synthesized)`, 'success');
                 renderCards();
             } catch(e) {
-                addLog(`❌ Failed to start tone for ${pillarId}: ${e.message}`, 'warn');
+                addLog(`❌ Failed to start balance tone for ${pillarId}: ${e.message}`, 'warn');
             }
         }
     }
 
-    function stopAllTestTones() {
+    function stopAllBalanceTones() {
         for (let pillarId of Object.keys(activeTestTones)) {
             const tone = activeTestTones[pillarId];
             try {
@@ -402,12 +429,112 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
             } catch(e) { /* ignore */ }
         }
         activeTestTones = {};
-        addLog(`🔇 All test tones stopped`, 'info');
+        addLog(`🔇 All balance tones stopped`, 'info');
         renderCards();
     }
 
     // --------------------------------------------------------------
-    //  LOAD PILLAR CONFIG (single object per pillar)
+    //  CALIBRATION MP3 PLAYBACK (with warm-up to prime hardware)
+    // --------------------------------------------------------------
+    async function preloadCalibrationMp3(url, pillarId) {
+        if (bufferCache[url]) return bufferCache[url];
+        try {
+            const res = await fetch(url);
+            const arrayBuf = await res.arrayBuffer();
+            const audioBuffer = await audioCtx.decodeAudioData(arrayBuf);
+            bufferCache[url] = audioBuffer;
+            addLog(`📦 Preloaded calibration MP3 for ${pillarId}`);
+            return audioBuffer;
+        } catch(e) {
+            addLog(`❌ Failed to load MP3 for ${pillarId}: ${e.message}`, 'warn');
+            return null;
+        }
+    }
+
+    async function playCalibrationMp3(pillarId, url, scheduledStartTime = null) {
+        await ensureAudioContext();
+
+        const audioBuffer = await preloadCalibrationMp3(url, pillarId);
+        if (!audioBuffer) return false;
+
+        const nowWall = Date.now() + (window.serverOffset || 0);
+        let startTime = scheduledStartTime;
+        let delayMs = 0;
+
+        if (startTime) {
+            // Scheduled playback for round-robin
+            const speakerDelay = pillarData[pillarId]?.speakerDelayMs || 0;
+            const adjustedStart = startTime - speakerDelay;
+            delayMs = adjustedStart - nowWall;
+
+            if (delayMs > 0) {
+                addLog(`🎵 ${pillarId} calibration MP3 scheduled in ${Math.round(delayMs)}ms`);
+                setTimeout(() => {
+                    actuallyPlayMp3(audioBuffer, pillarId, startTime);
+                }, delayMs);
+                return true;
+            } else if (delayMs > -500) {
+                addLog(`⚠️ ${pillarId} calibration MP3 is ${Math.round(-delayMs)}ms late, playing immediately`);
+                actuallyPlayMp3(audioBuffer, pillarId, startTime);
+                return true;
+            } else {
+                addLog(`❌ ${pillarId} calibration MP3 too late (${Math.round(-delayMs)}ms), skipping`);
+                return false;
+            }
+        } else {
+            // Manual playback for testing
+            addLog(`🎵 Playing calibration MP3 for ${pillarId} manually`);
+            actuallyPlayMp3(audioBuffer, pillarId, null);
+            return true;
+        }
+    }
+
+    function actuallyPlayMp3(audioBuffer, pillarId, scheduledStartTime) {
+        const source = audioCtx.createBufferSource();
+        source.buffer = audioBuffer;
+        const gainNode = audioCtx.createGain();
+
+        // Apply a quick fade to avoid clicks
+        gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+        gainNode.gain.linearRampToValueAtTime(0.8, audioCtx.currentTime + 0.01);
+
+        source.connect(gainNode);
+        gainNode.connect(audioCtx.destination);
+
+        source.start(0);
+
+        // Fade out at the end
+        const duration = audioBuffer.duration;
+        gainNode.gain.setValueAtTime(0.8, audioCtx.currentTime + duration - 0.05);
+        gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + duration);
+
+        if (scheduledStartTime) {
+            const actualStart = Date.now() + (window.serverOffset || 0);
+            const rawDelay = actualStart - scheduledStartTime;
+            addLog(`🔊 ${pillarId} MP3 played: scheduled offset = ${rawDelay > 0 ? '+' : ''}${rawDelay.toFixed(1)}ms`, 'success');
+        } else {
+            addLog(`🔊 ${pillarId} MP3 played (manual test)`);
+        }
+    }
+
+    // Warm-up: play silent MP3 to prime hardware path
+    async function warmUpCalibrationMp3(url, pillarId) {
+        await ensureAudioContext();
+        const audioBuffer = await preloadCalibrationMp3(url, pillarId);
+        if (!audioBuffer) return;
+
+        const source = audioCtx.createBufferSource();
+        source.buffer = audioBuffer;
+        const gainNode = audioCtx.createGain();
+        gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+        source.connect(gainNode).connect(audioCtx.destination);
+        source.start(0);
+        source.stop(audioCtx.currentTime + (SILENT_WARMUP_MS / 1000));
+        addLog(`🔇 Warm-up pulse for ${pillarId} (priming MP3 path)`);
+    }
+
+    // --------------------------------------------------------------
+    //  LOAD PILLAR CONFIG (matches your actual JSON structure)
     // --------------------------------------------------------------
     async function loadPillarConfig() {
         const snap = await db.ref('pillar_config').once('value');
@@ -427,43 +554,42 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
                 y: p.y,
                 preferred_freq: p.preferred_freq || 440,
                 stagger: p.stagger || 0,
-                audioUrl: p.audioUrl,
+                audioUrl: p.audioUrl || null,
                 speakerDelayMs: p.speakerDelayMs ?? null,
                 micDelayMs: p.micDelayMs ?? null
             };
         }
 
-        pillarOrder = config.pillarOrder || Object.keys(pillarData);
-        speedOfSound = config.speed_of_sound || 344;
+        pillarOrder = config.pillarOrder || allPillars;
 
-        // Verify all required fields
+        // Check for required fields
         for (let id of pillarOrder) {
             const p = pillarData[id];
             if (!p) {
                 addLog(`⚠️ Missing config for ${id}`, 'warn');
                 return false;
             }
-            if (!p.audioUrl) {
-                addLog(`⚠️ Missing audioUrl for ${id}`, 'warn');
+            if (p.x === undefined || p.y === undefined) {
+                addLog(`⚠️ Missing coordinates for ${id}`, 'warn');
                 return false;
+            }
+            if (!p.audioUrl) {
+                addLog(`⚠️ Missing audioUrl for ${id} — calibration will fail`, 'warn');
             }
         }
 
         addLog(`✅ Loaded ${pillarOrder.length} pillar configurations`, 'success');
+
+        // Preload all calibration MP3s
+        for (let id of pillarOrder) {
+            const url = pillarData[id]?.audioUrl;
+            if (url) {
+                await preloadCalibrationMp3(url, id);
+            }
+        }
+
         renderCards();
         return true;
-    }
-
-    async function preloadAudio(url, pillarId) {
-        if (bufferCache[url]) return;
-        try {
-            const res = await fetch(url);
-            const buf = await res.arrayBuffer();
-            bufferCache[url] = await audioCtx.decodeAudioData(buf);
-            addLog(`📦 Preloaded ${pillarId} tone`);
-        } catch(e) {
-            addLog(`❌ Failed to load audio for ${pillarId}: ${e.message}`, 'warn');
-        }
     }
 
     // --------------------------------------------------------------
@@ -514,10 +640,12 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
             addLog('Not all pillars are online – cannot start', 'warn');
             return;
         }
-        stopAllTestTones();
+
+        // Stop any balance tones during calibration
+        stopAllBalanceTones();
 
         await db.ref(CAL_PATH).remove();
-        const startTime = Date.now() + (window.serverOffset || 0) + 2000;
+        const startTime = Date.now() + (window.serverOffset || 0) + 3000; // +3s buffer
         const initState = {
             status: 'running',
             currentPlayer: pillarOrder[0],
@@ -526,7 +654,7 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
             measurements: {}
         };
         await db.ref(CAL_PATH).set(initState);
-        addLog(`🔊 Round-robin initiated by ${myId} — first player ${pillarOrder[0]}`, 'success');
+        addLog(`🔊 Round-robin initiated by ${myId} — first player ${pillarOrder[0]} at ${new Date(startTime).toLocaleTimeString()}`, 'success');
     }
 
     function listenCalibration() {
@@ -552,33 +680,42 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
             if (myId === currentPlayer && !window._scheduledPlay) {
                 window._scheduledPlay = true;
                 const now = Date.now() + (window.serverOffset || 0);
-                let delay = startTime - now - (pillarData[myId]?.speakerDelayMs || 0);
-                if (delay < 0) delay = 0;
-                addLog(`🎵 ${myId} will play its tone in ${Math.round(delay)}ms`);
-                setTimeout(async () => {
-                    const url = pillarData[myId]?.audioUrl;
-                    if (!url) return;
-                    if (!bufferCache[url]) await preloadAudio(url, myId);
-                    const source = audioCtx.createBufferSource();
-                    source.buffer = bufferCache[url];
-                    const gain = audioCtx.createGain();
-                    gain.gain.setValueAtTime(1.0, audioCtx.currentTime);
-                    source.connect(gain).connect(audioCtx.destination);
-                    source.start(0);
-                    addLog(`🔊 ${myId} tone played`);
-                }, delay);
-                setTimeout(() => { window._scheduledPlay = false; }, 5000);
+                const warmUpTime = startTime - WARMUP_ADVANCE_MS;
+                const warmUpDelay = warmUpTime - now - (pillarData[myId]?.speakerDelayMs || 0);
+
+                // Warm-up to prime MP3 path
+                if (warmUpDelay > 0 && pillarData[myId]?.audioUrl) {
+                    setTimeout(() => {
+                        warmUpCalibrationMp3(pillarData[myId].audioUrl, myId);
+                    }, warmUpDelay);
+                }
+
+                // Schedule main playback
+                const playDelay = startTime - now - (pillarData[myId]?.speakerDelayMs || 0);
+                if (playDelay > 0 && pillarData[myId]?.audioUrl) {
+                    setTimeout(() => {
+                        playCalibrationMp3(myId, pillarData[myId].audioUrl, startTime);
+                    }, playDelay);
+                    addLog(`🎵 ${myId} calibration MP3 scheduled in ${Math.round(playDelay)}ms`);
+                } else if (playDelay > -500 && pillarData[myId]?.audioUrl) {
+                    addLog(`⚠️ ${myId} MP3 is ${Math.round(-playDelay)}ms late, playing immediately`);
+                    playCalibrationMp3(myId, pillarData[myId].audioUrl, startTime);
+                } else if (!pillarData[myId]?.audioUrl) {
+                    addLog(`❌ No audioUrl for ${myId}, cannot play calibration tone`, 'warn');
+                }
+
+                setTimeout(() => { window._scheduledPlay = false; }, 6000);
             }
 
             if (!window._listeningForTone && startTime) {
                 window._listeningForTone = true;
                 const expectedPlayTime = startTime;
                 const nowMicro = Date.now() + (window.serverOffset || 0);
-                if (Math.abs(expectedPlayTime - nowMicro) < 4000) {
+                if (Math.abs(expectedPlayTime - nowMicro) < 5000) {
                     await ensureMicrophone();
                     scheduleOnsetDetection(expectedPlayTime, currentPlayer);
                 }
-                setTimeout(() => { window._listeningForTone = false; }, 6000);
+                setTimeout(() => { window._listeningForTone = false; }, 8000);
             }
         });
     }
@@ -620,13 +757,13 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
         let maxEnergy = 0;
         let onsetTime = null;
         const startSearch = performance.now();
-        const timeout = 1500;
+        const timeout = 2000;
         while ((performance.now() - startSearch) < timeout && !onsetTime) {
             analyser.getByteFrequencyData(dataArray);
             let sum = 0;
             for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
             const avg = sum / dataArray.length;
-            if (avg > 15 && avg > maxEnergy) {
+            if (avg > 12 && avg > maxEnergy) {
                 maxEnergy = avg;
                 onsetTime = Date.now() + (window.serverOffset || 0);
             }
@@ -653,7 +790,7 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
     async function computeAllDelays() {
         const snap = await db.ref(`${CAL_PATH}/measurements`).once('value');
         const allMeas = snap.val() || {};
-        if (Object.keys(allMeas).length < pillarOrder.length * (pillarOrder.length - 1)) {
+        if (Object.keys(allMeas).length < pillarOrder.length * (pillarOrder.length - 1) - 2) {
             addLog(`⚠️ Not enough measurements – try again`, 'warn');
             return;
         }
@@ -671,7 +808,7 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
                     const dist = distanceBetween(pillarData[player], pillarData[listener]);
                     const prop = propagationMs(dist);
                     const est = raw - prop - mic[listener];
-                    if (isFinite(est)) values.push(est);
+                    if (isFinite(est) && Math.abs(est) < 300) values.push(est);
                 }
                 if (values.length) spk[player] = median(values);
             }
@@ -684,7 +821,7 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
                     const dist = distanceBetween(pillarData[player], pillarData[listener]);
                     const prop = propagationMs(dist);
                     const est = raw - spk[player] - prop;
-                    if (isFinite(est)) values.push(est);
+                    if (isFinite(est) && Math.abs(est) < 150) values.push(est);
                 }
                 if (values.length) mic[listener] = median(values);
             }
@@ -734,10 +871,6 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
         if (!configOk) return;
 
         await ensureMicrophone();
-        for (let id of pillarOrder) {
-            const url = pillarData[id]?.audioUrl;
-            if (url) await preloadAudio(url, id);
-        }
 
         checkAllPillarsOnline();
         presenceCheckInterval = setInterval(checkAllPillarsOnline, 5000);
@@ -748,7 +881,9 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
             await startRoundRobin();
         };
         renderCards();
-        addLog(`🚀 ${myId} ready. Use test tone buttons for audio balance.`, 'success');
+        addLog(`🚀 ${myId} ready.`, 'success');
+        addLog(`   🎵 Balance Tone: synthesized sine wave for audio balance`, 'info');
+        addLog(`   📀 Cal MP3: uses pre-recorded MP3 to measure actual speaker delay`, 'info');
     }
 
     window.onload = init;
