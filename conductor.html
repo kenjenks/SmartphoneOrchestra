@@ -334,6 +334,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
     const db = firebase.database();
 
     // --- MASTER STATE ---
+    let MAX_LOG_ENTRIES = 1000;
     let seats = [];
     let deviceData = {};
     let isTuningActive = false;
@@ -578,8 +579,8 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             return true;
         });
 
-        // Take last 200 for display
-        filteredLogs = filteredLogs.slice(-200);
+        // Take last MAX_LOG_ENTRIES for display
+        filteredLogs = filteredLogs.slice(-1 * MAX_LOG_ENTRIES);
 
         if (filteredLogs.length === 0) {
             container.innerHTML = '<div class="log-entry log-entry-info">[System] No logs match filter...</div>';
@@ -610,7 +611,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         updateLogDisplay();
 
         // Fetch recent logs from all devices with limit
-        db.ref('device_logs').limitToLast(100).once('value', snap => {
+        db.ref('device_logs').limitToLast(MAX_LOG_ENTRIES).once('value', snap => {
             const allDeviceLogs = snap.val();
             if (!allDeviceLogs) return;
 
