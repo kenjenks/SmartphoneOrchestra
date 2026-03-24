@@ -247,8 +247,6 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
                 <button id="stop-tuning-btn" style="background:#600; border-color:#a00;">⏹️ STOP</button>
             </div>
 
-            <button id="load-default-pillars-btn" class="secondary" style="margin-top: 5px;">🏛️ Load Default Pillar URLs</button>
-
             <div id="tuning-progress" style="display: none;">
                 <div style="display: flex; justify-content: space-between;">
                     <span>Calibration:</span>
@@ -354,14 +352,6 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
     let PICCOLO_URL = "";
     let TEST_PULSE_URL = "";
 
-    // Default pillar URLs for tuning mode
-    const DEFAULT_PILLAR_URLS = {
-        FL: "https://static.wixstatic.com/mp3/9178d1_9aba02e74fc344808064f364bb505086.mp3",
-        FR: "https://static.wixstatic.com/mp3/9178d1_08a292cbcee448d7b83e464d6a94b377.mp3",
-        BL: "https://static.wixstatic.com/mp3/9178d1_8987080abdb14616a0e9562387923614.mp3",
-        BR: "https://static.wixstatic.com/mp3/9178d1_8b53f52bbce6406ebacae8288777bad5.mp3"
-    };
-
     // Heartbeat monitoring parameters
     const HEARTBEAT_TIMEOUT_MS = 12100;
     let heartbeatChecker = null;
@@ -435,7 +425,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         }
 
         // Format logs for clipboard
-        const header = `=== SmartphoneOrchestra Device Logs ===\nGenerated: ${new Date().toLocaleString()}\nTotal logs: ${filteredLogs.length}\nFilter: ${logFilterText || 'none'} | Device: ${logFilterDevice || 'all'}\n${'='.repeat(50)}\n\n`;
+        const header = `=== SmartphoneOrchestra Device Logs ===\nGenerated: ${new Date().toUTCString()}\nTotal logs: ${filteredLogs.length}\nFilter: ${logFilterText || 'none'} | Device: ${logFilterDevice || 'all'}\n${'='.repeat(50)}\n\n`;
 
         const logLines = filteredLogs.map(log => {
             return `[${log.timeStr}] [${log.seatId}] ${log.message}`;
@@ -454,10 +444,10 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         }
     }
 
-    // --- CONDUCTOR LOGGING FUNCTION ---
+    // --- CONDUCTOR LOGGING FUNCTION (UTC time) ---
     function conductorLog(message, type = 'info') {
         const timestamp = Date.now() + serverOffset;
-        const timeStr = new Date(timestamp).toLocaleTimeString();
+        const timeStr = new Date(timestamp).toISOString().substr(11, 12);
 
         // Log to console
         console.log(`[CONDUCTOR ${timeStr}] ${message}`);
@@ -896,13 +886,6 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         conductorLog(`Selected: ${movement.movement_name} | ${pillarCount} pillars, ${cueCount} cues, buffer: ${movement.buffer_s}s`, 'info');
     }
 
-    function loadDefaultPillarUrls() {
-        PILLAR_URLS = { ...DEFAULT_PILLAR_URLS };
-        const pillarCount = Object.keys(PILLAR_URLS).length;
-        document.getElementById('pillar-count').innerText = pillarCount;
-        conductorLog(`Loaded ${pillarCount} default pillar URLs for tuning`, 'info');
-    }
-
     // --- SEAT MAP GUI ---
     const canvas = document.getElementById('seat-map-canvas');
     const ctx = canvas.getContext('2d');
@@ -955,37 +938,33 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
 
             // Determine color based on status and device type
             if (isPillar) {
-                // Pillars: use status-based colors, but with a distinct green shade
                 if (status === 'HAPPY' || status === 'ACTIVE') {
-                    ctx.fillStyle = '#44ff88';   // Lighter green for active pillars
+                    ctx.fillStyle = '#44ff88';
                 } else if (status === 'CALIBRATING' || status === 'SYNCING') {
-                    ctx.fillStyle = '#ffcc00';   // Yellow
+                    ctx.fillStyle = '#ffcc00';
                 } else if (status === 'DEAD' || (deviceInfo && deviceInfo.lastSeen && (Date.now() + serverOffset - deviceInfo.lastSeen > HEARTBEAT_TIMEOUT_MS))) {
-                    ctx.fillStyle = '#ff4444';   // Red
+                    ctx.fillStyle = '#ff4444';
                 } else {
-                    ctx.fillStyle = '#8844cc';   // Purple for offline pillars
+                    ctx.fillStyle = '#8844cc';
                 }
             } else {
-                // Patron devices: use standard color scheme
                 if (status === 'HAPPY') {
-                    ctx.fillStyle = '#00ffcc';   // Green
+                    ctx.fillStyle = '#00ffcc';
                 } else if (status === 'CALIBRATING' || status === 'SYNCING') {
-                    ctx.fillStyle = '#ffcc00';   // Yellow
+                    ctx.fillStyle = '#ffcc00';
                 } else if (status === 'DEAD' || (deviceInfo && deviceInfo.lastSeen && (Date.now() + serverOffset - deviceInfo.lastSeen > HEARTBEAT_TIMEOUT_MS))) {
-                    ctx.fillStyle = '#ff4444';   // Red
+                    ctx.fillStyle = '#ff4444';
                 } else if (status === 'ACTIVE') {
-                    ctx.fillStyle = '#00ffcc';   // Green
+                    ctx.fillStyle = '#00ffcc';
                 } else {
-                    ctx.fillStyle = '#333';      // Gray (offline)
+                    ctx.fillStyle = '#333';
                 }
             }
 
-            // Draw the seat dot
             ctx.beginPath();
             ctx.arc(screenX, screenY, isPillar ? 8 : 5, 0, Math.PI * 2);
             ctx.fill();
 
-            // Add seat label for front row seats (y < 10)
             if (seat.y < 10) {
                 ctx.fillStyle = '#888';
                 ctx.font = '8px Arial';
@@ -1028,7 +1007,6 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             if (isTuningActive) {
                 updateCalibrationStats();
 
-                // Update song progress during tuning
                 if (tuningSchedule && tuningSchedule.totalNotes && noteTimings && noteTimings.length > 0) {
                     const lastNote = noteTimings[noteTimings.length - 1];
                     const totalDurationMs = lastNote.startMs + (lastNote.durationMs || 500);
@@ -1171,12 +1149,8 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
 
     async function startPillars(startTime) {
         if (Object.keys(PILLAR_URLS).length === 0) {
-            conductorLog("No pillar URLs loaded - attempting to load defaults", 'info');
-            loadDefaultPillarUrls();
-            if (Object.keys(PILLAR_URLS).length === 0) {
-                conductorLog("ERROR: No pillar URLs available - skipping pillar playback", 'error');
-                return;
-            }
+            conductorLog("ERROR: No pillar URLs available - cannot start pillars", 'error');
+            return;
         }
 
         const pillarStartTime = startTime - 1000;
@@ -1205,7 +1179,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
     }
 
     async function startTuningMovement() {
-        // FIX: Clear any stale tuning schedule first to prevent devices from using outdated start times
+        // Clear any stale tuning schedule first
         conductorLog("🗑️ Clearing any stale tuning schedule before starting new session", 'info');
         await db.ref('tuning/current').remove();
 
@@ -1242,6 +1216,37 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             return;
         }
 
+        // Load pillar URLs from tuning_mode.json - NO HARDCODED DEFAULTS
+        PILLAR_URLS = {};
+
+        // Try to load from assets.pillars first
+        if (tuningModeData.assets && tuningModeData.assets.pillars) {
+            PILLAR_URLS = { ...tuningModeData.assets.pillars };
+            conductorLog(`📡 Loaded ${Object.keys(PILLAR_URLS).length} pillar URLs from tuning_mode.json assets.pillars`, 'info');
+        }
+        // Fallback to metadata source_audio_* if assets.pillars not present
+        else if (tuningModeData.metadata) {
+            if (tuningModeData.metadata.source_audio_FL) PILLAR_URLS.FL = tuningModeData.metadata.source_audio_FL;
+            if (tuningModeData.metadata.source_audio_FR) PILLAR_URLS.FR = tuningModeData.metadata.source_audio_FR;
+            if (tuningModeData.metadata.source_audio_BL) PILLAR_URLS.BL = tuningModeData.metadata.source_audio_BL;
+            if (tuningModeData.metadata.source_audio_BR) PILLAR_URLS.BR = tuningModeData.metadata.source_audio_BR;
+            if (Object.keys(PILLAR_URLS).length > 0) {
+                conductorLog(`📡 Loaded ${Object.keys(PILLAR_URLS).length} pillar URLs from metadata`, 'info');
+            }
+        }
+
+        // If STILL no URLs, error out - no hardcoded fallbacks
+        if (Object.keys(PILLAR_URLS).length === 0) {
+            conductorLog("❌ ERROR: No pillar URLs found in tuning_mode.json. Please check the file.", 'error');
+            alert("No pillar URLs found in tuning_mode.json. Please upload a valid tuning_mode.json with assets.pillars.");
+            return;
+        }
+
+        // Log each pillar URL
+        Object.entries(PILLAR_URLS).forEach(([pos, url]) => {
+            conductorLog(`   Pillar ${pos}: ${url.split('/').pop()}`, 'info');
+        });
+
         await refreshActiveDevices();
 
         if (activeDevices.length === 0) {
@@ -1259,17 +1264,10 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         }
 
         tuningSchedule = distributeNotes(deviceOrder);
-        // Use Date.now() + serverOffset for consistent time reference across all devices
         const nowWall = Date.now() + serverOffset;
         tuningStartTime = nowWall + 3000;
 
-        // DEBUG: Log what we're about to write
-        conductorLog(`📡 Writing tuning/current with startTime: ${tuningStartTime} (${new Date(tuningStartTime).toLocaleTimeString()}.${String(tuningStartTime % 1000).padStart(3, '0')})`, 'info');
-
-        if (Object.keys(PILLAR_URLS).length === 0) {
-            conductorLog("No pillar URLs from movement, loading defaults", 'info');
-            loadDefaultPillarUrls();
-        }
+        conductorLog(`📡 Writing tuning/current with startTime: ${tuningStartTime} (${new Date(tuningStartTime).toISOString().substr(11, 12)}.${String(tuningStartTime % 1000).padStart(3, '0')})`, 'info');
 
         await startPillars(tuningStartTime);
 
@@ -1280,7 +1278,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             pillars: PILLAR_URLS,
             schedule: tuningSchedule.notes,
             deviceOrder: deviceOrder,
-            startTime: tuningStartTime,  // This is the single reference time for all devices
+            startTime: tuningStartTime,
             totalNotes: tuningSchedule.totalNotes,
             deviceCount: tuningSchedule.deviceCount,
             generatedAt: Date.now() + serverOffset,
@@ -1309,7 +1307,6 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             windowsAdded = true;
         }
 
-        // Also check if pillar_cal_windows is at root level (some versions)
         if (!windowsAdded && tuningModeData.pillar_cal_windows) {
             tuningCurrentObj.metadata = tuningCurrentObj.metadata || {};
             tuningCurrentObj.metadata.pillar_cal_windows = tuningModeData.pillar_cal_windows;
@@ -1333,10 +1330,10 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
 
         await db.ref('tuning/current').set(tuningCurrentObj);
 
-        // DEBUG: Verify what was actually written
+        // Verify what was actually written
         const verifySnap = await db.ref('tuning/current/startTime').once('value');
         const writtenStartTime = verifySnap.val();
-        conductorLog(`📡 Verified startTime in Firebase: ${writtenStartTime} (${new Date(writtenStartTime).toLocaleTimeString()}.${String(writtenStartTime % 1000).padStart(3, '0')})`, 'info');
+        conductorLog(`📡 Verified startTime in Firebase: ${writtenStartTime} (${new Date(writtenStartTime).toISOString().substr(11, 12)}.${String(writtenStartTime % 1000).padStart(3, '0')})`, 'info');
 
         if (writtenStartTime !== tuningStartTime) {
             conductorLog(`❌❌❌ CRITICAL: startTime mismatch! Expected ${tuningStartTime}, got ${writtenStartTime}`, 'error');
@@ -1350,24 +1347,21 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
 
         isTuningActive = true;
         document.getElementById('tuning-progress').style.display = 'block';
-        conductorLog(`🎯 Tuning started: ${deviceOrder.length} devices, ${noteTimings.length} notes, startTime=${new Date(tuningStartTime).toLocaleTimeString()}`, 'match');
+        conductorLog(`🎯 Tuning started: ${deviceOrder.length} devices, ${noteTimings.length} notes, startTime=${new Date(tuningStartTime).toISOString().substr(11, 12)}`, 'match');
         renderMap();
     }
 
     async function stopTuning(manualStop = true) {
         if (manualStop) {
-            // Manual stop - send KILL to all devices
             await db.ref('show/currentCue').set({
                 action: 'KILL',
                 triggerTime: Date.now() + serverOffset
             });
             conductorLog("⏹️ Tuning stopped manually", 'info');
         } else {
-            // Natural completion - just clear the tuning state without KILL
             conductorLog("🎯 Tuning completed naturally", 'match');
         }
 
-        // Clear the tuning schedule so devices don't try to use stale data
         await db.ref('tuning/current').remove();
 
         isTuningActive = false;
@@ -1385,10 +1379,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
     };
     document.getElementById('start-tuning-btn').onclick = startTuningMovement;
     document.getElementById('stop-tuning-btn').onclick = stopTuning;
-    document.getElementById('load-default-pillars-btn').onclick = () => {
-        loadDefaultPillarUrls();
-        conductorLog("Default pillar URLs loaded", 'info');
-    };
+
     document.getElementById('kill-all-btn').onclick = () => {
         if(confirm("Refresh all patron devices?")) {
             db.ref('show/currentCue').set({ action: 'KILL', triggerTime: Date.now() + serverOffset });
@@ -1404,7 +1395,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
 
         const bufferMs = (currentMovement.buffer_s || 1.0) * 1000;
         const startTime = Date.now() + serverOffset + bufferMs;
-        const startTimeStr = new Date(startTime).toLocaleTimeString();
+        const startTimeStr = new Date(startTime).toISOString().substr(11, 12);
 
         await db.ref('show/currentCue').set({
             action:    'GO',
