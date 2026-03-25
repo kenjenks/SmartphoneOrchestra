@@ -122,7 +122,8 @@
         let currentMovement = null;
         
         // Synthesizer parameters
-        const SYNTH_VOLUME = 0.5;
+        const SYNTH_VOLUME = 1.0;           // Full volume for main notes
+        const MASTER_GAIN_BOOST = 1.5;       // Additional boost via gain node
         const SYNTH_ATTACK = 0.01;
         const SYNTH_DECAY = 0.1;
         const SYNTH_SUSTAIN = 0.8;
@@ -178,45 +179,28 @@
             return 440 * Math.pow(2, (midi - 69) / 12);
         }
 
-        // Synthesize a note
-        function playSynthesizedNote(frequency, durationMs, volume = SYNTH_VOLUME) {
-            if (!audioCtx || audioCtx.state !== 'running') {
-                log(`⚠️ Cannot play note - audio context not running`);
-                return;
+        async function boostA9Audio() {
+            if (!audioCtx) return;
+
+            // Create a gain node that stays connected to keep audio system active
+            if (!window._audioBoostNode) {
+                window._audioBoostNode = audioCtx.createGain();
+                window._audioBoostNode.gain.setValueAtTime(1.0, audioCtx.currentTime);
+                window._audioBoostNode.connect(audioCtx.destination);
+
+                // Play an ultra-short inaudible pulse to wake the DSP
+                const boostOsc = audioCtx.createOscillator();
+                boostOsc.type = 'sine';
+                boostOsc.frequency.setValueAtTime(20000, audioCtx.currentTime); // 20kHz (inaudible)
+                const boostGain = audioCtx.createGain();
+                boostGain.gain.setValueAtTime(0.01, audioCtx.currentTime);
+                boostOsc.connect(boostGain);
+                boostGain.connect(window._audioBoostNode);
+                boostOsc.start();
+                boostOsc.stop(audioCtx.currentTime + 0.05);
+
+                log(`🔊 A9 audio boost active`);
             }
-            
-            const now = audioCtx.currentTime;
-            const duration = durationMs / 1000;
-            
-            // Create oscillator
-            const osc = audioCtx.createOscillator();
-            osc.type = 'sine';
-            osc.frequency.setValueAtTime(frequency, now);
-            
-            // Add slight vibrato for richness
-            const vibrato = audioCtx.createOscillator();
-            vibrato.frequency.setValueAtTime(5, now);
-            const vibratoGain = audioCtx.createGain();
-            vibratoGain.gain.setValueAtTime(5, now);
-            vibrato.connect(vibratoGain);
-            vibratoGain.connect(osc.frequency);
-            vibrato.start();
-            vibrato.stop(now + duration);
-            
-            // Envelope
-            const gainNode = audioCtx.createGain();
-            gainNode.gain.setValueAtTime(0, now);
-            gainNode.gain.linearRampToValueAtTime(volume, now + SYNTH_ATTACK);
-            gainNode.gain.setValueAtTime(volume, now + SYNTH_ATTACK + SYNTH_DECAY);
-            gainNode.gain.exponentialRampToValueAtTime(0.001, now + duration - SYNTH_RELEASE);
-            
-            osc.connect(gainNode);
-            gainNode.connect(audioCtx.destination);
-            
-            osc.start();
-            osc.stop(now + duration);
-            
-            return { osc, gainNode, vibrato };
         }
 
         // Play a chord (multiple notes simultaneously)
@@ -443,6 +427,8 @@
             }, 10000);
             
             log(`🔊 Pillar ${mySeat.id} activated - will synthesize ${myPillarNotes.length} notes when tuning starts`);
+
+            boostA9Audio();
             
             // Start listening for tuning
             listenForTuning();
