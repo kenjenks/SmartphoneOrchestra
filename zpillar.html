@@ -120,7 +120,7 @@
         let scheduledTimeouts = [];
         let activeTimeouts = [];
         let currentMovement = null;
-        
+
         // Synthesizer parameters
         const SYNTH_VOLUME = 1.0;           // Full volume for main notes
         const MASTER_GAIN_BOOST = 1.5;       // Additional boost via gain node
@@ -128,7 +128,7 @@
         const SYNTH_DECAY = 0.1;
         const SYNTH_SUSTAIN = 0.8;
         const SYNTH_RELEASE = 0.05;
-        
+
         // Constants
         const SPEED_OF_SOUND = 343;
 
@@ -137,7 +137,7 @@
             const serverTimestamp = Date.now() + (serverOffset || 0);
             const timeStr = new Date(serverTimestamp).toISOString().substr(11, 12);
             console.log(`[${timeStr}] [${mySeat?.id || 'unknown'}] ${message}`);
-            
+
             const overlay = document.getElementById('performance-overlay');
             if (overlay && message.includes('Playing note')) {
                 // Update overlay briefly
@@ -155,13 +155,13 @@
             try {
                 const urlParams = new URLSearchParams(window.location.search);
                 const seatId = urlParams.get('seat');
-                
+
                 if (!seatId || !seatId.startsWith('PILLAR_')) {
                     log(`Invalid pillar ID: ${seatId}`);
                     document.getElementById('id-ind').className = 'indicator error';
                     return false;
                 }
-                
+
                 mySeat = { id: seatId };
                 document.getElementById('seat-label').innerText = `Pillar ${seatId}`;
                 document.getElementById('id-ind').className = 'indicator active';
@@ -177,6 +177,151 @@
         // MIDI to frequency
         function midiToFrequency(midi) {
             return 440 * Math.pow(2, (midi - 69) / 12);
+        }
+
+        // Synthesize a single note with rich harmonics for detectability
+        function playSynthesizedNote(frequency, durationMs, volume = SYNTH_VOLUME) {
+            if (!audioCtx || audioCtx.state !== 'running') {
+                log(`⚠️ Cannot play note - audio context not running (state: ${audioCtx?.state})`);
+                return null;
+            }
+
+            const now = audioCtx.currentTime;
+            const duration = durationMs / 1000;
+
+            // Master gain for the entire note
+            const masterGain = audioCtx.createGain();
+            masterGain.gain.setValueAtTime(0, now);
+            masterGain.connect(audioCtx.destination);
+
+            // OSCILLATOR 1: Sine wave (fundamental, clean tone)
+            const osc1 = audioCtx.createOscillator();
+            osc1.type = 'sine';
+            osc1.frequency.setValueAtTime(frequency, now);
+
+            // OSCILLATOR 2: Triangle wave (adds harmonics for detectability)
+            const osc2 = audioCtx.createOscillator();
+            osc2.type = 'triangle';
+            osc2.frequency.setValueAtTime(frequency, now);
+
+            // OSCILLATOR 3: Square wave one octave higher (adds brightness)
+            const osc3 = audioCtx.createOscillator();
+            osc3.type = 'square';
+            osc3.frequency.setValueAtTime(frequency * 2, now);
+
+            // Add vibrato for richness (helps detection by frequency sweep)
+            const vibrato = audioCtx.createOscillator();
+            vibrato.frequency.setValueAtTime(6, now);  // 6 Hz vibrato
+            const vibratoGain = audioCtx.createGain();
+            vibratoGain.gain.setValueAtTime(8, now);   // ±8 Hz modulation
+            vibrato.connect(vibratoGain);
+            vibratoGain.connect(osc1.frequency);
+            vibratoGain.connect(osc2.frequency);
+            vibratoGain.connect(osc3.frequency);
+            vibrato.start();
+            vibrato.stop(now + duration);
+
+            // Individual gain controls for mixing harmonics
+            const gain1 = audioCtx.createGain();
+            const gain2 = audioCtx.createGain();
+            const gain3 = audioCtx.createGain();
+
+            // Mix: sine 100%, triangle 60%, octave square 40%
+            const effectiveVolume = volume * MASTER_GAIN_BOOST;
+            gain1.gain.setValueAtTime(effectiveVolume * 1.0, now);
+            gain2.gain.setValueAtTime(effectiveVolume * 0.6, now);
+            gain3.gain.setValueAtTime(effectiveVolume * 0.4, now);
+
+            // Connect oscillators to their gains
+            osc1.connect(gain1);
+            osc2.connect(gain2);
+            osc3.connect(gain3);
+
+            // Connect gains to master gain
+            gain1.connect(masterGain);
+            gain2.connect(masterGain);
+            gain3.connect(masterGain);
+
+            // ADSR Envelope - fast attack for clear onset detection
+            const ATTACK = 0.005;   // 5ms attack
+            const DECAY = 0.02;     // 20ms decay
+            const SUSTAIN = 0.85;   // 85% sustain
+            const RELEASE = 0.03;   // 30ms release
+
+            // Apply envelope to master gain
+            masterGain.gain.setValueAtTime(0, now);
+            masterGain.gain.linearRampToValueAtTime(effectiveVolume, now + ATTACK);
+            masterGain.gain.setValueAtTime(effectiveVolume, now + ATTACK + DECAY);
+            masterGain.gain.linearRampToValueAtTime(effectiveVolume * SUSTAIN, now + ATTACK + DECAY + 0.01);
+            masterGain.gain.exponentialRampToValueAtTime(0.001, now + duration - RELEASE);
+
+            // Start all oscillators
+            osc1.start();
+            osc2.start();
+            osc3.start();
+            vibrato.start();
+
+            // Stop all oscillators
+            osc1.stop(now + duration);
+            osc2.stop(now + duration);
+            osc3.stop(now + duration);
+            vibrato.stop(now + duration);
+
+            // Log first few notes for debugging
+            if (!window._noteCount) window._noteCount = 0;
+            window._noteCount++;
+            if (window._noteCount <= 5) {
+                log(`🔊 Playing note: ${frequency.toFixed(0)}Hz for ${durationMs}ms at volume ${(effectiveVolume * 100).toFixed(0)}%`);
+            }
+
+            return { osc1, osc2, osc3, gain1, gain2, gain3, masterGain, vibrato };
+        }
+
+        // Play a warm-up pulse to wake the A9's audio DSP
+        function playWarmUpPulse() {
+            if (!audioCtx || audioCtx.state !== 'running') {
+                log(`⚠️ Cannot play warm-up pulse - audio context not running`);
+                return;
+            }
+
+            log(`🔊 Playing warm-up pulse to wake audio hardware`);
+
+            const now = audioCtx.currentTime;
+            const duration = 0.2; // 200ms
+
+            const masterGain = audioCtx.createGain();
+            masterGain.gain.setValueAtTime(0, now);
+            masterGain.connect(audioCtx.destination);
+
+            // Sweep from low to high to fully wake the DSP
+            const osc = audioCtx.createOscillator();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(200, now);
+            osc.frequency.exponentialRampToValueAtTime(2000, now + duration);
+
+            const gain = audioCtx.createGain();
+            gain.gain.setValueAtTime(0, now);
+            gain.gain.linearRampToValueAtTime(MASTER_GAIN_BOOST * 0.8, now + 0.05);
+            gain.gain.linearRampToValueAtTime(0, now + duration);
+
+            osc.connect(gain);
+            gain.connect(masterGain);
+
+            osc.start();
+            osc.stop(now + duration);
+
+            // Also play a short click to ensure speaker is fully primed
+            const clickOsc = audioCtx.createOscillator();
+            clickOsc.type = 'square';
+            clickOsc.frequency.setValueAtTime(1000, now);
+            const clickGain = audioCtx.createGain();
+            clickGain.gain.setValueAtTime(0, now);
+            clickGain.gain.linearRampToValueAtTime(MASTER_GAIN_BOOST * 0.5, now + 0.01);
+            clickGain.gain.linearRampToValueAtTime(0, now + 0.05);
+            clickOsc.connect(clickGain);
+            clickGain.connect(masterGain);
+            clickOsc.start();
+            clickOsc.stop(now + 0.05);
         }
 
         async function boostA9Audio() {
@@ -220,9 +365,9 @@
                 log(`⚠️ No pillar_notes in schedule`);
                 return false;
             }
-            
+
             // Filter notes for this pillar
-            myPillarNotes = schedule.pillar_notes.filter(note => 
+            myPillarNotes = schedule.pillar_notes.filter(note =>
                 note.pillar_id === mySeat.id
             ).map(note => ({
                 ...note,
@@ -232,15 +377,15 @@
                 midi: note.midi,
                 pitch: note.pitch
             }));
-            
+
             log(`📡 Loaded ${myPillarNotes.length} notes for ${mySeat.id}`);
             document.getElementById('notes-ind').className = myPillarNotes.length > 0 ? 'indicator active' : 'indicator error';
-            
+
             if (myPillarNotes.length > 0) {
                 log(`   First note: ${myPillarNotes[0].pitch} at ${myPillarNotes[0].ms_offset}ms`);
                 log(`   Last note: ${myPillarNotes[myPillarNotes.length-1].pitch} at ${myPillarNotes[myPillarNotes.length-1].ms_offset}ms`);
             }
-            
+
             return myPillarNotes.length > 0;
         }
 
@@ -250,31 +395,45 @@
                 log(`⚠️ No notes to schedule for ${mySeat.id}`);
                 return;
             }
-            
+
             const nowWall = Date.now() + serverOffset;
             log(`🎵 Scheduling ${myPillarNotes.length} synthesized notes for ${mySeat.id}`);
             log(`   Start time: ${new Date(startTime).toISOString().substr(11, 12)}.${String(startTime % 1000).padStart(3, '0')}`);
-            
+
+            // Schedule warm-up pulse 500ms before first note
+            const firstNoteTime = startTime + myPillarNotes[0].ms_offset;
+            const warmUpTime = firstNoteTime - 500;
+            const warmUpDelay = warmUpTime - nowWall;
+
+            if (warmUpDelay > 0) {
+                const warmUpTimeout = setTimeout(() => {
+                    playWarmUpPulse();
+                    log(`🔊 Warm-up pulse played ${(Date.now() + serverOffset - warmUpTime)}ms before first note`);
+                }, warmUpDelay);
+                activeTimeouts.push(warmUpTimeout);
+                log(`🔊 Warm-up pulse scheduled in ${(warmUpDelay/1000).toFixed(1)}s before first note`);
+            }
+
             let scheduledCount = 0;
             let firstNoteLogged = false;
-            
+
             myPillarNotes.forEach(note => {
                 const absoluteTime = startTime + note.ms_offset;
                 const delayMs = absoluteTime - nowWall;
-                
+
                 if (delayMs > 0) {
                     const timeoutId = setTimeout(() => {
                         try {
                             // Ensure audio context is running
                             if (audioCtx && audioCtx.state === 'suspended') {
-                                audioCtx.resume();
+                                audioCtx.resume().catch(e => log(`Failed to resume: ${e.message}`));
                             }
-                            
+
                             playSynthesizedNote(note.frequency, note.duration_ms, SYNTH_VOLUME);
-                            
+
                             // Visual feedback
                             animateNoteFlash(note.pitch);
-                            
+
                             if (!firstNoteLogged) {
                                 log(`🔊 Playing first note: ${note.pitch} (${note.frequency.toFixed(0)}Hz) at ${note.ms_offset}ms`);
                                 firstNoteLogged = true;
@@ -294,7 +453,7 @@
                     log(`❌ Note ${note.index} is too late (${Math.round(-delayMs)}ms), skipping`);
                 }
             });
-            
+
             log(`📅 Scheduled ${scheduledCount} synthesized notes`);
         }
 
@@ -303,21 +462,21 @@
             const canvas = document.getElementById('stage-canvas');
             if (!canvas) return;
             const ctx = canvas.getContext('2d');
-            
+
             // Color based on pitch range
             let color;
             const midi = noteMidiFromPitch(pitch);
             if (midi < 70) color = '#ffaa44';      // Low notes - orange
             else if (midi < 80) color = '#44ffaa'; // Mid notes - cyan
             else color = '#ff44aa';                 // High notes - pink
-            
+
             ctx.fillStyle = color;
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             setTimeout(() => {
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
             }, 100);
         }
-        
+
         function noteMidiFromPitch(pitch) {
             const noteMap = {
                 'C': 60, 'C#': 61, 'Db': 61, 'D': 62, 'D#': 63, 'Eb': 63,
@@ -337,7 +496,7 @@
         function listenForTuning() {
             db.ref('tuning/current').on('value', snap => {
                 const schedule = snap.val();
-                
+
                 if (!schedule) {
                     if (tuningStartTime) {
                         log(`⚠️ Tuning schedule cleared`);
@@ -347,32 +506,32 @@
                     }
                     return;
                 }
-                
+
                 if (!schedule.startTime) {
                     log(`⚠️ Schedule has no startTime`);
                     return;
                 }
-                
+
                 const now = Date.now() + serverOffset;
                 const timeToStart = schedule.startTime - now;
-                
+
                 log(`🎵 Tuning schedule received`);
                 log(`   Start time: ${new Date(schedule.startTime).toISOString().substr(11, 12)}.${String(schedule.startTime % 1000).padStart(3, '0')}`);
                 log(`   Time to start: ${(timeToStart / 1000).toFixed(1)}s`);
-                
+
                 // Load notes for this pillar
                 if (!loadPillarNotes(schedule)) {
                     log(`❌ No notes found for ${mySeat.id}`);
                     return;
                 }
-                
+
                 tuningStartTime = schedule.startTime;
-                
+
                 // Schedule the notes
                 schedulePillarNotes(tuningStartTime);
-                
+
                 // Update UI
-                document.getElementById('performance-overlay').innerHTML = 
+                document.getElementById('performance-overlay').innerHTML =
                     `Pillar: ${mySeat.id} | Notes: ${myPillarNotes.length} | Playing: scheduled`;
             });
         }
@@ -382,11 +541,17 @@
             try {
                 audioCtx = new (window.AudioContext || window.webkitAudioContext)();
                 log(`🎛️ Audio context created (state: ${audioCtx.state})`);
-                
+
                 if (audioCtx.state === 'suspended') {
                     await audioCtx.resume();
                     log(`🎛️ Audio context resumed (state: ${audioCtx.state})`);
                 }
+
+                // Set volume to maximum
+                if (audioCtx.destination && audioCtx.destination.maxChannelCount) {
+                    log(`🎛️ Audio output channels: ${audioCtx.destination.maxChannelCount}`);
+                }
+
                 return true;
             } catch (e) {
                 log(`❌ Failed to create audio context: ${e.message}`);
@@ -400,20 +565,20 @@
                 const success = await initAudio();
                 if (!success) return;
             }
-            
+
             if (audioCtx.state === 'suspended') {
                 await audioCtx.resume();
             }
-            
+
             document.getElementById('setup-screen').style.display = 'none';
             document.getElementById('show-screen').style.display = 'block';
-            
+
             const canvas = document.getElementById('stage-canvas');
             canvas.width = window.innerWidth;
             canvas.height = window.innerHeight;
-            
+
             isActive = true;
-            
+
             // Start heartbeat
             setInterval(() => {
                 if (mySeat) {
@@ -425,11 +590,18 @@
                     });
                 }
             }, 10000);
-            
+
             log(`🔊 Pillar ${mySeat.id} activated - will synthesize ${myPillarNotes.length} notes when tuning starts`);
 
-            boostA9Audio();
-            
+            // Boost A9 audio
+            await boostA9Audio();
+
+            // Play a test tone to verify audio is working
+            setTimeout(() => {
+                log(`🔊 Playing test tone to verify audio output...`);
+                playSynthesizedNote(440, 300, 0.8); // A4 for 300ms
+            }, 1000);
+
             // Start listening for tuning
             listenForTuning();
         }
@@ -437,21 +609,21 @@
         // Window load
         window.onload = async () => {
             log(`🎧 zpillar.html starting`);
-            
+
             const idOk = await resolveIdentity();
             if (!idOk) {
                 document.getElementById('system-msg').innerText = "Failed to identify pillar";
                 return;
             }
-            
+
             document.getElementById('ready-btn').disabled = false;
             document.getElementById('system-msg').innerText = "Ready. Tap to activate.";
-            
+
             document.getElementById('ready-btn').onclick = async () => {
                 await startPillar();
             };
         };
-        
+
         window.onresize = () => {
             const canvas = document.getElementById('stage-canvas');
             if (canvas) {
@@ -459,7 +631,7 @@
                 canvas.height = window.innerHeight;
             }
         };
-        
+
         window.addEventListener('beforeunload', () => {
             activeTimeouts.forEach(t => clearTimeout(t));
         });
