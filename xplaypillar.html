@@ -393,11 +393,10 @@
             }
         }
 
-        // Listen for tuning schedule
         function listenForTuning() {
             db.ref('tuning/current').on('value', snap => {
                 const schedule = snap.val();
-                
+
                 if (!schedule) {
                     if (playbackScheduled) {
                         log("⚠️ Tuning schedule cleared");
@@ -408,28 +407,46 @@
                     }
                     return;
                 }
-                
+
                 if (!schedule.startTime) {
                     log("⚠️ Schedule has no startTime");
                     return;
                 }
-                
+
                 const now = Date.now() + serverOffset;
                 const timeToStart = schedule.startTime - now;
-                
+
+                // *** Update pillar URL from the schedule ***
+                if (schedule.pillars && schedule.pillars.FL) {
+                    const newUrl = schedule.pillars.FL;
+                    if (newUrl !== myPillarUrl) {
+                        log(`📡 UPDATING pillar URL from schedule: ${newUrl.split('/').pop()}`);
+                        myPillarUrl = newUrl;
+                        // Invalidate cached buffer to force fresh load
+                        if (testAudioBuffer && testAudioBuffer !== pillarAudioBuffer) {
+                            // Keep test audio buffer separate
+                        }
+                        if (pillarAudioBuffer) {
+                            pillarAudioBuffer = null;
+                            log(`   Cleared old buffer cache for new URL`);
+                        }
+                        document.getElementById('pillar-url').innerHTML = myPillarUrl.split('/').pop();
+                    }
+                }
+
                 log(`🎵 Tuning schedule received`);
                 log(`   Start time: ${new Date(schedule.startTime).toISOString().substr(11, 12)}.${String(schedule.startTime % 1000).padStart(3, '0')}`);
                 log(`   Time to start: ${(timeToStart / 1000).toFixed(1)}s`);
-                
+
                 document.getElementById('schedule-status').innerHTML = `Received, starts in ${Math.round(timeToStart/1000)}s`;
-                
+
                 // Check if we have the pillar URL
                 if (!myPillarUrl) {
                     log("❌ No pillar URL available - cannot play");
                     document.getElementById('schedule-status').innerHTML = "No URL";
                     return;
                 }
-                
+
                 // Schedule playback
                 if (!playbackScheduled) {
                     playbackScheduled = true;
