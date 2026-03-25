@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>xmusiclistener - Note Detection Monitor</title>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0a0a0a;
+            color: #eee;
+            padding: 20px;
+            margin: 0;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        h1 {
+            color: #44ffaa;
+            font-weight: 300;
+        }
+        .status {
+            background: #1a1a1a;
+            border-left: 4px solid #44ffaa;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 4px;
+        }
+        .status-connected {
+            border-left-color: #00ffcc;
+        }
+        button {
+            background: #44ffaa;
+            color: #000;
+            border: none;
+            padding: 12px 24px;
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 1rem;
+            font-weight: bold;
+            margin-right: 10px;
+        }
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .info-panel {
+            background: #111;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #222;
+            font-family: monospace;
+        }
+        .meter {
+            background: #1a1a1a;
+            border-radius: 4px;
+            margin: 10px 0;
+            padding: 10px;
+        }
+        .meter-bar {
+            width: 100%;
+            height: 20px;
+            background: #333;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        .meter-fill {
+            height: 100%;
+            background: #44ffaa;
+            width: 0%;
+            transition: width 0.05s;
+        }
+        .detection-box {
+            background: #000;
+            border: 1px solid #333;
+            border-radius: 4px;
+            padding: 10px;
+            margin: 10px 0;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 11px;
+        }
+        .detection-entry {
+            padding: 2px;
+            border-bottom: 1px solid #222;
+        }
+        .detection-success {
+            color: #44ffaa;
+            border-left: 3px solid #44ffaa;
+            padding-left: 6px;
+        }
+        .detection-miss {
+            color: #ffaa44;
+            border-left: 3px solid #ffaa44;
+            padding-left: 6px;
+        }
+        .log-area {
+            background: #000;
+            color: #0f0;
+            font-family: monospace;
+            font-size: 11px;
+            height: 200px;
+            overflow-y: auto;
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 20px;
+        }
+        .timestamp {
+            color: #666;
+            margin-right: 8px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎧 xmusiclistener - Note Detection Monitor</h1>
+        <p style="color: #888;">Listens for notes using pitch-aware detection. Reports successes and misses to the log.</p>
+
+        <div id="connection-status" class="status">
+            🔌 Firebase: Disconnected
+        </div>
+
+        <div class="info-panel">
+            <div class="info-row">
+                <span>🎯 Listening Device:</span>
+                <span id="device-id">--</span>
+            </div>
+            <div class="info-row">
+                <span>🎤 Mic Status:</span>
+                <span id="mic-status">Not requested</span>
+            </div>
+            <div class="info-row">
+                <span>📊 Current Energy (note band):</span>
+                <span id="energy-value">0.00</span>
+            </div>
+            <div class="info-row">
+                <span>🎵 Current Note:</span>
+                <span id="current-note">--</span>
+            </div>
+        </div>
+
+        <div class="meter">
+            <div style="margin-bottom: 5px;">🎧 Note Band Energy</div>
+            <div class="meter-bar">
+                <div id="energy-fill" class="meter-fill" style="width: 0%;"></div>
+            </div>
+        </div>
+
+        <div>
+            <button id="request-mic-btn">🎤 Request Mic Permission</button>
+            <button id="start-listening-btn" disabled>🔊 Start Listening</button>
+            <button id="stop-listening-btn" disabled>⏹️ Stop Listening</button>
+        </div>
+
+        <div class="detection-box">
+            <div style="color: #44ffaa; margin-bottom: 5px;">📡 Note Detections (last 50):</div>
+            <div id="detection-list">No detections yet...</div>
+        </div>
+
+        <div class="log-area" id="log-area">
+            <div class="log-entry">[System] xmusiclistener started. Request mic permission to begin.</div>
+        </div>
+    </div>
+
+    <script>
+        // Firebase Configuration
+        const firebaseConfig = {
+            apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
+            authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
+            databaseURL: "https://smartphoneorchestra-dwt-default-rtdb.firebaseio.com/",
+            projectId: "smartphoneorchestra-dwt",
+            storageBucket: "smartphoneorchestra-dwt.firebasestorage.app",
+            messagingSenderId: "722537253165",
+            appId: "1:722537253165:web:8e8b6495bd508de35b2ba4"
+        };
+
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
+        // State
+        let audioCtx = null;
+        let mySeat = { id: 'xmusiclistener' };
+        let serverOffset = 0;
+        let micStream = null;
+        let analyser = null;
+        let isListening = false;
+        let logRef = null;
+        let logQueue = [];
+        
+        // Tuning data (loaded from Firebase)
+        let noteTimings = [];
+        let tuningStartTime = 0;
+        let pillarNoteSchedule = [];
+        let noteSchedule = [];
+        let phase1EndMs = 20571.4;
+        
+        // FFT parameters
+        const FFT_SIZE = 2048;
+        let sampleRate = 48000;
+        let frequencyData = null;
+        
+        // Pitch-aware detection
+        const PITCH_DETECTION_TOLERANCE_BINS = 2;
+        const BASELINE_SAMPLES_MS = 200;
+        const BASELINE_THRESHOLD_MULTIPLIER = 1.5;
+        let baselineEnergy = 0;
+        let baselineSamples = [];
+        let baselineEstablished = false;
+        let baselineStartTime = 0;
+        
+        // Detection tracking
+        let detectionCount = 0;
+        let processedNotes = new Set();
+        let currentSongPosition = 0;
+        
+        // Helper functions
+        function getFrequencyFromMidi(midiNote) {
+            return 440 * Math.pow(2, (midiNote - 69) / 12);
+        }
+        
+        function getBinForFrequency(frequency, sampleRate, fftSize) {
+            const nyquist = sampleRate / 2;
+            const bin = Math.floor(frequency / nyquist * (fftSize / 2));
+            return Math.min(Math.max(0, bin), fftSize / 2 - 1);
+        }
+        
+        function log(message, type = 'info') {
+            const timestamp = Date.now() + serverOffset;
+            const timeStr = new Date(timestamp).toISOString().substr(11, 12);
+            const logDiv = document.createElement('div');
+            logDiv.className = 'log-entry';
+            logDiv.innerHTML = `<span class="timestamp">[${timeStr}]</span> ${message}`;
+            document.getElementById('log-area').appendChild(logDiv);
+            logDiv.scrollIntoView({ behavior: 'smooth', block: 'end' });
+            console.log(`[${timeStr}] ${message}`);
+            
+            if (logRef) {
+                const logEntry = {
+                    timestamp: timestamp,
+                    timeStr: timeStr,
+                    message: message,
+                    seatId: mySeat.id,
+                    type: type
+                };
+                logQueue.push(logEntry);
+                if (logQueue.length >= 10) flushLogs();
+            }
+        }
+        
+        function flushLogs() {
+            if (logQueue.length === 0 || !logRef) return;
+            const logsToSend = [...logQueue];
+            logQueue = [];
+            const batch = {};
+            logsToSend.forEach((logEntry, index) => {
+                batch[`${logEntry.timestamp}_${index}`] = logEntry;
+            });
+            logRef.update(batch).catch(e => console.error("Failed to send logs:", e));
+        }
+        
+        // Clock sync
+        db.ref(".info/serverTimeOffset").on("value", snap => {
+            serverOffset = snap.val() || 0;
+            log(`⏱️ Server offset: ${serverOffset}ms`);
+        });
+        
+        // Connection status
+        db.ref(".info/connected").on("value", snap => {
+            const statusDiv = document.getElementById('connection-status');
+            if (snap.val() === true) {
+                statusDiv.innerHTML = "✅ Firebase: Connected";
+                statusDiv.className = "status status-connected";
+                log("Firebase connected");
+            } else {
+                statusDiv.innerHTML = "🔌 Firebase: Disconnected";
+                statusDiv.className = "status";
+                log("Firebase disconnected");
+            }
+        });
+        
+        // Load tuning configuration from Firebase
+        async function loadTuningConfig() {
+            try {
+                const tuningSnap = await db.ref('tuning_mode').once('value');
+                const tuningData = tuningSnap.val();
+                
+                if (!tuningData || !tuningData.piano_notes) {
+                    log("⚠️ No tuning configuration found in Firebase");
+                    return false;
+                }
+                
+                // Load note timings (all notes, both pillar and patron)
+                noteTimings = tuningData.piano_notes.map((note, index) => ({
+                    index: index,
+                    startMs: note.ms_offset,
+                    durationMs: note.duration_ms || 500,
+                    measure: note.measure,
+                    pitch: note.pitch,
+                    midi: note.midi
+                }));
+                
+                // Load pillar notes for Phase 1 detection
+                if (tuningData.pillar_notes) {
+                    pillarNoteSchedule = tuningData.pillar_notes.map(note => ({
+                        pillar_id: note.pillar_id,
+                        index: note.index,
+                        ms_offset: note.ms_offset,
+                        duration_ms: note.duration_ms,
+                        pitch: note.pitch,
+                        midi: note.midi
+                    }));
+                    log(`📡 Loaded ${pillarNoteSchedule.length} pillar notes`);
+                }
+                
+                // Get Phase 1 end time
+                if (tuningData.metadata && tuningData.metadata.pillar_cal_windows) {
+                    const lastWindow = tuningData.metadata.pillar_cal_windows[tuningData.metadata.pillar_cal_windows.length - 1];
+                    phase1EndMs = lastWindow.end_ms;
+                }
+                
+                log(`📋 Loaded ${noteTimings.length} total notes, Phase 1 ends at ${phase1EndMs}ms`);
+                return true;
+                
+            } catch (e) {
+                log(`❌ Failed to load tuning config: ${e.message}`);
+                return false;
+            }
+        }
+        
+        // Listen for tuning schedule to get startTime
+        function listenForTuningSchedule() {
+            db.ref('tuning/current').on('value', snap => {
+                const schedule = snap.val();
+                if (schedule && schedule.startTime) {
+                    tuningStartTime = schedule.startTime;
+                    noteSchedule = schedule.schedule || [];
+                    log(`🎵 Tuning schedule loaded: startTime=${new Date(tuningStartTime).toISOString().substr(11, 12)}, ${noteSchedule.length} notes`);
+                }
+            });
+        }
+        
+        // Setup microphone and start detection
+        async function setupMicrophone() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            
+            if (audioCtx.state === 'suspended') {
+                await audioCtx.resume();
+            }
+            
+            try {
+                if (!micStream) {
+                    log("📱 Requesting microphone access...");
+                    const stream = await navigator.mediaDevices.getUserMedia({
+                        audio: {
+                            echoCancellation: false,
+                            noiseSuppression: false,
+                            autoGainControl: false,
+                            sampleRate: 44100
+                        }
+                    });
+                    micStream = stream;
+                    log("✅ Microphone access granted");
+                }
+                
+                const source = audioCtx.createMediaStreamSource(micStream);
+                analyser = audioCtx.createAnalyser();
+                analyser.fftSize = FFT_SIZE;
+                analyser.smoothingTimeConstant = 0.1;
+                
+                source.connect(analyser);
+                
+                sampleRate = audioCtx.sampleRate;
+                frequencyData = new Uint8Array(analyser.frequencyBinCount);
+                
+                log(`🎤 Microphone active, sample rate: ${sampleRate}Hz, FFT size: ${FFT_SIZE}`);
+                return true;
+                
+            } catch (e) {
+                log(`❌ Microphone setup failed: ${e.message}`);
+                return false;
+            }
+        }
+        
+        // Detect notes (both pillar and patron) using pitch-aware detection
+        function detectNotes() {
+            if (!isListening || !analyser || !frequencyData) {
+                requestAnimationFrame(detectNotes);
+                return;
+            }
+            
+            const now = Date.now() + serverOffset;
+            analyser.getByteFrequencyData(frequencyData);
+            
+            if (!tuningStartTime) {
+                requestAnimationFrame(detectNotes);
+                return;
+            }
+            
+            const songPosition = now - tuningStartTime;
+            if (songPosition < 0 || songPosition > 200000) {
+                requestAnimationFrame(detectNotes);
+                return;
+            }
+            
+            // Determine which notes to look for (pillars in Phase 1, patrons in Phase 2)
+            let expectedNotes = [];
+            if (songPosition < phase1EndMs) {
+                // Phase 1: Look for pillar notes
+                expectedNotes = pillarNoteSchedule.filter(note => {
+                    const timeDiff = Math.abs(songPosition - note.ms_offset);
+                    return timeDiff < 500;
+                });
+            } else {
+                // Phase 2: Look for patron notes
+                expectedNotes = noteSchedule.filter(note => {
+                    const timeDiff = Math.abs(songPosition - note.startMs);
+                    return timeDiff < 500;
+                }).map(note => ({
+                    ...note,
+                    ms_offset: note.startMs,
+                    pitch: noteTimings[note.noteIndex]?.pitch || '?',
+                    midi: noteTimings[note.noteIndex]?.midi || 69
+                }));
+            }
+            
+            if (expectedNotes.length === 0) {
+                requestAnimationFrame(detectNotes);
+                return;
+            }
+            
+            // Find the closest expected note
+            let closestNote = null;
+            let minDelta = Infinity;
+            
+            expectedNotes.forEach(note => {
+                const expectedTime = tuningStartTime + (note.ms_offset || note.startMs);
+                const delta = Math.abs(now - expectedTime);
+                if (delta < minDelta && delta < 500) {
+                    minDelta = delta;
+                    closestNote = note;
+                }
+            });
+            
+            if (!closestNote) {
+                requestAnimationFrame(detectNotes);
+                return;
+            }
+            
+            const noteKey = `${closestNote.pillar_id || 'patron'}_${closestNote.index || closestNote.noteIndex}`;
+            if (processedNotes.has(noteKey)) {
+                requestAnimationFrame(detectNotes);
+                return;
+            }
+            
+            // Calculate energy at the expected frequency
+            const frequency = getFrequencyFromMidi(closestNote.midi);
+            const targetBin = getBinForFrequency(frequency, sampleRate, FFT_SIZE);
+            const safeBin = Math.min(Math.max(0, targetBin), FFT_SIZE / 2 - 1);
+            
+            let energy = 0;
+            let binsChecked = 0;
+            for (let i = Math.max(0, safeBin - PITCH_DETECTION_TOLERANCE_BINS); 
+                 i <= Math.min(FFT_SIZE / 2 - 1, safeBin + PITCH_DETECTION_TOLERANCE_BINS); 
+                 i++) {
+                if (frequencyData && i < frequencyData.length) {
+                    energy += frequencyData[i] / 255;
+                    binsChecked++;
+                }
+            }
+            if (binsChecked > 0) energy = energy / binsChecked;
+            
+            // Update UI meter
+            const fillPercent = Math.min(100, energy * 100);
+            document.getElementById('energy-fill').style.width = fillPercent + '%';
+            document.getElementById('energy-value').innerHTML = energy.toFixed(4);
+            document.getElementById('current-note').innerHTML = `${closestNote.pitch} (${frequency.toFixed(0)}Hz)`;
+            
+            // Baseline adaptation
+            if (!baselineEstablished) {
+                if (Date.now() - baselineStartTime < BASELINE_SAMPLES_MS) {
+                    baselineSamples.push(energy);
+                } else {
+                    if (baselineSamples.length > 0) {
+                        const sorted = [...baselineSamples].sort((a, b) => a - b);
+                        baselineEnergy = sorted[Math.floor(sorted.length / 2)];
+                        baselineEstablished = true;
+                        log(`📊 Baseline established: ${baselineEnergy.toFixed(4)} from ${baselineSamples.length} samples`);
+                    } else {
+                        baselineEnergy = 0.01;
+                        baselineEstablished = true;
+                    }
+                }
+                requestAnimationFrame(detectNotes);
+                return;
+            }
+            
+            const threshold = baselineEnergy * BASELINE_THRESHOLD_MULTIPLIER;
+            const ratio = baselineEnergy > 0 ? energy / baselineEnergy : 1.0;
+            
+            // Determine if this is a detection or miss
+            const expectedTimeAbs = tuningStartTime + (closestNote.ms_offset || closestNote.startMs);
+            const timeError = now - expectedTimeAbs;
+            const sourceType = songPosition < phase1EndMs ? 'PILLAR' : 'PATRON';
+            const sourceId = closestNote.pillar_id || closestNote.deviceId || 'unknown';
+            
+            if (energy > threshold) {
+                // SUCCESSFUL DETECTION
+                detectionCount++;
+                processedNotes.add(noteKey);
+                
+                const detectionMsg = `✅ DETECTED: ${sourceType} ${sourceId} note ${closestNote.index || closestNote.noteIndex} (${closestNote.pitch} @ ${frequency.toFixed(0)}Hz) | timeError=${timeError > 0 ? '+' : ''}${timeError.toFixed(1)}ms | energy=${energy.toFixed(4)} (${ratio.toFixed(1)}x baseline)`;
+                
+                // Add to detection list
+                const detectionList = document.getElementById('detection-list');
+                if (detectionList.innerHTML === "No detections yet...") {
+                    detectionList.innerHTML = '';
+                }
+                const detectionDiv = document.createElement('div');
+                detectionDiv.className = 'detection-entry detection-success';
+                detectionDiv.innerHTML = `[${new Date(now).toISOString().substr(11, 12)}] ${detectionMsg}`;
+                detectionList.insertBefore(detectionDiv, detectionList.firstChild);
+                if (detectionList.children.length > 50) {
+                    detectionList.removeChild(detectionList.lastChild);
+                }
+                
+                log(detectionMsg, 'match');
+                
+                // Flash effect
+                const meterFill = document.getElementById('energy-fill');
+                meterFill.style.background = '#ffaa44';
+                setTimeout(() => { meterFill.style.background = '#44ffaa'; }, 200);
+                
+            } else if (energy > baselineEnergy) {
+                // MISSED DETECTION (some energy but below threshold)
+                const missMsg = `❌ MISSED: ${sourceType} ${sourceId} note ${closestNote.index || closestNote.noteIndex} (${closestNote.pitch} @ ${frequency.toFixed(0)}Hz) | energy=${energy.toFixed(4)} (${ratio.toFixed(1)}x baseline), threshold=${threshold.toFixed(4)}`;
+                
+                const detectionList = document.getElementById('detection-list');
+                if (detectionList.innerHTML === "No detections yet...") {
+                    detectionList.innerHTML = '';
+                }
+                const detectionDiv = document.createElement('div');
+                detectionDiv.className = 'detection-entry detection-miss';
+                detectionDiv.innerHTML = `[${new Date(now).toISOString().substr(11, 12)}] ${missMsg}`;
+                detectionList.insertBefore(detectionDiv, detectionList.firstChild);
+                if (detectionList.children.length > 50) {
+                    detectionList.removeChild(detectionList.lastChild);
+                }
+                
+                log(missMsg, 'break');
+            }
+            
+            requestAnimationFrame(detectNotes);
+        }
+        
+        // Start listening
+        async function startListening() {
+            if (isListening) {
+                log("⚠️ Already listening");
+                return;
+            }
+            
+            log("🎤 Starting note detection...");
+            
+            const micSuccess = await setupMicrophone();
+            if (!micSuccess) {
+                log("❌ Failed to setup microphone");
+                return;
+            }
+            
+            // Load tuning data if not already loaded
+            if (noteTimings.length === 0) {
+                await loadTuningConfig();
+            }
+            
+            listenForTuningSchedule();
+            
+            isListening = true;
+            baselineEstablished = false;
+            baselineSamples = [];
+            baselineStartTime = Date.now();
+            processedNotes.clear();
+            detectionCount = 0;
+            
+            log("🔊 Listening for notes using pitch-aware detection");
+            log(`   Phase 1 (pillars): 0-${phase1EndMs}ms, Phase 2 (patrons): ${phase1EndMs}ms+`);
+            
+            detectNotes();
+            
+            document.getElementById('start-listening-btn').disabled = true;
+            document.getElementById('stop-listening-btn').disabled = false;
+        }
+        
+        // Stop listening
+        function stopListening() {
+            if (!isListening) return;
+            
+            isListening = false;
+            log("⏹️ Stopped listening");
+            log(`📊 Summary: ${detectionCount} successful detections, ${processedNotes.size} unique notes tracked`);
+            
+            if (micStream) {
+                micStream.getTracks().forEach(track => track.stop());
+                micStream = null;
+            }
+            analyser = null;
+            
+            document.getElementById('start-listening-btn').disabled = false;
+            document.getElementById('stop-listening-btn').disabled = true;
+        }
+        
+        // Initialize
+        window.onload = async () => {
+            log("🎧 xmusiclistener started");
+            
+            // Initialize log reference
+            logRef = db.ref(`device_logs/${mySeat.id}`);
+            setInterval(flushLogs, 2000);
+            
+            // Request mic button
+            document.getElementById('request-mic-btn').onclick = async () => {
+                log("📱 Requesting microphone permission...");
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    micStream = stream;
+                    log("✅ Microphone permission GRANTED");
+                    document.getElementById('mic-status').innerHTML = "Permission granted";
+                    document.getElementById('start-listening-btn').disabled = false;
+                } catch (e) {
+                    log(`❌ Microphone permission DENIED: ${e.message}`);
+                    document.getElementById('mic-status').innerHTML = `Denied: ${e.message}`;
+                }
+            };
+            
+            // Start listening button
+            document.getElementById('start-listening-btn').onclick = startListening;
+            
+            // Stop listening button
+            document.getElementById('stop-listening-btn').onclick = stopListening;
+        };
+        
+        window.addEventListener('beforeunload', () => {
+            if (micStream) {
+                micStream.getTracks().forEach(track => track.stop());
+            }
+            flushLogs();
+        });
+    </script>
+</body>
+</html>
