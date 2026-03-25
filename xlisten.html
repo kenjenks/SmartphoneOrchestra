@@ -125,13 +125,6 @@
             color: #666;
             margin-right: 10px;
         }
-        pre {
-            background: #000;
-            padding: 10px;
-            overflow-x: auto;
-            font-size: 10px;
-            max-height: 300px;
-        }
         .log-area {
             background: #000;
             color: #0f0;
@@ -147,12 +140,28 @@
             margin-bottom: 4px;
             border-bottom: 1px solid #111;
         }
+        .status-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 10px;
+            font-weight: bold;
+            margin-left: 10px;
+        }
+        .badge-captured {
+            background: #1e4d1e;
+            color: #8bc34a;
+        }
+        .badge-waiting {
+            background: #4d4d1e;
+            color: #ffcc00;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>🎧 xlisten - Tuning Schedule Listener</h1>
-        <p style="color: #888; margin-bottom: 20px;">Listens to Firebase for tuning schedules. After Phase 1 begins, click "Capture & Download" to save the note schedule for debugging.</p>
+        <p style="color: #888; margin-bottom: 20px;">Listens to Firebase for tuning schedules. Click "Capture & Download" anytime to save whatever data has been received.</p>
 
         <div id="connection-status" class="status status-disconnected">
             🔌 Firebase: Disconnected
@@ -162,6 +171,7 @@
             <div class="info-row">
                 <span class="info-label">📡 Tuning Schedule Received:</span>
                 <span class="info-value" id="schedule-status">Waiting...</span>
+                <span id="schedule-badge" class="status-badge badge-waiting">WAITING</span>
             </div>
             <div class="info-row">
                 <span class="info-label">🎯 Start Time:</span>
@@ -194,7 +204,7 @@
         </div>
 
         <div class="button-group">
-            <button id="capture-btn" class="primary" disabled>📸 Capture & Download Schedule</button>
+            <button id="capture-btn" class="primary">📸 Capture & Download Schedule</button>
             <button id="clear-btn" class="danger">🗑️ Clear Captured Data</button>
         </div>
 
@@ -204,7 +214,7 @@
         </div>
 
         <div class="log-area" id="log-area">
-            <div class="log-entry">[System] xlisten started. Waiting for tuning schedule...</div>
+            <div class="log-entry">[System] xlisten started. Click "Capture & Download" anytime to save current data.</div>
         </div>
     </div>
 
@@ -225,12 +235,13 @@
 
         // State
         let capturedSchedule = null;
-        let scheduleReceived = false;
         let serverOffset = 0;
+        let lastUpdateTime = null;
 
         // DOM Elements
         const connectionStatus = document.getElementById('connection-status');
         const scheduleStatus = document.getElementById('schedule-status');
+        const scheduleBadge = document.getElementById('schedule-badge');
         const startTimeElem = document.getElementById('start-time');
         const piccoloUrlElem = document.getElementById('piccolo-url');
         const pillarUrlsElem = document.getElementById('pillar-urls');
@@ -279,8 +290,8 @@
         }
 
         function previewSchedule(schedule) {
-            if (!schedule || !schedule.schedule) {
-                schedulePreview.innerHTML = '<div style="color: #444;">No schedule captured yet...</div>';
+            if (!schedule || !schedule.schedule || schedule.schedule.length === 0) {
+                schedulePreview.innerHTML = '<div style="color: #444;">No schedule data yet...</div>';
                 return;
             }
 
@@ -305,7 +316,8 @@
             if (!schedule) return;
 
             scheduleStatus.innerHTML = '✅ Captured';
-            scheduleStatus.style.color = '#00ffcc';
+            scheduleBadge.className = 'status-badge badge-captured';
+            scheduleBadge.innerHTML = 'CAPTURED';
 
             if (schedule.startTime) {
                 startTimeElem.innerHTML = `${schedule.startTime} (${formatTime(schedule.startTime)})`;
@@ -347,16 +359,15 @@
         // Listen for tuning/current
         db.ref('tuning/current').on('value', snap => {
             const schedule = snap.val();
+            lastUpdateTime = Date.now() + serverOffset;
 
             if (!schedule) {
                 log("⚠️ tuning/current cleared or empty");
-                scheduleReceived = false;
-                scheduleStatus.innerHTML = 'Waiting for tuning schedule...';
-                captureBtn.disabled = true;
+                // Don't clear capturedSchedule - keep the last good data
                 return;
             }
 
-            log(`🎵 Tuning schedule received at ${formatTime(Date.now() + serverOffset)}`);
+            log(`🎵 Tuning schedule update received at ${formatTime(lastUpdateTime)}`);
 
             // Check if this is a valid schedule (has startTime)
             if (!schedule.startTime) {
@@ -364,26 +375,23 @@
                 return;
             }
 
-            // Check if startTime is in the future
             const now = Date.now() + serverOffset;
             const timeToStart = schedule.startTime - now;
             log(`📡 Schedule startTime: ${formatTime(schedule.startTime)} (in ${(timeToStart/1000).toFixed(1)}s)`);
 
             // Capture the schedule
             capturedSchedule = {
-                capturedAt: Date.now() + serverOffset,
-                capturedAtFormatted: formatTime(Date.now() + serverOffset),
+                capturedAt: lastUpdateTime,
+                capturedAtFormatted: formatTime(lastUpdateTime),
                 startTime: schedule.startTime,
                 startTimeFormatted: formatTime(schedule.startTime),
                 timeToStartMs: timeToStart,
                 ...schedule
             };
 
-            scheduleReceived = true;
             updateUI(capturedSchedule);
-            captureBtn.disabled = false;
 
-            log(`✅ Schedule captured: ${capturedSchedule.schedule?.length || 0} patron notes, ${capturedSchedule.pillar_notes?.length || 0} pillar notes`);
+            log(`✅ Schedule updated: ${capturedSchedule.schedule?.length || 0} patron notes, ${capturedSchedule.pillar_notes?.length || 0} pillar notes`);
 
             // Log first few assigned notes for the first device in spiral order
             if (capturedSchedule.deviceOrder && capturedSchedule.deviceOrder.length > 0) {
@@ -405,60 +413,70 @@
             }
         });
 
-        // Capture and download
+        // Capture and download - ENABLED FROM START
         captureBtn.onclick = () => {
             if (!capturedSchedule) {
-                log("❌ No schedule captured yet. Wait for tuning to start.");
+                log("⚠️ No schedule data captured yet. Waiting for tuning/current from Firebase.");
+                alert("No schedule data yet. The listener is waiting for tuning/current from Firebase.\n\nIf you've started tuning, check that tuning/current exists in Firebase.");
                 return;
             }
 
-            // Create a trimmed version for debugging - first 40 seconds of notes
-            const trimmedSchedule = {
-                capturedAt: capturedSchedule.capturedAt,
-                capturedAtFormatted: capturedSchedule.capturedAtFormatted,
-                startTime: capturedSchedule.startTime,
-                startTimeFormatted: capturedSchedule.startTimeFormatted,
-                timeToStartMs: capturedSchedule.timeToStartMs,
-                piccoloUrl: capturedSchedule.piccoloUrl,
-                pillars: capturedSchedule.pillars,
-                deviceOrder: capturedSchedule.deviceOrder,
-                deviceCount: capturedSchedule.deviceCount,
-                totalNotes: capturedSchedule.totalNotes,
+            try {
+                log("📥 Preparing download...");
 
-                // Only first 40 seconds of patron notes
-                schedule: capturedSchedule.schedule.filter(n => n.startMs < 40000),
+                // Create trimmed version - first 40 seconds of notes
+                const trimmedSchedule = {
+                    capturedAt: capturedSchedule.capturedAt,
+                    capturedAtFormatted: capturedSchedule.capturedAtFormatted,
+                    startTime: capturedSchedule.startTime,
+                    startTimeFormatted: capturedSchedule.startTimeFormatted,
+                    timeToStartMs: capturedSchedule.timeToStartMs,
+                    piccoloUrl: capturedSchedule.piccoloUrl,
+                    pillars: capturedSchedule.pillars,
+                    deviceOrder: capturedSchedule.deviceOrder,
+                    deviceCount: capturedSchedule.deviceCount,
+                    totalNotes: capturedSchedule.totalNotes,
+                    schedule: capturedSchedule.schedule ? capturedSchedule.schedule.filter(n => n.startMs < 40000) : [],
+                    pillar_notes: capturedSchedule.pillar_notes,
+                    metadata: capturedSchedule.metadata,
+                    pillar_cal_windows: capturedSchedule.pillar_cal_windows,
+                    status: capturedSchedule.status,
+                    trimmedReason: "First 40 seconds of notes only"
+                };
 
-                // Pillar notes (all - they're only in Phase 1, <21s)
-                pillar_notes: capturedSchedule.pillar_notes,
+                trimmedSchedule.trimmedNoteCount = trimmedSchedule.schedule.length;
 
-                // Calibration windows
-                metadata: capturedSchedule.metadata,
+                const dataStr = JSON.stringify(trimmedSchedule, null, 2);
+                const blob = new Blob([dataStr], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+                a.download = `xlisten_output_${timestamp}.json`;
+                a.href = url;
 
-                // Any other important fields
-                pillar_cal_windows: capturedSchedule.pillar_cal_windows,
-                status: capturedSchedule.status
-            };
+                log(`📥 Downloading xlisten_output_${timestamp}.json (${Math.round(dataStr.length / 1024)} KB, ${trimmedSchedule.schedule.length} notes in first 40s)`);
 
-            trimmedSchedule.trimmedNoteCount = trimmedSchedule.schedule.length;
-            trimmedSchedule.trimmedReason = "First 40 seconds of notes only";
+                document.body.appendChild(a);
+                a.click();
+                setTimeout(() => {
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                }, 100);
 
-            const dataStr = JSON.stringify(trimmedSchedule, null, 2);
-            const blob = new Blob([dataStr], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-            a.download = `xlisten_output_${timestamp}.json`;
-            a.href = url;
-            a.click();
-            URL.revokeObjectURL(url);
+                log("✅ Download initiated. Check your downloads folder.");
 
-            log(`📥 Downloaded xlisten_output.json with ${trimmedSchedule.schedule.length} notes (first 40s of ${capturedSchedule.schedule.length} total)`);
+            } catch (err) {
+                log(`❌ Download failed: ${err.message}`);
+                console.error(err);
+                alert(`Download failed: ${err.message}`);
+            }
         };
 
         clearBtn.onclick = () => {
             capturedSchedule = null;
-            scheduleReceived = false;
             scheduleStatus.innerHTML = 'Waiting for tuning schedule...';
+            scheduleBadge.className = 'status-badge badge-waiting';
+            scheduleBadge.innerHTML = 'WAITING';
             startTimeElem.innerHTML = '--';
             piccoloUrlElem.innerHTML = '--';
             pillarUrlsElem.innerHTML = '--';
@@ -466,13 +484,12 @@
             pillarNoteCountElem.innerHTML = '0';
             windowCountElem.innerHTML = '0';
             deviceOrderElem.innerHTML = '--';
-            schedulePreview.innerHTML = '<div style="color: #444;">No schedule captured yet...</div>';
-            captureBtn.disabled = true;
+            schedulePreview.innerHTML = '<div style="color: #444;">No schedule data yet...</div>';
             log("🗑️ Captured data cleared");
         };
 
-        log("🎧 xlisten started. Waiting for tuning schedule from conductor...");
-        log("   After Phase 1 begins, click 'Capture & Download' to save the note schedule.");
+        log("🎧 xlisten started. Click 'Capture & Download' anytime to save current data.");
+        log("   The button is enabled immediately. It will capture whatever data has been received so far.");
     </script>
 </body>
 </html>
