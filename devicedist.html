@@ -1135,47 +1135,83 @@ async function preloadAssets() {
     log("📦 Starting asset preload...");
 
     try {
+        // 1. Preload show movement assets
         const movementsSnap = await db.ref('show/movements').once('value');
         const movements = movementsSnap.val();
 
-        if (!movements || !movements.length) {
-            log("⚠️ No movements found in Firebase show/movements");
-            document.getElementById('asset-ind').className = 'indicator syncing';
-            document.getElementById('asset-progress').style.display = 'none';
-            return true;
-        }
-
         const audioFiles = new Set();
 
-        movements.forEach(movement => {
-            (movement.cues || []).forEach(cue => {
-                (cue.assets || []).forEach(asset => {
-                    if (asset.audio_url) {
-                        audioFiles.add(asset.audio_url);
-                    }
+        if (movements && movements.length) {
+            movements.forEach(movement => {
+                (movement.cues || []).forEach(cue => {
+                    (cue.assets || []).forEach(asset => {
+                        if (asset.audio_url) {
+                            audioFiles.add(asset.audio_url);
+                        }
+                    });
                 });
             });
-        });
+        }
+
+        // 2. Preload piccolo audio (tuning)
+        if (PICCOLO_URL) {
+            audioFiles.add(PICCOLO_URL);
+            log(`🎵 Adding piccolo to preload: ${PICCOLO_URL.split('/').pop()}`);
+        }
+
+        // 3. Preload test pulse audio
+        if (TEST_PULSE_URL) {
+            audioFiles.add(TEST_PULSE_URL);
+            log(`🔊 Adding test pulse to preload: ${TEST_PULSE_URL.split('/').pop()}`);
+        }
+
+        // 4. NEW: Preload pillar audio if this device is a pillar
+        if (mySeat && mySeat.id.startsWith('PILLAR_')) {
+            const positionCode = mySeat.id.replace('PILLAR_', '');
+            const myPillarUrl = pillarUrls[positionCode];
+
+            if (myPillarUrl) {
+                audioFiles.add(myPillarUrl);
+                log(`🏛️ Adding pillar audio for ${mySeat.id}: ${myPillarUrl.split('/').pop()}`);
+            } else {
+                log(`⚠️ No pillar URL found for ${mySeat.id} (position ${positionCode})`);
+            }
+        }
 
         totalAssetsToPreload = audioFiles.size;
         preloadedCount = 0;
 
-        log(`📦 Preloading ${totalAssetsToPreload} audio assets from timeline`);
+        log(`📦 Preloading ${totalAssetsToPreload} total audio assets`);
 
         if (totalAssetsToPreload === 0) {
             document.getElementById('asset-ind').className = 'indicator active';
             document.getElementById('asset-progress').style.display = 'none';
+            assetsPreloaded = true;
             return true;
         }
 
         const loadTasks = Array.from(audioFiles).map(async url => {
             try {
+                // Skip if already cached
+                if (bufferCache[url]) {
+                    log(`✅ Already cached: ${url.split('/').pop()}`);
+                    preloadedCount++;
+                    updatePreloadProgress();
+                    return;
+                }
+
                 const res = await fetch(url);
                 const arrayBuf = await res.arrayBuffer();
+
+                // Check if array buffer has data
+                if (arrayBuf.byteLength === 0) {
+                    throw new Error("Empty file");
+                }
+
                 bufferCache[url] = await audioCtx.decodeAudioData(arrayBuf);
                 preloadedCount++;
                 updatePreloadProgress();
-                log(`✅ Loaded: ${url.split('/').pop()}`);
+                log(`✅ Loaded: ${url.split('/').pop()} (${Math.round(arrayBuf.byteLength / 1024)} KB)`);
             } catch (e) {
                 log(`❌ Failed to load ${url.split('/').pop()}: ${e.message}`);
                 preloadedCount++;
@@ -1186,7 +1222,7 @@ async function preloadAssets() {
         await Promise.all(loadTasks);
         document.getElementById('asset-ind').className = 'indicator active';
         document.getElementById('asset-progress').style.display = 'none';
-        log(`✅ Asset preload complete (${totalAssetsToPreload} files)`);
+        log(`✅ Asset preload complete (${preloadedCount}/${totalAssetsToPreload} files)`);
         assetsPreloaded = true;
 
         if (micPermissionGranted && mySeat && myNeighbors) {
@@ -2308,7 +2344,7 @@ async function playAudioBlock(url, block, movementStartTime, blockIndex) {
         const noteStartWall = movementStartTime + note.startMs;
         const nowWall = Date.now() + serverOffset;
 
-        // CORRECT: Only subtract speaker delay for playback timing
+        // Only subtract speaker delay for playback timing
         // Mic delay is NOT subtracted - it only affects listening/detection
         const adjustedStartWall = noteStartWall - effectiveSpeakerDelay;
         const delayMs = adjustedStartWall - nowWall;
