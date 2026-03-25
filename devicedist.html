@@ -2960,6 +2960,21 @@ function initTuningListener() {
             const startTimeStr = new Date(tuningStartTime).toISOString().substr(11, 12);
             log(`🎵 Tuning schedule loaded with startTime: ${startTimeStr}.${String(tuningStartTime % 1000).padStart(3, '0')}`);
 
+            // *** Update pillar URL from the schedule ***
+            if (mySeat && mySeat.id.startsWith('PILLAR_') && schedule.pillars) {
+                const positionCode = mySeat.id.replace('PILLAR_', '');
+                const newPillarUrl = schedule.pillars[positionCode];
+                if (newPillarUrl && newPillarUrl !== pillarUrls[positionCode]) {
+                    log(`📡 UPDATING pillar URL from schedule: ${newPillarUrl.split('/').pop()}`);
+                    pillarUrls[positionCode] = newPillarUrl;
+                    // Invalidate cached buffer to force fresh load
+                    if (bufferCache[newPillarUrl]) {
+                        delete bufferCache[newPillarUrl];
+                        log(`   Cleared old buffer cache for new URL`);
+                    }
+                }
+            }
+
             calibrationIteration = 0;
             calibrationComplete = false;
             iterationResults = [];
