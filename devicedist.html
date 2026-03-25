@@ -2329,8 +2329,9 @@ async function playAudioBlock(url, block, movementStartTime, blockIndex) {
 
     if (blockIndex < 3) {
         const scheduledStartWall = movementStartTime + block.startMs;
+        const intendedStartWall = scheduledStartWall - effectiveSpeakerDelay;
         const actualStartWall = Date.now() + serverOffset;
-        const timingError = actualStartWall - scheduledStartWall;
+        const timingError = actualStartWall - intendedStartWall;
         log(`🔊 Block ${blockIndex} timing error: ${timingError > 0 ? '+' : ''}${timingError.toFixed(0)}ms`);
     }
 
