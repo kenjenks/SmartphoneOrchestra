@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>SmartphoneOrchestra - xrecord (Mic Listener)</title>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0a0a0a;
+            color: #eee;
+            padding: 20px;
+            margin: 0;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        h1 {
+            color: #44ffaa;
+            font-weight: 300;
+        }
+        .status {
+            background: #1a1a1a;
+            border-left: 4px solid #44ffaa;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 4px;
+        }
+        .status-connected {
+            border-left-color: #00ffcc;
+        }
+        .button-group {
+            margin: 20px 0;
+        }
+        button {
+            background: #44ffaa;
+            color: #000;
+            border: none;
+            padding: 12px 24px;
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 1rem;
+            font-weight: bold;
+            margin-right: 10px;
+            transition: 0.2s;
+        }
+        button:hover {
+            background: #66ffcc;
+        }
+        .info-panel {
+            background: #111;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #222;
+            font-family: monospace;
+        }
+        .info-label {
+            color: #888;
+        }
+        .info-value {
+            color: #44ffaa;
+            font-weight: bold;
+        }
+        .meter {
+            background: #1a1a1a;
+            border-radius: 4px;
+            margin: 10px 0;
+            padding: 10px;
+        }
+        .meter-bar {
+            width: 100%;
+            height: 20px;
+            background: #333;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        .meter-fill {
+            height: 100%;
+            background: #44ffaa;
+            width: 0%;
+            transition: width 0.05s;
+        }
+        .detection-box {
+            background: #000;
+            border: 1px solid #333;
+            border-radius: 4px;
+            padding: 10px;
+            margin: 10px 0;
+            max-height: 150px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 11px;
+        }
+        .detection-entry {
+            padding: 2px;
+            border-bottom: 1px solid #222;
+            color: #44ffaa;
+        }
+        .log-area {
+            background: #000;
+            color: #0f0;
+            font-family: monospace;
+            font-size: 11px;
+            height: 250px;
+            overflow-y: auto;
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 20px;
+        }
+        .log-entry {
+            margin-bottom: 4px;
+            border-bottom: 1px solid #111;
+        }
+        .timestamp {
+            color: #666;
+            margin-right: 8px;
+        }
+        .detection-highlight {
+            background: #44ffaa20;
+            border-left: 3px solid #44ffaa;
+            padding-left: 6px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎤 xrecord - Microphone Listener</h1>
+        <p style="color: #888;">Listens for pillar notes (198-499Hz) and logs detections. Use <strong>?seat=A1</strong> (or any seat ID) in URL.</p>
+
+        <div id="connection-status" class="status">
+            🔌 Firebase: Disconnected
+        </div>
+
+        <div class="info-panel">
+            <div class="info-row">
+                <span class="info-label">🎯 Seat ID:</span>
+                <span class="info-value" id="seat-id">--</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">🎤 Mic Status:</span>
+                <span class="info-value" id="mic-status">Not requested</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">📊 Current Energy (198-499Hz):</span>
+                <span class="info-value" id="energy-value">0.00</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">📈 Baseline Energy:</span>
+                <span class="info-value" id="baseline-value">0.00</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">🎯 Detections:</span>
+                <span class="info-value" id="detection-count">0</span>
+            </div>
+        </div>
+
+        <div class="meter">
+            <div style="margin-bottom: 5px;">🎧 Pillar Band Energy (198-499Hz)</div>
+            <div class="meter-bar">
+                <div id="energy-fill" class="meter-fill" style="width: 0%;"></div>
+            </div>
+        </div>
+
+        <div class="button-group">
+            <button id="request-mic-btn">🎤 Request Mic Permission</button>
+            <button id="start-listening-btn" disabled>🔊 Start Listening</button>
+            <button id="stop-listening-btn" disabled>⏹️ Stop Listening</button>
+        </div>
+
+        <div class="detection-box">
+            <div style="color: #44ffaa; margin-bottom: 5px;">📡 Pillar Detections (198-499Hz):</div>
+            <div id="detection-list">No detections yet...</div>
+        </div>
+
+        <div class="log-area" id="log-area">
+            <div class="log-entry">[System] xrecord started. Request mic permission to begin.</div>
+        </div>
+    </div>
+
+    <script>
+        // Firebase Configuration
+        const firebaseConfig = {
+            apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
+            authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
+            databaseURL: "https://smartphoneorchestra-dwt-default-rtdb.firebaseio.com/",
+            projectId: "smartphoneorchestra-dwt",
+            storageBucket: "smartphoneorchestra-dwt.firebasestorage.app",
+            messagingSenderId: "722537253165",
+            appId: "1:722537253165:web:8e8b6495bd508de35b2ba4"
+        };
+
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
+        let audioCtx = null;
+        let mySeat = null;
+        let serverOffset = 0;
+        let micStream = null;
+        let analyser = null;
+        let isListening = false;
+        let detectionCount = 0;
+        let baselineEnergy = 0;
+        let baselineSamples = [];
+        let logRef = null;
+        let logQueue = [];
+        let logFlushTimer = null;
+        
+        // FFT parameters
+        const FFT_SIZE = 2048;
+        const SAMPLE_RATE = 44100;
+        const PILLAR_MIN_FREQ = 198;
+        const PILLAR_MAX_FREQ = 499;
+        const BASELINE_SAMPLES_MS = 200;
+        const DETECTION_THRESHOLD = 2.0;
+        
+        let binIndices = { start: 0, end: 0 };
+        let frequencyData = null;
+        
+        // Logging function
+        function log(message, type = 'info') {
+            const timestamp = Date.now() + serverOffset;
+            const timeStr = new Date(timestamp).toISOString().substr(11, 12);
+            const logDiv = document.createElement('div');
+            logDiv.className = 'log-entry';
+            logDiv.innerHTML = `<span class="timestamp">[${timeStr}]</span> ${message}`;
+            document.getElementById('log-area').appendChild(logDiv);
+            logDiv.scrollIntoView({ behavior: 'smooth', block: 'end' });
+            console.log(`[${timeStr}] ${message}`);
+            
+            if (logRef && mySeat) {
+                const logEntry = {
+                    timestamp: timestamp,
+                    timeStr: timeStr,
+                    message: message,
+                    seatId: mySeat.id,
+                    type: type,
+                    energy: currentEnergy,
+                    baseline: baselineEnergy
+                };
+                logQueue.push(logEntry);
+                if (logQueue.length >= 10) flushLogs();
+            }
+        }
+        
+        function flushLogs() {
+            if (logQueue.length === 0 || !logRef) return;
+            const logsToSend = [...logQueue];
+            logQueue = [];
+            const batch = {};
+            logsToSend.forEach((logEntry, index) => {
+                batch[`${logEntry.timestamp}_${index}`] = logEntry;
+            });
+            logRef.update(batch).catch(e => console.error("Failed to send logs:", e));
+        }
+        
+        // Clock sync
+        db.ref(".info/serverTimeOffset").on("value", snap => {
+            serverOffset = snap.val() || 0;
+            log(`⏱️ Server offset: ${serverOffset}ms`);
+        });
+        
+        // Connection status
+        db.ref(".info/connected").on("value", snap => {
+            const statusDiv = document.getElementById('connection-status');
+            if (snap.val() === true) {
+                statusDiv.innerHTML = "✅ Firebase: Connected";
+                statusDiv.className = "status status-connected";
+                log("Firebase connected");
+            } else {
+                statusDiv.innerHTML = "🔌 Firebase: Disconnected";
+                statusDiv.className = "status";
+                log("Firebase disconnected");
+            }
+        });
+        
+        // Resolve identity from URL
+        function resolveIdentity() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const seatId = urlParams.get('seat');
+            
+            if (!seatId) {
+                log("⚠️ No seat ID in URL. Using 'test' as default");
+                mySeat = { id: 'test' };
+            } else {
+                mySeat = { id: seatId };
+            }
+            
+            document.getElementById('seat-id').innerHTML = mySeat.id;
+            log(`✅ Seat resolved: ${mySeat.id}`);
+            
+            // Initialize log reference
+            logRef = db.ref(`device_logs/${mySeat.id}`);
+            
+            return true;
+        }
+        
+        // Setup microphone
+        async function setupMicrophone() {
+            log("🎤 Setting up microphone...");
+            
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                log(`🎧 AudioContext created, state: ${audioCtx.state}`);
+            }
+            
+            if (audioCtx.state === 'suspended') {
+                await audioCtx.resume();
+                log("🎧 AudioContext resumed");
+            }
+            
+            try {
+                if (!micStream) {
+                    log("📱 Requesting microphone access...");
+                    const stream = await navigator.mediaDevices.getUserMedia({
+                        audio: {
+                            echoCancellation: false,
+                            noiseSuppression: false,
+                            autoGainControl: false,
+                            sampleRate: SAMPLE_RATE
+                        }
+                    });
+                    micStream = stream;
+                    log("✅ Microphone access granted");
+                }
+                
+                const source = audioCtx.createMediaStreamSource(micStream);
+                analyser = audioCtx.createAnalyser();
+                analyser.fftSize = FFT_SIZE;
+                analyser.smoothingTimeConstant = 0.1;
+                
+                source.connect(analyser);
+                
+                const sampleRate = audioCtx.sampleRate;
+                const nyquist = sampleRate / 2;
+                
+                // Calculate bin indices for pillar frequency range
+                binIndices.start = Math.floor(PILLAR_MIN_FREQ / nyquist * (FFT_SIZE / 2));
+                binIndices.end = Math.ceil(PILLAR_MAX_FREQ / nyquist * (FFT_SIZE / 2));
+                
+                frequencyData = new Uint8Array(analyser.frequencyBinCount);
+                
+                log(`🎵 Pillar band: ${PILLAR_MIN_FREQ}-${PILLAR_MAX_FREQ}Hz (bins ${binIndices.start}-${binIndices.end})`);
+                log(`   Sample rate: ${sampleRate}Hz, FFT size: ${FFT_SIZE}`);
+                
+                document.getElementById('mic-status').innerHTML = "Active";
+                
+                return true;
+                
+            } catch (e) {
+                log(`❌ Microphone setup failed: ${e.message}`);
+                document.getElementById('mic-status').innerHTML = `Error: ${e.message}`;
+                return false;
+            }
+        }
+        
+        let currentEnergy = 0;
+        let baselineEstablished = false;
+        let baselineStartTime = 0;
+        
+        // Detection loop
+        function detectPillarNotes() {
+            if (!isListening || !analyser || !frequencyData) {
+                requestAnimationFrame(detectPillarNotes);
+                return;
+            }
+            
+            analyser.getByteFrequencyData(frequencyData);
+            
+            // Calculate energy in pillar frequency band
+            let energy = 0;
+            for (let i = binIndices.start; i <= binIndices.end && i < frequencyData.length; i++) {
+                energy += frequencyData[i] / 255;
+            }
+            energy = energy / (binIndices.end - binIndices.start + 1);
+            currentEnergy = energy;
+            
+            // Update UI meter
+            const fillPercent = Math.min(100, energy * 100);
+            document.getElementById('energy-fill').style.width = fillPercent + '%';
+            document.getElementById('energy-value').innerHTML = energy.toFixed(4);
+            
+            // Establish baseline
+            if (!baselineEstablished) {
+                if (Date.now() - baselineStartTime < BASELINE_SAMPLES_MS) {
+                    baselineSamples.push(energy);
+                } else {
+                    if (baselineSamples.length > 0) {
+                        const sorted = [...baselineSamples].sort((a, b) => a - b);
+                        baselineEnergy = sorted[Math.floor(sorted.length / 2)];
+                        baselineEstablished = true;
+                        document.getElementById('baseline-value').innerHTML = baselineEnergy.toFixed(4);
+                        log(`📊 Baseline established: ${baselineEnergy.toFixed(4)} from ${baselineSamples.length} samples`);
+                    } else {
+                        baselineEnergy = 0.01;
+                        baselineEstablished = true;
+                    }
+                }
+                requestAnimationFrame(detectPillarNotes);
+                return;
+            }
+            
+            const ratio = baselineEnergy > 0 ? energy / baselineEnergy : 1.0;
+            document.getElementById('baseline-value').innerHTML = baselineEnergy.toFixed(4);
+            
+            // Detect if energy exceeds threshold
+            if (energy > baselineEnergy * DETECTION_THRESHOLD) {
+                const now = Date.now() + serverOffset;
+                const timeStr = new Date(now).toISOString().substr(11, 12);
+                
+                detectionCount++;
+                document.getElementById('detection-count').innerHTML = detectionCount;
+                
+                const detectionMsg = `🎯 DETECTION #${detectionCount} at ${timeStr} | energy=${energy.toFixed(4)} (${(ratio).toFixed(1)}x baseline)`;
+                
+                // Add to detection list
+                const detectionList = document.getElementById('detection-list');
+                if (detectionList.innerHTML === "No detections yet...") {
+                    detectionList.innerHTML = '';
+                }
+                const detectionDiv = document.createElement('div');
+                detectionDiv.className = 'detection-entry detection-highlight';
+                detectionDiv.innerHTML = `[${timeStr}] ${detectionMsg}`;
+                detectionList.insertBefore(detectionDiv, detectionList.firstChild);
+                if (detectionList.children.length > 20) {
+                    detectionList.removeChild(detectionList.lastChild);
+                }
+                
+                log(detectionMsg, 'match');
+                
+                // Reset baseline after detection to avoid continuous triggering
+                baselineEstablished = false;
+                baselineSamples = [];
+                baselineStartTime = Date.now();
+                
+                // Flash effect
+                const meterFill = document.getElementById('energy-fill');
+                meterFill.style.background = '#ffaa44';
+                setTimeout(() => { meterFill.style.background = '#44ffaa'; }, 200);
+            }
+            
+            requestAnimationFrame(detectPillarNotes);
+        }
+        
+        // Start listening
+        async function startListening() {
+            if (isListening) {
+                log("⚠️ Already listening");
+                return;
+            }
+            
+            log("🎤 Starting microphone listening...");
+            
+            const micSuccess = await setupMicrophone();
+            if (!micSuccess) {
+                log("❌ Failed to setup microphone");
+                return;
+            }
+            
+            isListening = true;
+            baselineEstablished = false;
+            baselineSamples = [];
+            baselineStartTime = Date.now();
+            detectionCount = 0;
+            document.getElementById('detection-count').innerHTML = '0';
+            document.getElementById('detection-list').innerHTML = 'No detections yet...';
+            
+            log("🔊 Listening for pillar notes (198-499Hz)");
+            log(`   Detection threshold: ${DETECTION_THRESHOLD}x baseline`);
+            
+            detectPillarNotes();
+            
+            document.getElementById('start-listening-btn').disabled = true;
+            document.getElementById('stop-listening-btn').disabled = false;
+        }
+        
+        // Stop listening
+        function stopListening() {
+            if (!isListening) return;
+            
+            isListening = false;
+            log("⏹️ Stopped listening");
+            
+            if (micStream) {
+                micStream.getTracks().forEach(track => track.stop());
+                micStream = null;
+            }
+            analyser = null;
+            
+            document.getElementById('mic-status').innerHTML = "Stopped";
+            document.getElementById('start-listening-btn').disabled = false;
+            document.getElementById('stop-listening-btn').disabled = true;
+        }
+        
+        // Initialize
+        window.onload = async () => {
+            log("🎤 xrecord started");
+            
+            resolveIdentity();
+            
+            // Set up periodic log flush
+            setInterval(flushLogs, 2000);
+            
+            // Request mic button
+            document.getElementById('request-mic-btn').onclick = async () => {
+                log("📱 Requesting microphone permission...");
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    micStream = stream;
+                    log("✅ Microphone permission GRANTED");
+                    document.getElementById('mic-status').innerHTML = "Permission granted";
+                    document.getElementById('start-listening-btn').disabled = false;
+                } catch (e) {
+                    log(`❌ Microphone permission DENIED: ${e.message}`);
+                    document.getElementById('mic-status').innerHTML = `Denied: ${e.message}`;
+                }
+            };
+            
+            // Start listening button
+            document.getElementById('start-listening-btn').onclick = startListening;
+            
+            // Stop listening button
+            document.getElementById('stop-listening-btn').onclick = stopListening;
+        };
+        
+        window.addEventListener('beforeunload', () => {
+            if (micStream) {
+                micStream.getTracks().forEach(track => track.stop());
+            }
+            flushLogs();
+        });
+    </script>
+</body>
+</html>
