@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>SmartphoneOrchestra - Tuning Schedule Listener (xlisten)</title>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0a0a0a;
+            color: #eee;
+            padding: 20px;
+            margin: 0;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        h1 {
+            color: #00ffcc;
+            font-weight: 300;
+            margin-bottom: 10px;
+        }
+        .status {
+            background: #1a1a1a;
+            border-left: 4px solid #00ffcc;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 4px;
+        }
+        .status-connected {
+            border-left-color: #00ffcc;
+            color: #00ffcc;
+        }
+        .status-disconnected {
+            border-left-color: #ff4444;
+            color: #ff8888;
+        }
+        .button-group {
+            margin: 20px 0;
+            display: flex;
+            gap: 10px;
+        }
+        button {
+            background: #333;
+            color: #fff;
+            border: 1px solid #555;
+            padding: 12px 24px;
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 1rem;
+            font-weight: bold;
+            transition: 0.2s;
+        }
+        button.primary {
+            background: #00ffcc;
+            color: #000;
+            border: none;
+        }
+        button.primary:hover {
+            background: #00cca3;
+        }
+        button.danger {
+            background: #600;
+            border-color: #a00;
+        }
+        button.danger:hover {
+            background: #800;
+        }
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .info-panel {
+            background: #111;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #222;
+            font-family: monospace;
+        }
+        .info-label {
+            color: #888;
+        }
+        .info-value {
+            color: #00ffcc;
+            font-weight: bold;
+        }
+        .schedule-preview {
+            background: #000;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 15px;
+            max-height: 400px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 11px;
+        }
+        .schedule-entry {
+            padding: 4px;
+            border-bottom: 1px solid #1a1a1a;
+            font-family: monospace;
+        }
+        .pillar-note {
+            color: #ffaa44;
+        }
+        .patron-note {
+            color: #44ffaa;
+        }
+        .window-badge {
+            background: #334455;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 10px;
+            margin-left: 8px;
+        }
+        .timestamp {
+            color: #666;
+            margin-right: 10px;
+        }
+        pre {
+            background: #000;
+            padding: 10px;
+            overflow-x: auto;
+            font-size: 10px;
+            max-height: 300px;
+        }
+        .log-area {
+            background: #000;
+            color: #0f0;
+            font-family: monospace;
+            font-size: 11px;
+            height: 200px;
+            overflow-y: auto;
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 20px;
+        }
+        .log-entry {
+            margin-bottom: 4px;
+            border-bottom: 1px solid #111;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎧 xlisten - Tuning Schedule Listener</h1>
+        <p style="color: #888; margin-bottom: 20px;">Listens to Firebase for tuning schedules. After Phase 1 begins, click "Capture & Download" to save the note schedule for debugging.</p>
+
+        <div id="connection-status" class="status status-disconnected">
+            🔌 Firebase: Disconnected
+        </div>
+
+        <div class="info-panel">
+            <div class="info-row">
+                <span class="info-label">📡 Tuning Schedule Received:</span>
+                <span class="info-value" id="schedule-status">Waiting...</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">🎯 Start Time:</span>
+                <span class="info-value" id="start-time">--</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">🎹 Piccolo URL:</span>
+                <span class="info-value" id="piccolo-url">--</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">🏛️ Pillar URLs:</span>
+                <span class="info-value" id="pillar-urls">--</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">📝 Total Patron Notes:</span>
+                <span class="info-value" id="patron-note-count">0</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">📡 Pillar Notes:</span>
+                <span class="info-value" id="pillar-note-count">0</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">🪟 Calibration Windows:</span>
+                <span class="info-value" id="window-count">0</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">👥 Device Order (spiral):</span>
+                <span class="info-value" id="device-order">--</span>
+            </div>
+        </div>
+
+        <div class="button-group">
+            <button id="capture-btn" class="primary" disabled>📸 Capture & Download Schedule</button>
+            <button id="clear-btn" class="danger">🗑️ Clear Captured Data</button>
+        </div>
+
+        <div class="schedule-preview">
+            <div style="color: #00ffcc; margin-bottom: 10px;">📋 SCHEDULE PREVIEW (first 30 notes)</div>
+            <div id="schedule-preview"></div>
+        </div>
+
+        <div class="log-area" id="log-area">
+            <div class="log-entry">[System] xlisten started. Waiting for tuning schedule...</div>
+        </div>
+    </div>
+
+    <script>
+        // Firebase Configuration
+        const firebaseConfig = {
+            apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
+            authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
+            databaseURL: "https://smartphoneorchestra-dwt-default-rtdb.firebaseio.com/",
+            projectId: "smartphoneorchestra-dwt",
+            storageBucket: "smartphoneorchestra-dwt.firebasestorage.app",
+            messagingSenderId: "722537253165",
+            appId: "1:722537253165:web:8e8b6495bd508de35b2ba4"
+        };
+
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
+        // State
+        let capturedSchedule = null;
+        let scheduleReceived = false;
+        let serverOffset = 0;
+
+        // DOM Elements
+        const connectionStatus = document.getElementById('connection-status');
+        const scheduleStatus = document.getElementById('schedule-status');
+        const startTimeElem = document.getElementById('start-time');
+        const piccoloUrlElem = document.getElementById('piccolo-url');
+        const pillarUrlsElem = document.getElementById('pillar-urls');
+        const patronNoteCountElem = document.getElementById('patron-note-count');
+        const pillarNoteCountElem = document.getElementById('pillar-note-count');
+        const windowCountElem = document.getElementById('window-count');
+        const deviceOrderElem = document.getElementById('device-order');
+        const captureBtn = document.getElementById('capture-btn');
+        const clearBtn = document.getElementById('clear-btn');
+        const schedulePreview = document.getElementById('schedule-preview');
+        const logArea = document.getElementById('log-area');
+
+        function log(message, type = 'info') {
+            const timestamp = new Date().toISOString().substr(11, 12);
+            const logDiv = document.createElement('div');
+            logDiv.className = 'log-entry';
+            logDiv.innerHTML = `<span class="timestamp">[${timestamp}]</span> ${message}`;
+            logArea.appendChild(logDiv);
+            logArea.scrollTop = logArea.scrollHeight;
+            console.log(`[${timestamp}] ${message}`);
+        }
+
+        // Clock sync
+        db.ref(".info/serverTimeOffset").on("value", snap => {
+            serverOffset = snap.val() || 0;
+            log(`⏱️ Server offset: ${serverOffset}ms`);
+        });
+
+        // Connection status
+        db.ref(".info/connected").on("value", snap => {
+            if (snap.val() === true) {
+                connectionStatus.className = "status status-connected";
+                connectionStatus.innerHTML = "✅ Firebase: Connected";
+                log("Firebase connected");
+            } else {
+                connectionStatus.className = "status status-disconnected";
+                connectionStatus.innerHTML = "🔌 Firebase: Disconnected";
+                log("Firebase disconnected");
+            }
+        });
+
+        function formatTime(ms) {
+            if (!ms) return '--';
+            const date = new Date(ms);
+            return `${date.toISOString().substr(11, 12)}.${String(ms % 1000).padStart(3, '0')}`;
+        }
+
+        function previewSchedule(schedule) {
+            if (!schedule || !schedule.schedule) {
+                schedulePreview.innerHTML = '<div style="color: #444;">No schedule captured yet...</div>';
+                return;
+            }
+
+            const first30 = schedule.schedule.slice(0, 30);
+            let html = '';
+            first30.forEach(note => {
+                const isPillar = note.deviceId && note.deviceId.startsWith('PILLAR_');
+                const noteClass = isPillar ? 'pillar-note' : 'patron-note';
+                html += `<div class="schedule-entry ${noteClass}">
+                    <span class="timestamp">[${note.startMs.toFixed(0)}ms]</span>
+                    Note ${note.noteIndex} → <strong>${note.deviceId}</strong>
+                    (dur: ${note.durationMs}ms)
+                </div>`;
+            });
+            if (schedule.schedule.length > 30) {
+                html += `<div class="schedule-entry" style="color: #888;">... and ${schedule.schedule.length - 30} more notes</div>`;
+            }
+            schedulePreview.innerHTML = html;
+        }
+
+        function updateUI(schedule) {
+            if (!schedule) return;
+
+            scheduleStatus.innerHTML = '✅ Captured';
+            scheduleStatus.style.color = '#00ffcc';
+
+            if (schedule.startTime) {
+                startTimeElem.innerHTML = `${schedule.startTime} (${formatTime(schedule.startTime)})`;
+            }
+
+            if (schedule.piccoloUrl) {
+                const urlParts = schedule.piccoloUrl.split('/');
+                piccoloUrlElem.innerHTML = urlParts[urlParts.length - 1];
+            }
+
+            if (schedule.pillars) {
+                const pillarList = Object.keys(schedule.pillars).map(p => `${p}`).join(', ');
+                pillarUrlsElem.innerHTML = pillarList;
+            }
+
+            if (schedule.schedule) {
+                const patronNotes = schedule.schedule.filter(n => !n.deviceId.startsWith('PILLAR_'));
+                patronNoteCountElem.innerHTML = patronNotes.length;
+            }
+
+            if (schedule.pillar_notes) {
+                pillarNoteCountElem.innerHTML = schedule.pillar_notes.length;
+            }
+
+            if (schedule.metadata && schedule.metadata.pillar_cal_windows) {
+                windowCountElem.innerHTML = schedule.metadata.pillar_cal_windows.length;
+            } else if (schedule.pillar_cal_windows) {
+                windowCountElem.innerHTML = schedule.pillar_cal_windows.length;
+            }
+
+            if (schedule.deviceOrder) {
+                const orderPreview = schedule.deviceOrder.slice(0, 5).join(', ');
+                deviceOrderElem.innerHTML = `${orderPreview}${schedule.deviceOrder.length > 5 ? '...' : ''} (${schedule.deviceOrder.length} devices)`;
+            }
+
+            previewSchedule(schedule);
+        }
+
+        // Listen for tuning/current
+        db.ref('tuning/current').on('value', snap => {
+            const schedule = snap.val();
+
+            if (!schedule) {
+                log("⚠️ tuning/current cleared or empty");
+                scheduleReceived = false;
+                scheduleStatus.innerHTML = 'Waiting for tuning schedule...';
+                captureBtn.disabled = true;
+                return;
+            }
+
+            log(`🎵 Tuning schedule received at ${formatTime(Date.now() + serverOffset)}`);
+
+            // Check if this is a valid schedule (has startTime)
+            if (!schedule.startTime) {
+                log("⚠️ Schedule has no startTime, ignoring");
+                return;
+            }
+
+            // Check if startTime is in the future
+            const now = Date.now() + serverOffset;
+            const timeToStart = schedule.startTime - now;
+            log(`📡 Schedule startTime: ${formatTime(schedule.startTime)} (in ${(timeToStart/1000).toFixed(1)}s)`);
+
+            // Capture the schedule
+            capturedSchedule = {
+                capturedAt: Date.now() + serverOffset,
+                capturedAtFormatted: formatTime(Date.now() + serverOffset),
+                startTime: schedule.startTime,
+                startTimeFormatted: formatTime(schedule.startTime),
+                timeToStartMs: timeToStart,
+                ...schedule
+            };
+
+            scheduleReceived = true;
+            updateUI(capturedSchedule);
+            captureBtn.disabled = false;
+
+            log(`✅ Schedule captured: ${capturedSchedule.schedule?.length || 0} patron notes, ${capturedSchedule.pillar_notes?.length || 0} pillar notes`);
+
+            // Log first few assigned notes for the first device in spiral order
+            if (capturedSchedule.deviceOrder && capturedSchedule.deviceOrder.length > 0) {
+                const firstDevice = capturedSchedule.deviceOrder[0];
+                const firstDeviceNotes = capturedSchedule.schedule.filter(n => n.deviceId === firstDevice);
+                log(`📊 First device in spiral (${firstDevice}) gets ${firstDeviceNotes.length} notes`);
+                if (firstDeviceNotes.length > 0) {
+                    log(`   First note at ${firstDeviceNotes[0].startMs}ms, lasts ${firstDeviceNotes[0].durationMs}ms`);
+                }
+            }
+
+            // Log calibration windows if present
+            const windows = capturedSchedule.metadata?.pillar_cal_windows || capturedSchedule.pillar_cal_windows;
+            if (windows && windows.length > 0) {
+                log(`🪟 Calibration windows:`);
+                windows.forEach(w => {
+                    log(`   ${w.pillar_id}: ${w.start_ms}ms → ${w.end_ms}ms (${w.note_count} notes)`);
+                });
+            }
+        });
+
+        // Capture and download
+        captureBtn.onclick = () => {
+            if (!capturedSchedule) {
+                log("❌ No schedule captured yet. Wait for tuning to start.");
+                return;
+            }
+
+            // Create a trimmed version for debugging - first 40 seconds of notes
+            const trimmedSchedule = {
+                capturedAt: capturedSchedule.capturedAt,
+                capturedAtFormatted: capturedSchedule.capturedAtFormatted,
+                startTime: capturedSchedule.startTime,
+                startTimeFormatted: capturedSchedule.startTimeFormatted,
+                timeToStartMs: capturedSchedule.timeToStartMs,
+                piccoloUrl: capturedSchedule.piccoloUrl,
+                pillars: capturedSchedule.pillars,
+                deviceOrder: capturedSchedule.deviceOrder,
+                deviceCount: capturedSchedule.deviceCount,
+                totalNotes: capturedSchedule.totalNotes,
+
+                // Only first 40 seconds of patron notes
+                schedule: capturedSchedule.schedule.filter(n => n.startMs < 40000),
+
+                // Pillar notes (all - they're only in Phase 1, <21s)
+                pillar_notes: capturedSchedule.pillar_notes,
+
+                // Calibration windows
+                metadata: capturedSchedule.metadata,
+
+                // Any other important fields
+                pillar_cal_windows: capturedSchedule.pillar_cal_windows,
+                status: capturedSchedule.status
+            };
+
+            trimmedSchedule.trimmedNoteCount = trimmedSchedule.schedule.length;
+            trimmedSchedule.trimmedReason = "First 40 seconds of notes only";
+
+            const dataStr = JSON.stringify(trimmedSchedule, null, 2);
+            const blob = new Blob([dataStr], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            a.download = `xlisten_output_${timestamp}.json`;
+            a.href = url;
+            a.click();
+            URL.revokeObjectURL(url);
+
+            log(`📥 Downloaded xlisten_output.json with ${trimmedSchedule.schedule.length} notes (first 40s of ${capturedSchedule.schedule.length} total)`);
+        };
+
+        clearBtn.onclick = () => {
+            capturedSchedule = null;
+            scheduleReceived = false;
+            scheduleStatus.innerHTML = 'Waiting for tuning schedule...';
+            startTimeElem.innerHTML = '--';
+            piccoloUrlElem.innerHTML = '--';
+            pillarUrlsElem.innerHTML = '--';
+            patronNoteCountElem.innerHTML = '0';
+            pillarNoteCountElem.innerHTML = '0';
+            windowCountElem.innerHTML = '0';
+            deviceOrderElem.innerHTML = '--';
+            schedulePreview.innerHTML = '<div style="color: #444;">No schedule captured yet...</div>';
+            captureBtn.disabled = true;
+            log("🗑️ Captured data cleared");
+        };
+
+        log("🎧 xlisten started. Waiting for tuning schedule from conductor...");
+        log("   After Phase 1 begins, click 'Capture & Download' to save the note schedule.");
+    </script>
+</body>
+</html>
