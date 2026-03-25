@@ -1734,6 +1734,20 @@ function processPillarReferenceDetection(now, frequencyData, sampleRate, fftSize
     }
 }
 
+// Get the speaker delay for the playing device (if known)
+function getPlayerSpeakerDelay(deviceId) {
+    // First check if this device has a calibrated delay
+    if (deviceDelays[deviceId]) {
+        return deviceDelays[deviceId];
+    }
+    // Check if it's a pillar (known delay)
+    if (deviceId.startsWith('PILLAR_') && pillarConfig[deviceId]) {
+        return pillarConfig[deviceId].speakerDelayMs || 45;
+    }
+    // Use default estimate
+    return estimatedDeviceDelayMs;
+}
+
 // --- PROCESS DETECTION WINDOWS (Phase 2 neighbor detection with pitch-aware) ---
 function processDetectionWindows(now, avgEnergy, dominantFreq, ratioToBaseline) {
     if (phase1WindowActive && !phase1Complete && pillarWindows.length > 0 && currentPillarWindow) {
@@ -1743,6 +1757,13 @@ function processDetectionWindows(now, avgEnergy, dominantFreq, ratioToBaseline) 
     if (!phase1Complete) return;
 
     const songPosition = now - tuningStartTime;
+
+    // WIDE INITIAL WINDOW: Use a larger window until we have calibrated speaker delays
+    // Start with 500ms window (covers 0-500ms speaker delay range)
+    let currentWindowMs = adaptiveWindowMs;
+    if (calibratedSpeakerDelay === null) {
+        currentWindowMs = 500;  // Wide window for initial detection
+    }
 
     // Find candidate notes to listen for
     const candidateNotes = noteSchedule.filter(note => {
@@ -1754,9 +1775,11 @@ function processDetectionWindows(now, avgEnergy, dominantFreq, ratioToBaseline) 
         const expectedNote = noteTimings[note.noteIndex];
         if (!expectedNote || !expectedNote.midi) return false;
 
-        const expectedTime = note.startMs + (estimatedDeviceDelayMs || 0);
+        // For detection window, use the note's scheduled time plus a wide window
+        // Don't add any delay compensation - the wide window will capture it
+        const expectedTime = note.startMs;
         const timeDiff = Math.abs(songPosition - expectedTime);
-        return timeDiff <= adaptiveWindowMs;
+        return timeDiff <= currentWindowMs;
     });
 
     candidateNotes.forEach(note => {
@@ -1764,9 +1787,10 @@ function processDetectionWindows(now, avgEnergy, dominantFreq, ratioToBaseline) 
         const expectedNote = noteTimings[note.noteIndex];
         if (!expectedNote || !expectedNote.midi) return;
 
-        const expectedTime = note.startMs + (estimatedDeviceDelayMs || 0);
-        const windowStart = expectedTime - adaptiveWindowMs/2;
-        const windowEnd = expectedTime + adaptiveWindowMs/2;
+        // Use wide window for expected time (no player delay compensation yet)
+        const expectedTime = note.startMs;
+        const windowStart = expectedTime - currentWindowMs/2;
+        const windowEnd = expectedTime + currentWindowMs/2;
 
         if (songPosition >= windowStart && songPosition <= windowEnd) {
             if (!detectionWindows.has(noteKey)) {
@@ -1778,7 +1802,10 @@ function processDetectionWindows(now, avgEnergy, dominantFreq, ratioToBaseline) 
                     baselineEnergy: 0,
                     expectedFreq: getFrequencyFromMidi(expectedNote.midi)
                 });
-                log(`🔍 WINDOW ${note.noteIndex} (${note.deviceId}) opened`);
+                // Only log window opens for first few to reduce clutter
+                if (note.noteIndex < 5) {
+                    log(`🔍 WINDOW ${note.noteIndex} (${note.deviceId}) opened`);
+                }
             }
 
             const windowData = detectionWindows.get(noteKey);
@@ -1827,8 +1854,18 @@ function processDetectionWindows(now, avgEnergy, dominantFreq, ratioToBaseline) 
                 const propagationMs = (distance / SPEED_OF_SOUND) * 1000;
                 const speakerDelay = rawDelay - propagationMs - (myMicDelayMs || 0);
 
+                // Get the player's speaker delay if known (for logging)
+                let playerSpeakerDelay = 'unknown';
+                if (playingSeatId.startsWith('PILLAR_')) {
+                    playerSpeakerDelay = pillarConfig[playingSeatId]?.speakerDelayMs || 45;
+                } else if (deviceDelays[playingSeatId]) {
+                    playerSpeakerDelay = deviceDelays[playingSeatId];
+                } else {
+                    playerSpeakerDelay = estimatedDeviceDelayMs;
+                }
+
                 log(`📈 Detection: note ${note.noteIndex} from ${playingSeatId} (${expectedNote.pitch} @ ${windowData.expectedFreq.toFixed(0)}Hz)`);
-                log(`   raw=${rawDelay.toFixed(1)}ms, prop=${propagationMs.toFixed(1)}ms, speaker=${speakerDelay.toFixed(1)}ms`);
+                log(`   raw=${rawDelay.toFixed(1)}ms, prop=${propagationMs.toFixed(1)}ms, speaker=${speakerDelay.toFixed(1)}ms, playerDelay=${playerSpeakerDelay}ms`);
 
                 reportMeasurement(note.noteIndex, playingSeatId, speakerDelay, rawDelay, propagationMs, now);
                 processedMeasurements.add(noteKey);
@@ -1838,7 +1875,7 @@ function processDetectionWindows(now, avgEnergy, dominantFreq, ratioToBaseline) 
         } else if (detectionWindows.has(noteKey)) {
             detectionWindows.delete(noteKey);
             consecutiveMisses++;
-            if (consecutiveMisses >= 2) {
+            if (consecutiveMisses >= 2 && adaptiveWindowMs < MAX_ADAPTIVE_WINDOW_MS) {
                 adaptiveWindowMs = Math.min(MAX_ADAPTIVE_WINDOW_MS, adaptiveWindowMs * 1.5);
                 log(`📊 Widening adaptive window to ${Math.round(adaptiveWindowMs)}ms`);
             }
@@ -3020,11 +3057,14 @@ function initTuningListener() {
 }
 
 function schedulePhase2Notes(pieceStartTime, speakerDelayMs) {
-    const effectiveSpeakerDelay = (speakerDelayMs !== null && speakerDelayMs !== undefined)
-        ? speakerDelayMs
-        : estimatedDeviceDelayMs;
+    // If speakerDelayMs is null/undefined or 0, use the default estimate
+    let effectiveSpeakerDelay = speakerDelayMs;
+    if (effectiveSpeakerDelay === null || effectiveSpeakerDelay === undefined || effectiveSpeakerDelay === 0) {
+        effectiveSpeakerDelay = estimatedDeviceDelayMs;  // 261ms default
+    }
 
     const nowWall = Date.now() + serverOffset;
+    let firstNoteLogged = false;
 
     assignedNotes.forEach(note => {
         const absoluteTime = pieceStartTime + note.startMs;
@@ -3035,9 +3075,11 @@ function schedulePhase2Notes(pieceStartTime, speakerDelayMs) {
             const timeoutId = setTimeout(() => playSingleNote(note), delayMs);
             scheduledTimeouts.push({ noteIndex: note.noteIndex, timeoutId, adjustedTime });
 
-            //REDUCE LOG CLUTTER if (note.noteIndex < 5) {
-            //REDUCE LOG CLUTTER     log(`📅 Note ${note.noteIndex}: scheduling in ${Math.round(delayMs)}ms (at ${note.startMs}ms into piece)`);
-            //REDUCE LOG CLUTTER }
+            // Log only the first note
+            if (!firstNoteLogged) {
+                log(`📅 First note (index ${note.noteIndex}) scheduled in ${Math.round(delayMs)}ms (at ${note.startMs}ms into piece) with speaker delay ${effectiveSpeakerDelay}ms`);
+                firstNoteLogged = true;
+            }
         } else if (delayMs > -500) {
             log(`⚠️ Note ${note.noteIndex} is ${Math.round(-delayMs)}ms late, playing immediately`);
             playSingleNote(note);
