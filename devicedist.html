@@ -1286,8 +1286,7 @@ function updatePreloadProgress() {
 // --- UTILITY FUNCTIONS ---
 // --- PILLAR INTRO NOTE ---
 // Plays a test sound when the pillar loads to verify speaker is working
-//const PILLAR_INTRO_URL = "https://static.wixstatic.com/mp3/9178d1_fd07382a21304090b9833edf3b4e510e.mp3";
-const PILLAR_INTRO_URL = "https://static.wixstatic.com/mp3/9178d1_865189a6de11407188075d651d03f4c9.mp3";
+const PILLAR_INTRO_URL = "https://static.wixstatic.com/mp3/9178d1_fd07382a21304090b9833edf3b4e510e.mp3";
 
 async function playPillarIntroNote() {
     // Only play for pillar devices
@@ -2847,7 +2846,7 @@ async function startPillarFabric(startTime) {
 
                 const source = audioCtx.createBufferSource();
                 source.buffer = bufferCache[myUrl];
-                source.loop = true;
+                source.loop = false;
                 const gainNode = audioCtx.createGain();
                 gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime);
                 source.connect(gainNode).connect(audioCtx.destination);
@@ -2883,7 +2882,7 @@ async function startPillarFabric(startTime) {
 
             const source = audioCtx.createBufferSource();
             source.buffer = bufferCache[myUrl];
-            source.loop = true;
+            source.loop = false;
             const gainNode = audioCtx.createGain();
             gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime);
             source.connect(gainNode).connect(audioCtx.destination);
