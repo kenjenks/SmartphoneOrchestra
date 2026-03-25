@@ -812,7 +812,7 @@ function syncClock() {
     offsetRef.on("value", snap => {
         serverOffset = snap.val() || 0;
         document.getElementById('sync-ind').className = 'indicator active';
-        log(`⏱️ Server offset: ${serverOffset}ms`);
+        // REDUCE LOG CLUTTER log(`⏱️ Server offset: ${serverOffset}ms`);
     });
 }
 
@@ -1342,7 +1342,7 @@ async function playTuningMovement(cue) {
     }
     blocks.push(currentBlock);
 
-    log(`📦 Scheduled ${blocks.length} continuous blocks for ${assignedNotes.length} notes`);
+    //REDUCE LOG CLUTTER log(`📦 Scheduled ${blocks.length} continuous blocks for ${assignedNotes.length} notes`);
 
     const effectiveSpeakerDelay = (calibratedSpeakerDelay !== null && calibratedSpeakerDelay !== undefined)
         ? calibratedSpeakerDelay
@@ -3035,9 +3035,9 @@ function schedulePhase2Notes(pieceStartTime, speakerDelayMs) {
             const timeoutId = setTimeout(() => playSingleNote(note), delayMs);
             scheduledTimeouts.push({ noteIndex: note.noteIndex, timeoutId, adjustedTime });
 
-            if (note.noteIndex < 5) {
-                log(`📅 Note ${note.noteIndex}: scheduling in ${Math.round(delayMs)}ms (at ${note.startMs}ms into piece)`);
-            }
+            //REDUCE LOG CLUTTER if (note.noteIndex < 5) {
+            //REDUCE LOG CLUTTER     log(`📅 Note ${note.noteIndex}: scheduling in ${Math.round(delayMs)}ms (at ${note.startMs}ms into piece)`);
+            //REDUCE LOG CLUTTER }
         } else if (delayMs > -500) {
             log(`⚠️ Note ${note.noteIndex} is ${Math.round(-delayMs)}ms late, playing immediately`);
             playSingleNote(note);
@@ -3076,7 +3076,7 @@ function playSingleNote(note) {
 
     source.stop(audioCtx.currentTime + durationSeconds);
 
-    log(`🔊 Playing note ${note.noteIndex} at ${note.startMs}ms (device ${note.deviceId})`);
+    //REDUCE LOG CLUTTER log(`🔊 Playing note ${note.noteIndex} at ${note.startMs}ms (device ${note.deviceId})`);
 
     animateNoteBrightness(note.durationMs);
 }
