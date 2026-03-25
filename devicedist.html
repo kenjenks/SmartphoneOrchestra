@@ -1181,12 +1181,25 @@ async function preloadAssets() {
         const loadTasks = Array.from(audioFiles).map(async url => {
             try {
                 if (bufferCache[url]) {
-                    log(`✅ Already cached: ${url.split('/').pop()}`);
+                    // Already cached - but let's verify the buffer has audio data
+                    const existingBuffer = bufferCache[url];
+                    if (existingBuffer && existingBuffer.getChannelData) {
+                        const channelData = existingBuffer.getChannelData(0);
+                        let maxAmplitude = 0;
+                        const sampleCount = Math.min(10000, channelData.length);
+                        for (let i = 0; i < sampleCount; i++) {
+                            maxAmplitude = Math.max(maxAmplitude, Math.abs(channelData[i]));
+                        }
+                        log(`✅ Already cached: ${url.split('/').pop()} (peak: ${maxAmplitude.toFixed(4)})`);
+                    } else {
+                        log(`✅ Already cached: ${url.split('/').pop()}`);
+                    }
                     preloadedCount++;
                     updatePreloadProgress();
                     return;
                 }
 
+                log(`📥 Fetching: ${url.split('/').pop()}`);
                 const res = await fetch(url);
                 const arrayBuf = await res.arrayBuffer();
 
@@ -1194,10 +1207,45 @@ async function preloadAssets() {
                     throw new Error("Empty file");
                 }
 
-                bufferCache[url] = await audioCtx.decodeAudioData(arrayBuf);
+                log(`📥 Downloaded ${Math.round(arrayBuf.byteLength / 1024)} KB in ${Date.now() - startFetchTime}ms`);
+                const decodeStart = Date.now();
+
+                const audioBuffer = await audioCtx.decodeAudioData(arrayBuf);
+                const decodeTime = Date.now() - decodeStart;
+
+                // Detailed decode logging
+                log(`🎵 Decoded: ${url.split('/').pop()}`);
+                log(`   Duration: ${audioBuffer.duration.toFixed(2)}s`);
+                log(`   Channels: ${audioBuffer.numberOfChannels}`);
+                log(`   Sample rate: ${audioBuffer.sampleRate}Hz`);
+                log(`   Decode time: ${decodeTime}ms`);
+
+                // Check peak amplitude to detect silent audio
+                const channelData = audioBuffer.getChannelData(0);
+                let maxAmplitude = 0;
+                let sumAmplitude = 0;
+                const sampleCount = Math.min(10000, channelData.length);
+                for (let i = 0; i < sampleCount; i++) {
+                    const amp = Math.abs(channelData[i]);
+                    maxAmplitude = Math.max(maxAmplitude, amp);
+                    sumAmplitude += amp;
+                }
+                const avgAmplitude = sumAmplitude / sampleCount;
+                log(`   Peak amplitude (first ${sampleCount} samples): ${maxAmplitude.toFixed(4)}`);
+                log(`   Avg amplitude: ${avgAmplitude.toFixed(6)}`);
+
+                if (maxAmplitude < 0.01) {
+                    log(`   ⚠️ WARNING: Audio appears to be NEARLY SILENT! Peak amplitude ${maxAmplitude.toFixed(4)}`);
+                } else if (maxAmplitude < 0.1) {
+                    log(`   ⚠️ Audio may be quiet (peak ${maxAmplitude.toFixed(4)})`);
+                } else {
+                    log(`   ✅ Audio level appears normal (peak ${maxAmplitude.toFixed(4)})`);
+                }
+
+                bufferCache[url] = audioBuffer;
                 preloadedCount++;
                 updatePreloadProgress();
-                log(`✅ Loaded: ${url.split('/').pop()} (${Math.round(arrayBuf.byteLength / 1024)} KB)`);
+
             } catch (e) {
                 log(`❌ Failed to load ${url.split('/').pop()}: ${e.message}`);
                 preloadedCount++;
