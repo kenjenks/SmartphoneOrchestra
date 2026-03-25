@@ -2345,16 +2345,22 @@ async function startIterativeCalibration() {
                 return;
             }
 
-            const FALLBACK_TIMEOUT_MS = 25000;
+            // Calculate actual Phase 1 end time from tuning data
+            const lastWindow = pillarWindows[pillarWindows.length - 1];
+            const phase1EndTime = tuningStartTime + lastWindow.end_ms;
+            const now = Date.now() + serverOffset;
+            const timeUntilPhase1End = Math.max(0, phase1EndTime - now);
+
+            // Add a small buffer (1 second) to ensure Phase 1 completes naturally
             const fallbackTimeout = setTimeout(() => {
                 if (!phase1Complete) {
-                    log(`⚠️ Phase 1 timeout after ${FALLBACK_TIMEOUT_MS/1000}s - proceeding with micDelay=0`);
+                    log(`⚠️ Phase 1 timeout after ${(timeUntilPhase1End + 1000)/1000}s - proceeding with micDelay=0`);
                     phase1Complete = true;
                     myMicDelayMs = 0;
                     clearInterval(checkInterval);
                     resolve();
                 }
-            }, FALLBACK_TIMEOUT_MS);
+            }, timeUntilPhase1End + 1000);
 
             const checkInterval = setInterval(() => {
                 if (phase1Complete) {
