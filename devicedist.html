@@ -1235,6 +1235,65 @@ function updatePreloadProgress() {
 }
 
 // --- UTILITY FUNCTIONS ---
+// --- PILLAR INTRO NOTE ---
+// Plays a test sound when the pillar loads to verify speaker is working
+const PILLAR_INTRO_URL = "https://static.wixstatic.com/mp3/9178d1_fd07382a21304090b9833edf3b4e510e.mp3";
+
+async function playPillarIntroNote() {
+    // Only play for pillar devices
+    if (!mySeat || !mySeat.id.startsWith('PILLAR_')) {
+        return;
+    }
+
+    log(`🔊 Playing pillar intro note for ${mySeat.id} to verify speaker...`);
+
+    // Ensure audio context is ready
+    if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+
+    // Resume audio context if suspended
+    if (audioCtx.state === 'suspended') {
+        await audioCtx.resume();
+        log(`🎛️ Audio context resumed for intro note`);
+    }
+
+    // Check if audio is already loaded
+    if (!bufferCache[PILLAR_INTRO_URL]) {
+        try {
+            log(`📥 Loading intro note audio...`);
+            const res = await fetch(PILLAR_INTRO_URL);
+            const arrayBuf = await res.arrayBuffer();
+            bufferCache[PILLAR_INTRO_URL] = await audioCtx.decodeAudioData(arrayBuf);
+            log(`✅ Intro note loaded: ${Math.round(arrayBuf.byteLength / 1024)} KB`);
+        } catch (e) {
+            log(`❌ Failed to load intro note: ${e.message}`);
+            return;
+        }
+    }
+
+    // Play the intro note
+    try {
+        const source = audioCtx.createBufferSource();
+        source.buffer = bufferCache[PILLAR_INTRO_URL];
+        const gainNode = audioCtx.createGain();
+        gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime);
+        source.connect(gainNode).connect(audioCtx.destination);
+        source.start(0);
+
+        log(`🔊 Intro note played successfully on ${mySeat.id}`);
+
+        // Optional: Add a visual flash to confirm
+        const flash = document.createElement('div');
+        flash.style.cssText = `position: fixed; top: 50%; left: 50%; width: 100px; height: 100px; background: #00ffcc; border-radius: 50%; transform: translate(-50%, -50%); z-index: 9999; opacity: 0.8; transition: opacity 0.3s;`;
+        document.body.appendChild(flash);
+        setTimeout(() => { flash.style.opacity = '0'; setTimeout(() => flash.remove(), 300); }, 200);
+
+    } catch (e) {
+        log(`❌ Failed to play intro note: ${e.message}`);
+    }
+}
+
 function calculateMedian(values) {
     if (values.length === 0) return 0;
     const sorted = [...values].sort((a, b) => a - b);
@@ -3242,6 +3301,7 @@ window.onload = async () => {
     }
     addLogDisplayToDebugPanel();
     setInterval(() => { if (isMicActive) { const debugDiv = document.getElementById('calibration-debug'); if (debugDiv) debugDiv.style.display = 'block'; } }, 2000);
+    playPillarIntroNote();
 };
 
 window.onresize = () => { const canvas = document.getElementById('stage-canvas'); canvas.width = window.innerWidth; canvas.height = window.innerHeight; };
