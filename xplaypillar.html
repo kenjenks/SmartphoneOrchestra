@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>xplaypillar - Simple Pillar Playback Tester</title>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0a0a0a;
+            color: #eee;
+            padding: 20px;
+            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 600px;
+            text-align: center;
+        }
+        h1 {
+            color: #ffaa44;
+        }
+        .status {
+            background: #1a1a1a;
+            border-left: 4px solid #ffaa44;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+        button {
+            background: #ffaa44;
+            color: #000;
+            border: none;
+            padding: 12px 24px;
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 1rem;
+            font-weight: bold;
+            margin: 10px;
+        }
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .info-panel {
+            background: #111;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 20px 0;
+            text-align: left;
+        }
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #222;
+            font-family: monospace;
+        }
+        .log-area {
+            background: #000;
+            color: #0f0;
+            font-family: monospace;
+            font-size: 11px;
+            height: 300px;
+            overflow-y: auto;
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 20px;
+            text-align: left;
+        }
+        .timestamp {
+            color: #666;
+            margin-right: 8px;
+        }
+        .detected {
+            color: #ffaa44;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔊 xplaypillar - Pillar Playback Tester</h1>
+        <p style="color: #888;">Listens for tuning schedule from conductor and plays pillar audio.</p>
+
+        <div id="connection-status" class="status">
+            🔌 Firebase: Disconnected
+        </div>
+
+        <div class="info-panel">
+            <div class="info-row">
+                <span>🎯 Pillar ID:</span>
+                <span id="pillar-id">--</span>
+            </div>
+            <div class="info-row">
+                <span>🎵 Pillar URL:</span>
+                <span id="pillar-url">--</span>
+            </div>
+            <div class="info-row">
+                <span>⏱️ Audio Context:</span>
+                <span id="audio-state">--</span>
+            </div>
+            <div class="info-row">
+                <span>📡 Tuning Schedule:</span>
+                <span id="schedule-status">Waiting...</span>
+            </div>
+            <div class="info-row">
+                <span>🎭 Playback Status:</span>
+                <span id="playback-status">Idle</span>
+            </div>
+        </div>
+
+        <div>
+            <button id="init-audio-btn">🎛️ Initialize Audio</button>
+            <button id="test-play-btn" disabled>🔊 Test Play (intro note)</button>
+        </div>
+
+        <div class="log-area" id="log-area">
+            <div class="log-entry">[System] xplaypillar started. Click "Initialize Audio" to begin.</div>
+        </div>
+    </div>
+
+    <script>
+        // Firebase Configuration
+        const firebaseConfig = {
+            apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
+            authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
+            databaseURL: "https://smartphoneorchestra-dwt-default-rtdb.firebaseio.com/",
+            projectId: "smartphoneorchestra-dwt",
+            storageBucket: "smartphoneorchestra-dwt.firebasestorage.app",
+            messagingSenderId: "722537253165",
+            appId: "1:722537253165:web:8e8b6495bd508de35b2ba4"
+        };
+
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
+        // State
+        let audioCtx = null;
+        let serverOffset = 0;
+        let myPillarId = "PILLAR_FL";  // Hardcoded for FL pillar
+        let myPillarUrl = null;
+        let tuningStartTime = null;
+        let playbackScheduled = false;
+        let testAudioBuffer = null;
+        let pillarAudioBuffer = null;
+        let playbackTimeout = null;
+
+        // Constants
+        const TEST_NOTE_URL = "https://static.wixstatic.com/mp3/9178d1_fd07382a21304090b9833edf3b4e510e.mp3";
+        const WARMUP_ADVANCE_MS = 500;
+        const SILENT_WARMUP_MS = 100;
+
+        // Logging
+        function log(message, type = 'info') {
+            const timestamp = Date.now() + serverOffset;
+            const timeStr = new Date(timestamp).toISOString().substr(11, 12);
+            const logDiv = document.createElement('div');
+            logDiv.className = 'log-entry';
+            logDiv.innerHTML = `<span class="timestamp">[${timeStr}]</span> ${message}`;
+            document.getElementById('log-area').appendChild(logDiv);
+            logDiv.scrollIntoView({ behavior: 'smooth', block: 'end' });
+            console.log(`[${timeStr}] ${message}`);
+        }
+
+        // Clock sync
+        db.ref(".info/serverTimeOffset").on("value", snap => {
+            serverOffset = snap.val() || 0;
+            log(`⏱️ Server offset: ${serverOffset}ms`);
+        });
+
+        // Connection status
+        db.ref(".info/connected").on("value", snap => {
+            const statusDiv = document.getElementById('connection-status');
+            if (snap.val() === true) {
+                statusDiv.innerHTML = "✅ Firebase: Connected";
+                statusDiv.className = "status";
+                statusDiv.style.borderLeftColor = "#44ffaa";
+                log("Firebase connected");
+            } else {
+                statusDiv.innerHTML = "🔌 Firebase: Disconnected";
+                statusDiv.className = "status";
+                statusDiv.style.borderLeftColor = "#ff4444";
+                log("Firebase disconnected");
+            }
+        });
+
+        // Load pillar config to get URL
+        async function loadPillarConfig() {
+            try {
+                const snap = await db.ref('pillar_config').once('value');
+                const data = snap.val();
+                
+                if (data && data.pillars) {
+                    const pillar = data.pillars.find(p => p.id === myPillarId);
+                    if (pillar) {
+                        log(`📡 Found pillar config for ${myPillarId}`);
+                        document.getElementById('pillar-id').innerText = myPillarId;
+                        return true;
+                    }
+                }
+                
+                // Also check tuning_mode for pillar URLs
+                const tuningSnap = await db.ref('tuning_mode').once('value');
+                const tuningData = tuningSnap.val();
+                if (tuningData && tuningData.assets && tuningData.assets.pillars) {
+                    if (tuningData.assets.pillars.FL) {
+                        myPillarUrl = tuningData.assets.pillars.FL;
+                        log(`📡 Got pillar URL from tuning_mode: ${myPillarUrl.split('/').pop()}`);
+                        document.getElementById('pillar-url').innerText = myPillarUrl.split('/').pop();
+                        return true;
+                    }
+                }
+                
+                log(`❌ Could not find URL for ${myPillarId}`);
+                return false;
+            } catch (e) {
+                log(`❌ Failed to load pillar config: ${e.message}`);
+                return false;
+            }
+        }
+
+        // Preload audio file
+        async function preloadAudio(url, label) {
+            log(`📥 Loading ${label}: ${url.split('/').pop()}`);
+            try {
+                const res = await fetch(url);
+                const arrayBuf = await res.arrayBuffer();
+                log(`📥 Downloaded ${Math.round(arrayBuf.byteLength / 1024)} KB`);
+                const audioBuffer = await audioCtx.decodeAudioData(arrayBuf);
+                
+                // Check amplitude
+                const channelData = audioBuffer.getChannelData(0);
+                let maxAmp = 0;
+                for (let i = 0; i < Math.min(10000, channelData.length); i++) {
+                    maxAmp = Math.max(maxAmp, Math.abs(channelData[i]));
+                }
+                log(`🎵 Decoded: ${audioBuffer.duration.toFixed(1)}s, peak amplitude ${maxAmp.toFixed(4)}`);
+                if (maxAmp < 0.01) {
+                    log(`⚠️ WARNING: ${label} appears to be SILENT!`);
+                } else if (maxAmp < 0.1) {
+                    log(`⚠️ ${label} may be quiet (peak ${maxAmp.toFixed(4)})`);
+                } else {
+                    log(`✅ ${label} loaded OK (peak ${maxAmp.toFixed(4)})`);
+                }
+                return audioBuffer;
+            } catch (e) {
+                log(`❌ Failed to load ${label}: ${e.message}`);
+                return null;
+            }
+        }
+
+        // Play a sound immediately (for testing)
+        async function playTestNote() {
+            if (!audioCtx) {
+                log("⚠️ Audio context not initialized");
+                return;
+            }
+            
+            if (audioCtx.state === 'suspended') {
+                await audioCtx.resume();
+                log("🎛️ Audio context resumed");
+            }
+            
+            if (!testAudioBuffer) {
+                log("📥 Loading test note...");
+                testAudioBuffer = await preloadAudio(TEST_NOTE_URL, "test note");
+                if (!testAudioBuffer) return;
+            }
+            
+            try {
+                const source = audioCtx.createBufferSource();
+                source.buffer = testAudioBuffer;
+                const gainNode = audioCtx.createGain();
+                gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime);
+                source.connect(gainNode).connect(audioCtx.destination);
+                source.start(0);
+                log("🔊 Test note played");
+            } catch (e) {
+                log(`❌ Failed to play test note: ${e.message}`);
+            }
+        }
+
+        // Play pillar audio with warm-up
+        async function playPillarAudio(startTime) {
+            if (!audioCtx) {
+                log("❌ Audio context not initialized");
+                return false;
+            }
+            
+            if (!pillarAudioBuffer) {
+                log("📥 Loading pillar audio...");
+                pillarAudioBuffer = await preloadAudio(myPillarUrl, "pillar audio");
+                if (!pillarAudioBuffer) return false;
+            }
+            
+            const nowWall = Date.now() + serverOffset;
+            const startDelay = startTime - nowWall;
+            
+            log(`📊 Playback timing:`);
+            log(`   Start time: ${new Date(startTime).toISOString().substr(11, 12)}.${String(startTime % 1000).padStart(3, '0')}`);
+            log(`   Now: ${new Date(nowWall).toISOString().substr(11, 12)}.${String(nowWall % 1000).padStart(3, '0')}`);
+            log(`   Delay: ${startDelay}ms`);
+            
+            // Warm-up pulse (play at low volume to wake hardware)
+            const warmUpTime = startTime - WARMUP_ADVANCE_MS;
+            const warmUpDelay = warmUpTime - nowWall;
+            
+            if (warmUpDelay > 0) {
+                log(`🔇 Scheduling warm-up in ${Math.round(warmUpDelay)}ms`);
+                setTimeout(async () => {
+                    try {
+                        const source = audioCtx.createBufferSource();
+                        source.buffer = pillarAudioBuffer;
+                        const gainNode = audioCtx.createGain();
+                        gainNode.gain.setValueAtTime(0.01, audioCtx.currentTime); // Very quiet
+                        source.connect(gainNode).connect(audioCtx.destination);
+                        source.start(0);
+                        source.stop(audioCtx.currentTime + (SILENT_WARMUP_MS / 1000));
+                        log("🔇 Warm-up pulse sent");
+                    } catch (e) {
+                        log(`❌ Warm-up failed: ${e.message}`);
+                    }
+                }, warmUpDelay);
+            }
+            
+            // Main playback
+            if (startDelay > 0) {
+                log(`🎵 Scheduling main playback in ${Math.round(startDelay)}ms`);
+                if (playbackTimeout) clearTimeout(playbackTimeout);
+                playbackTimeout = setTimeout(async () => {
+                    try {
+                        if (audioCtx.state === 'suspended') {
+                            await audioCtx.resume();
+                            log("🎛️ Audio context resumed for playback");
+                        }
+                        
+                        const source = audioCtx.createBufferSource();
+                        source.buffer = pillarAudioBuffer;
+                        const gainNode = audioCtx.createGain();
+                        gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime);
+                        source.connect(gainNode).connect(audioCtx.destination);
+                        source.start(0);
+                        
+                        const actualTime = Date.now() + serverOffset;
+                        log(`🏛️ PILLAR PLAYBACK STARTED at ${new Date(actualTime).toISOString().substr(11, 12)}`);
+                        log(`   Scheduled: ${new Date(startTime).toISOString().substr(11, 12)}`);
+                        log(`   Error: ${actualTime - startTime}ms`);
+                        document.getElementById('playback-status').innerHTML = "Playing";
+                        document.getElementById('playback-status').style.color = "#ffaa44";
+                        
+                        // Log when playback ends
+                        source.onended = () => {
+                            log(`🏛️ Playback ended`);
+                            document.getElementById('playback-status').innerHTML = "Complete";
+                            document.getElementById('playback-status').style.color = "#44ffaa";
+                        };
+                        
+                        playbackTimeout = null;
+                    } catch (e) {
+                        log(`❌ Playback failed: ${e.message}`);
+                        document.getElementById('playback-status').innerHTML = "Failed";
+                    }
+                }, startDelay);
+                return true;
+            } else if (startDelay > -1000) {
+                log(`⚠️ Start is ${Math.round(-startDelay)}ms late, playing immediately`);
+                try {
+                    if (audioCtx.state === 'suspended') {
+                        await audioCtx.resume();
+                    }
+                    const source = audioCtx.createBufferSource();
+                    source.buffer = pillarAudioBuffer;
+                    const gainNode = audioCtx.createGain();
+                    gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime);
+                    source.connect(gainNode).connect(audioCtx.destination);
+                    source.start(0);
+                    log(`🏛️ PILLAR PLAYBACK STARTED (immediate)`);
+                    document.getElementById('playback-status').innerHTML = "Playing";
+                    return true;
+                } catch (e) {
+                    log(`❌ Playback failed: ${e.message}`);
+                    return false;
+                }
+            } else {
+                log(`❌ Start is too late (${Math.round(-startDelay)}ms), skipping`);
+                return false;
+            }
+        }
+
+        // Listen for tuning schedule
+        function listenForTuning() {
+            db.ref('tuning/current').on('value', snap => {
+                const schedule = snap.val();
+                
+                if (!schedule) {
+                    if (playbackScheduled) {
+                        log("⚠️ Tuning schedule cleared");
+                        if (playbackTimeout) clearTimeout(playbackTimeout);
+                        playbackScheduled = false;
+                        document.getElementById('schedule-status').innerHTML = "Cleared";
+                        document.getElementById('playback-status').innerHTML = "Idle";
+                    }
+                    return;
+                }
+                
+                if (!schedule.startTime) {
+                    log("⚠️ Schedule has no startTime");
+                    return;
+                }
+                
+                const now = Date.now() + serverOffset;
+                const timeToStart = schedule.startTime - now;
+                
+                log(`🎵 Tuning schedule received`);
+                log(`   Start time: ${new Date(schedule.startTime).toISOString().substr(11, 12)}.${String(schedule.startTime % 1000).padStart(3, '0')}`);
+                log(`   Time to start: ${(timeToStart / 1000).toFixed(1)}s`);
+                
+                document.getElementById('schedule-status').innerHTML = `Received, starts in ${Math.round(timeToStart/1000)}s`;
+                
+                // Check if we have the pillar URL
+                if (!myPillarUrl) {
+                    log("❌ No pillar URL available - cannot play");
+                    document.getElementById('schedule-status').innerHTML = "No URL";
+                    return;
+                }
+                
+                // Schedule playback
+                if (!playbackScheduled) {
+                    playbackScheduled = true;
+                    playPillarAudio(schedule.startTime);
+                } else {
+                    log("⚠️ Playback already scheduled");
+                }
+            });
+        }
+
+        // Initialize audio context
+        async function initAudio() {
+            if (audioCtx) {
+                log("Audio context already exists");
+                document.getElementById('audio-state').innerHTML = audioCtx.state;
+                return;
+            }
+            
+            try {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                log(`🎛️ Audio context created (state: ${audioCtx.state})`);
+                document.getElementById('audio-state').innerHTML = audioCtx.state;
+                
+                // Resume on user interaction
+                if (audioCtx.state === 'suspended') {
+                    await audioCtx.resume();
+                    log(`🎛️ Audio context resumed (state: ${audioCtx.state})`);
+                    document.getElementById('audio-state').innerHTML = audioCtx.state;
+                }
+                
+                // Enable test button
+                document.getElementById('test-play-btn').disabled = false;
+                
+                return true;
+            } catch (e) {
+                log(`❌ Failed to create audio context: ${e.message}`);
+                return false;
+            }
+        }
+
+        // Initialize everything
+        window.onload = async () => {
+            log("🎧 xplaypillar started");
+            
+            await loadPillarConfig();
+            
+            // Set up UI buttons
+            document.getElementById('init-audio-btn').onclick = async () => {
+                await initAudio();
+            };
+            
+            document.getElementById('test-play-btn').onclick = async () => {
+                if (!audioCtx) {
+                    await initAudio();
+                }
+                await playTestNote();
+            };
+            
+            // Start listening for tuning schedule
+            listenForTuning();
+            
+            log("Ready. Click 'Initialize Audio' to start.");
+            log("   Then wait for conductor to start tuning.");
+        };
+        
+        window.addEventListener('beforeunload', () => {
+            if (playbackTimeout) clearTimeout(playbackTimeout);
+        });
+    </script>
+</body>
+</html>
