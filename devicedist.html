@@ -1229,11 +1229,16 @@ function calculateMedian(values) {
 let scheduledTimeouts = [];
 
 function schedulePhase2Notes(pieceStartTime, speakerDelayMs) {
+    // If no calibrated delay yet, use the initial estimate
+    const effectiveSpeakerDelay = (speakerDelayMs !== null && speakerDelayMs !== undefined)
+        ? speakerDelayMs
+        : estimatedDeviceDelayMs;  // Use the 261ms default
+
     const nowWall = Date.now() + serverOffset;
 
     assignedNotes.forEach(note => {
         const absoluteTime = pieceStartTime + note.startMs;
-        const adjustedTime = absoluteTime - speakerDelayMs - (myMicDelayMs || 0);
+        const adjustedTime = absoluteTime - effectiveSpeakerDelay - (myMicDelayMs || 0);
         const delayMs = adjustedTime - nowWall;
 
         if (delayMs > 0) {
@@ -1241,6 +1246,8 @@ function schedulePhase2Notes(pieceStartTime, speakerDelayMs) {
             scheduledTimeouts.push({ noteIndex: note.noteIndex, timeoutId, adjustedTime });
         }
     });
+
+    log(`📅 Scheduled ${assignedNotes.length} notes with speaker delay ${effectiveSpeakerDelay}ms`);
 }
 
 function rescheduleRemainingPhase2Notes(pieceStartTime, newSpeakerDelayMs) {
@@ -1671,7 +1678,7 @@ async function playTuningMovement(cue) {
 
     if (mySeat.id.startsWith('PILLAR_')) {
         // Pillar playback is handled in initTuningListener, not here
-        log(`🏛️ Pillar playback already handled in initTuningListener, skipping`);
+        log(`🏛️ Pillar ${mySeat.id} - tuning playback handled by pillar listener, skipping`);
         return;
     }
 
@@ -1722,17 +1729,23 @@ async function playTuningMovement(cue) {
     blocks.push(currentBlock);
 
     log(`📦 Scheduled ${blocks.length} continuous blocks for ${assignedNotes.length} notes`);
-    log(`   Using mic delay: ${(myMicDelayMs || 0).toFixed(1)}ms, speaker delay: ${(calibratedSpeakerDelay || 0).toFixed(1)}ms`);
+
+    // Determine effective speaker delay: use calibrated if available, otherwise use default estimate
+    const effectiveSpeakerDelay = (calibratedSpeakerDelay !== null && calibratedSpeakerDelay !== undefined)
+        ? calibratedSpeakerDelay
+        : estimatedDeviceDelayMs;  // Default 261ms from Pixel 6
+
+    log(`   Using mic delay: ${(myMicDelayMs || 0).toFixed(1)}ms, speaker delay: ${effectiveSpeakerDelay.toFixed(1)}ms`);
 
     blocks.forEach((block, blockIndex) => {
-        // Use tuningStartTime as the single reference
+        // FIX: Use tuningStartTime as the single reference
         const blockStartWall = tuningStartTime + block.startMs;
 
         let adjustedStartWall = blockStartWall;
 
-        if (calibratedSpeakerDelay !== null) {
-            adjustedStartWall -= calibratedSpeakerDelay;
-        }
+        // Use effective speaker delay (calibrated or default)
+        adjustedStartWall -= effectiveSpeakerDelay;
+
         if (myMicDelayMs !== null) {
             adjustedStartWall -= myMicDelayMs;
         }
@@ -2263,6 +2276,7 @@ function scheduleIterationRetry() {
 }
 
 // --- PLAY AUDIO BLOCK with timing feedback ---
+// --- PLAY AUDIO BLOCK with timing feedback ---
 async function playAudioBlock(url, block, movementStartTime, blockIndex) {
     const source = audioCtx.createBufferSource();
     source.buffer = bufferCache[url];
@@ -2289,11 +2303,15 @@ async function playAudioBlock(url, block, movementStartTime, blockIndex) {
         log(`🔊 Block ${blockIndex} timing error: ${timingError > 0 ? '+' : ''}${timingError.toFixed(0)}ms`);
     }
 
+    // Determine effective speaker delay: use calibrated value if available, otherwise use default estimate
+    const effectiveSpeakerDelay = (calibratedSpeakerDelay !== null && calibratedSpeakerDelay !== undefined)
+        ? calibratedSpeakerDelay
+        : estimatedDeviceDelayMs;  // Default 261ms from Pixel 6
+
     block.notes.forEach(note => {
         const noteStartWall = movementStartTime + note.startMs;
         const nowWall = Date.now() + serverOffset;
-        let adjustedStartWall = noteStartWall;
-        if (calibratedSpeakerDelay !== null) adjustedStartWall -= calibratedSpeakerDelay;
+        let adjustedStartWall = noteStartWall - effectiveSpeakerDelay;
         if (myMicDelayMs !== null) adjustedStartWall -= myMicDelayMs;
         const delayMs = adjustedStartWall - nowWall;
         if (delayMs > 0) {
