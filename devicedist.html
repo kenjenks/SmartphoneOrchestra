@@ -2761,7 +2761,7 @@ function scheduleIterationRetry() {
     }
 }
 
-// --- PILLAR FABRIC PLAYBACK (with proper delay calculation) ---
+// --- PILLAR FABRIC PLAYBACK (with proper delay calculation and fresh decode) ---
 async function startPillarFabric(startTime) {
     log(`🎻 Starting pillar fabric for ${mySeat.id}`);
 
@@ -2792,10 +2792,36 @@ async function startPillarFabric(startTime) {
     log(`   nowWall: ${nowWall} (${new Date(nowWall).toISOString().substr(11, 12)})`);
     log(`   pillarSpeakerDelay: ${pillarSpeakerDelay}ms`);
     log(`   startDelay: ${startDelay.toFixed(0)}ms`);
-    log(`   Audio already ${bufferCache[myUrl] ? 'PRELOADED' : 'NOT PRELOADED'}`);
 
-    if (!bufferCache[myUrl]) {
-        log(`❌ Pillar audio not loaded! Cannot start playback.`);
+    // FORCE FRESH DECODE - don't trust the cached buffer
+    log(`🔄 Forcing fresh decode of pillar audio for playback...`);
+    let freshBuffer = null;
+    try {
+        const res = await fetch(myUrl);
+        const arrayBuf = await res.arrayBuffer();
+        freshBuffer = await audioCtx.decodeAudioData(arrayBuf);
+
+        // Update cache with fresh buffer
+        bufferCache[myUrl] = freshBuffer;
+
+        // Log the decoded audio quality
+        const channelData = freshBuffer.getChannelData(0);
+        let maxAmp = 0;
+        for (let i = 0; i < Math.min(10000, channelData.length); i++) {
+            maxAmp = Math.max(maxAmp, Math.abs(channelData[i]));
+        }
+        log(`✅ Pillar audio decoded fresh: ${freshBuffer.duration.toFixed(1)}s, peak amplitude ${maxAmp.toFixed(4)}`);
+
+        if (maxAmp < 0.01) {
+            log(`⚠️ WARNING: Fresh decode produced SILENT audio! Check MP3 file.`);
+        }
+    } catch (e) {
+        log(`❌ Failed to decode pillar audio: ${e.message}`);
+        return;
+    }
+
+    if (!freshBuffer) {
+        log(`❌ No audio buffer available after decode attempt`);
         return;
     }
 
@@ -2804,7 +2830,7 @@ async function startPillarFabric(startTime) {
 
     if (warmUpDelay > 0) {
         const warmUpTimeoutId = setTimeout(async () => {
-            log(`🔇 Warm-up pulse for ${mySeat.id}`);
+            log(`🔊 Warm-up pulse for ${mySeat.id} (full volume test)`);
             try {
                 // Resume audio context before warm-up
                 if (audioCtx && audioCtx.state === 'suspended') {
@@ -2812,12 +2838,13 @@ async function startPillarFabric(startTime) {
                     log(`🎛️ Audio context resumed for warm-up`);
                 }
                 const source = audioCtx.createBufferSource();
-                source.buffer = bufferCache[myUrl];
+                source.buffer = freshBuffer;  // Use the fresh buffer
                 const gainNode = audioCtx.createGain();
-                gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime); //DEBUG full volume
+                gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime);  // Full volume for testing
                 source.connect(gainNode).connect(audioCtx.destination);
                 source.start(0);
-                source.stop(audioCtx.currentTime + (SILENT_WARMUP_MS / 1000));
+                source.stop(audioCtx.currentTime + 0.5);  // Play 500ms for test
+                log(`🔊 Warm-up pulse played (500ms, full volume)`);
             } catch (e) {
                 log(`❌ Warm-up failed: ${e.message}`);
             }
@@ -2834,20 +2861,15 @@ async function startPillarFabric(startTime) {
             log(`   Error: ${(actualStartTime - scheduledStartTime).toFixed(0)}ms`);
 
             try {
-                // Resume audio context before starting playback
+                // Resume audio context if needed
                 if (audioCtx && audioCtx.state === 'suspended') {
                     await audioCtx.resume();
                     log(`🎛️ Audio context resumed for playback (was suspended)`);
-                } else if (audioCtx && audioCtx.state === 'closed') {
-                    log(`❌ Audio context is closed! Cannot play.`);
-                    return;
-                } else {
-                    log(`🎛️ Audio context state: ${audioCtx ? audioCtx.state : 'undefined'}`);
                 }
 
                 const source = audioCtx.createBufferSource();
-                source.buffer = bufferCache[myUrl];
-                source.loop = false;
+                source.buffer = freshBuffer;  // Use the fresh buffer
+                source.loop = true;
                 const gainNode = audioCtx.createGain();
                 gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime);
                 source.connect(gainNode).connect(audioCtx.destination);
@@ -2861,12 +2883,9 @@ async function startPillarFabric(startTime) {
                     id: mySeat.id,
                     position: pillar
                 });
-                log(`🏛️ ${mySeat.id} source.start() called, loop=${source.loop}, audioCtx state: ${audioCtx.state}`);
+                log(`🏛️ ${mySeat.id} source.start() called, loop=true, audioCtx state: ${audioCtx.state}`);
             } catch (e) {
                 log(`❌ Pillar start failed: ${e.message}`);
-                if (e.name === 'NotAllowedError') {
-                    log(`   Audio context resume requires user interaction on mobile browsers`);
-                }
             }
             activeTimeouts = activeTimeouts.filter(id => id !== startTimeoutId);
         }, startDelay);
@@ -2875,15 +2894,14 @@ async function startPillarFabric(startTime) {
         log(`⚠️ ${mySeat.id} start is ${Math.round(-startDelay)}ms late, playing immediately`);
         const actualStartTime = Date.now() + serverOffset;
         try {
-            // Resume audio context before immediate playback
             if (audioCtx && audioCtx.state === 'suspended') {
                 await audioCtx.resume();
                 log(`🎛️ Audio context resumed for immediate playback (was suspended)`);
             }
 
             const source = audioCtx.createBufferSource();
-            source.buffer = bufferCache[myUrl];
-            source.loop = false;
+            source.buffer = freshBuffer;  // Use the fresh buffer
+            source.loop = true;
             const gainNode = audioCtx.createGain();
             gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime);
             source.connect(gainNode).connect(audioCtx.destination);
@@ -2897,7 +2915,7 @@ async function startPillarFabric(startTime) {
                 id: mySeat.id,
                 position: pillar
             });
-            log(`🏛️ ${mySeat.id} source.start() called immediately, audioCtx state: ${audioCtx.state}`);
+            log(`🏛️ ${mySeat.id} source.start() called immediately, loop=true, audioCtx state: ${audioCtx.state}`);
         } catch (e) {
             log(`❌ Pillar start failed: ${e.message}`);
         }
