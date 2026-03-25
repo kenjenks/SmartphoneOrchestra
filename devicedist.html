@@ -1673,7 +1673,7 @@ async function playTuningMovement(cue) {
         return;
     }
 
-    // Use the schedule's startTime, not cue.startTime which might be different
+    // FIX: Use the schedule's startTime, not cue.startTime which might be different
     const movementStartTime = tuningStartTime;
 
     if (mySeat.id.startsWith('PILLAR_')) {
@@ -1736,19 +1736,15 @@ async function playTuningMovement(cue) {
         : estimatedDeviceDelayMs;  // Default 261ms from Pixel 6
 
     log(`   Using mic delay: ${(myMicDelayMs || 0).toFixed(1)}ms, speaker delay: ${effectiveSpeakerDelay.toFixed(1)}ms`);
+    log(`   NOTE: Mic delay is NOT subtracted for playback - only used for listening`);
 
     blocks.forEach((block, blockIndex) => {
-        // FIX: Use tuningStartTime as the single reference
+        // Use tuningStartTime as the single reference
         const blockStartWall = tuningStartTime + block.startMs;
 
-        let adjustedStartWall = blockStartWall;
-
-        // Use effective speaker delay (calibrated or default)
-        adjustedStartWall -= effectiveSpeakerDelay;
-
-        if (myMicDelayMs !== null) {
-            adjustedStartWall -= myMicDelayMs;
-        }
+        // CORRECT: Only subtract speaker delay for playback
+        // Mic delay is NOT subtracted - it only affects listening/detection
+        let adjustedStartWall = blockStartWall - effectiveSpeakerDelay;
 
         const delayMs = adjustedStartWall - nowWall;
 
@@ -1761,7 +1757,7 @@ async function playTuningMovement(cue) {
 
             if (blockIndex < 3) {
                 log(`📅 Block ${blockIndex} scheduled in ${Math.round(delayMs)}ms (${(block.startMs/1000).toFixed(2)}s-${(block.endMs/1000).toFixed(2)}s)`);
-                log(`   Adjusted from ${(blockStartWall).toFixed(0)}ms to ${adjustedStartWall.toFixed(0)}ms (Δ=${Math.round(blockStartWall - adjustedStartWall)}ms)`);
+                log(`   Original: ${blockStartWall}ms, Adjusted: ${adjustedStartWall}ms (Δ=${Math.round(blockStartWall - adjustedStartWall)}ms)`);
             }
         } else if (delayMs > -500) {
             log(`⚠️ Block ${blockIndex} is ${Math.round(-delayMs)}ms late, playing immediately`);
@@ -2276,7 +2272,6 @@ function scheduleIterationRetry() {
 }
 
 // --- PLAY AUDIO BLOCK with timing feedback ---
-// --- PLAY AUDIO BLOCK with timing feedback ---
 async function playAudioBlock(url, block, movementStartTime, blockIndex) {
     const source = audioCtx.createBufferSource();
     source.buffer = bufferCache[url];
@@ -2303,19 +2298,26 @@ async function playAudioBlock(url, block, movementStartTime, blockIndex) {
         log(`🔊 Block ${blockIndex} timing error: ${timingError > 0 ? '+' : ''}${timingError.toFixed(0)}ms`);
     }
 
-    // Determine effective speaker delay: use calibrated value if available, otherwise use default estimate
+    // Determine effective speaker delay: use calibrated if available, otherwise use default estimate
     const effectiveSpeakerDelay = (calibratedSpeakerDelay !== null && calibratedSpeakerDelay !== undefined)
         ? calibratedSpeakerDelay
         : estimatedDeviceDelayMs;  // Default 261ms from Pixel 6
 
+    // Schedule visual animations for each note in the block
     block.notes.forEach(note => {
         const noteStartWall = movementStartTime + note.startMs;
         const nowWall = Date.now() + serverOffset;
-        let adjustedStartWall = noteStartWall - effectiveSpeakerDelay;
-        if (myMicDelayMs !== null) adjustedStartWall -= myMicDelayMs;
+
+        // CORRECT: Only subtract speaker delay for playback timing
+        // Mic delay is NOT subtracted - it only affects listening/detection
+        const adjustedStartWall = noteStartWall - effectiveSpeakerDelay;
         const delayMs = adjustedStartWall - nowWall;
+
         if (delayMs > 0) {
-            const timeoutId = setTimeout(() => { animateNoteBrightness(note.durationMs); activeTimeouts = activeTimeouts.filter(id => id !== timeoutId); }, delayMs);
+            const timeoutId = setTimeout(() => {
+                animateNoteBrightness(note.durationMs);
+                activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
+            }, delayMs);
             activeTimeouts.push(timeoutId);
         }
     });
