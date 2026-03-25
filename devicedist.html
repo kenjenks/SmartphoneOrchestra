@@ -1162,8 +1162,9 @@ async function preloadAssets() {
             const myPillarUrl = pillarUrls[positionCode];
 
             if (myPillarUrl) {
-                audioFiles.add(myPillarUrl);
-                log(`🏛️ Adding pillar audio for ${mySeat.id}: ${myPillarUrl.split('/').pop()}`);
+                // DON'T preload it
+                // audioFiles.add(myPillarUrl);
+                log(`🏛️ Pillar audio for ${mySeat.id} will be loaded on-demand (not preloaded)`);
             }
         }
 
