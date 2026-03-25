@@ -342,6 +342,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
     let activeDevices = [];
     let serverOffset = 0;
     let noteTimings = [];
+    let TUNING_MODE_BUFFER_SEC = 10;
 
     // Movement state
     let movements = [];
@@ -1265,7 +1266,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
 
         tuningSchedule = distributeNotes(deviceOrder);
         const nowWall = Date.now() + serverOffset;
-        tuningStartTime = nowWall + 3000;
+        tuningStartTime = nowWall + TUNING_MODE_BUFFER_SEC * 1000;
 
         conductorLog(`📡 Writing tuning/current with startTime: ${tuningStartTime} (${new Date(tuningStartTime).toISOString().substr(11, 12)}.${String(tuningStartTime % 1000).padStart(3, '0')})`, 'info');
 
