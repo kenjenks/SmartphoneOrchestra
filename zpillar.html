@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>zpillar - Synthesized Pillar Player</title>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
+    <style>
+        body {
+            margin: 0;
+            background: #0a0a0a;
+            color: #eee;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+        }
+        #setup-screen {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            text-align: center;
+            padding: 20px;
+        }
+        #status-registry {
+            background: rgba(255,255,255,0.05);
+            border: 1px solid #333;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 30px;
+            width: 80%;
+            max-width: 400px;
+        }
+        .status-item {
+            display: flex;
+            justify-content: space-between;
+            margin: 10px 0;
+            font-size: 0.9rem;
+        }
+        .indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: inline-block;
+            background: #222;
+            margin-left: 10px;
+        }
+        .active { background: #00ffcc; box-shadow: 0 0 8px #00ffcc; }
+        #ready-btn {
+            padding: 18px 45px;
+            font-size: 1.1rem;
+            font-weight: bold;
+            border-radius: 50px;
+            border: none;
+            background: #ffaa44;
+            color: #000;
+            cursor: pointer;
+        }
+        #ready-btn:disabled { background: #333; color: #666; cursor: not-allowed; }
+        #show-screen { display: none; height: 100vh; width: 100vw; background: #000; }
+        canvas { width: 100%; height: 100%; display: block; }
+        #performance-overlay {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            font-family: monospace;
+            font-size: 10px;
+            color: #ffaa44;
+            pointer-events: none;
+            background: rgba(0,0,0,0.5);
+            padding: 4px 8px;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div id="setup-screen">
+        <h1 id="seat-label">Identifying Pillar...</h1>
+        <div id="status-registry">
+            <div class="status-item">
+                <span>Identity Resolve</span>
+                <span id="id-ind" class="indicator"></span>
+            </div>
+            <div class="status-item">
+                <span>Clock Synchronization</span>
+                <span id="sync-ind" class="indicator"></span>
+            </div>
+            <div class="status-item">
+                <span>Pillar Notes Loaded</span>
+                <span id="notes-ind" class="indicator"></span>
+            </div>
+        </div>
+        <button id="ready-btn" disabled>ACTIVATE PILLAR</button>
+        <p id="system-msg" style="margin-top:20px; font-size: 0.8rem; color: #888;">Waiting for Audio Context...</p>
+    </div>
+    <div id="show-screen">
+        <div id="performance-overlay">Pillar: -- | Notes: 0 | Playing: --</div>
+        <canvas id="stage-canvas"></canvas>
+    </div>
+
+    <script>
+        // Firebase Configuration
+        const firebaseConfig = {
+            apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
+            authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
+            databaseURL: "https://smartphoneorchestra-dwt-default-rtdb.firebaseio.com/",
+            projectId: "smartphoneorchestra-dwt"
+        };
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
+        // State
+        let audioCtx = null;
+        let mySeat = null;
+        let serverOffset = 0;
+        let isActive = false;
+        let tuningStartTime = 0;
+        let myPillarNotes = [];      // Notes assigned to this pillar
+        let scheduledTimeouts = [];
+        let activeTimeouts = [];
+        let currentMovement = null;
+        
+        // Synthesizer parameters
+        const SYNTH_VOLUME = 0.5;
+        const SYNTH_ATTACK = 0.01;
+        const SYNTH_DECAY = 0.1;
+        const SYNTH_SUSTAIN = 0.8;
+        const SYNTH_RELEASE = 0.05;
+        
+        // Constants
+        const SPEED_OF_SOUND = 343;
+
+        // Logging
+        function log(message, type = 'info') {
+            const serverTimestamp = Date.now() + (serverOffset || 0);
+            const timeStr = new Date(serverTimestamp).toISOString().substr(11, 12);
+            console.log(`[${timeStr}] [${mySeat?.id || 'unknown'}] ${message}`);
+            
+            const overlay = document.getElementById('performance-overlay');
+            if (overlay && message.includes('Playing note')) {
+                // Update overlay briefly
+            }
+        }
+
+        // Clock sync
+        db.ref(".info/serverTimeOffset").on("value", snap => {
+            serverOffset = snap.val() || 0;
+            document.getElementById('sync-ind').className = 'indicator active';
+        });
+
+        // Identity resolution
+        async function resolveIdentity() {
+            try {
+                const urlParams = new URLSearchParams(window.location.search);
+                const seatId = urlParams.get('seat');
+                
+                if (!seatId || !seatId.startsWith('PILLAR_')) {
+                    log(`Invalid pillar ID: ${seatId}`);
+                    document.getElementById('id-ind').className = 'indicator error';
+                    return false;
+                }
+                
+                mySeat = { id: seatId };
+                document.getElementById('seat-label').innerText = `Pillar ${seatId}`;
+                document.getElementById('id-ind').className = 'indicator active';
+                log(`✅ Resolved pillar: ${mySeat.id}`);
+                return true;
+            } catch (e) {
+                log(`❌ Identity Resolution Error: ${e.message}`);
+                document.getElementById('id-ind').className = 'indicator error';
+                return false;
+            }
+        }
+
+        // MIDI to frequency
+        function midiToFrequency(midi) {
+            return 440 * Math.pow(2, (midi - 69) / 12);
+        }
+
+        // Synthesize a note
+        function playSynthesizedNote(frequency, durationMs, volume = SYNTH_VOLUME) {
+            if (!audioCtx || audioCtx.state !== 'running') {
+                log(`⚠️ Cannot play note - audio context not running`);
+                return;
+            }
+            
+            const now = audioCtx.currentTime;
+            const duration = durationMs / 1000;
+            
+            // Create oscillator
+            const osc = audioCtx.createOscillator();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(frequency, now);
+            
+            // Add slight vibrato for richness
+            const vibrato = audioCtx.createOscillator();
+            vibrato.frequency.setValueAtTime(5, now);
+            const vibratoGain = audioCtx.createGain();
+            vibratoGain.gain.setValueAtTime(5, now);
+            vibrato.connect(vibratoGain);
+            vibratoGain.connect(osc.frequency);
+            vibrato.start();
+            vibrato.stop(now + duration);
+            
+            // Envelope
+            const gainNode = audioCtx.createGain();
+            gainNode.gain.setValueAtTime(0, now);
+            gainNode.gain.linearRampToValueAtTime(volume, now + SYNTH_ATTACK);
+            gainNode.gain.setValueAtTime(volume, now + SYNTH_ATTACK + SYNTH_DECAY);
+            gainNode.gain.exponentialRampToValueAtTime(0.001, now + duration - SYNTH_RELEASE);
+            
+            osc.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            
+            osc.start();
+            osc.stop(now + duration);
+            
+            return { osc, gainNode, vibrato };
+        }
+
+        // Play a chord (multiple notes simultaneously)
+        function playSynthesizedChord(notes, durationMs, volume = SYNTH_VOLUME) {
+            const sources = [];
+            notes.forEach(note => {
+                const freq = midiToFrequency(note.midi);
+                const source = playSynthesizedNote(freq, durationMs, volume / notes.length);
+                if (source) sources.push(source);
+            });
+            return sources;
+        }
+
+        // Load pillar notes from tuning schedule
+        function loadPillarNotes(schedule) {
+            if (!schedule.pillar_notes) {
+                log(`⚠️ No pillar_notes in schedule`);
+                return false;
+            }
+            
+            // Filter notes for this pillar
+            myPillarNotes = schedule.pillar_notes.filter(note => 
+                note.pillar_id === mySeat.id
+            ).map(note => ({
+                ...note,
+                ms_offset: parseFloat(note.ms_offset),
+                duration_ms: parseFloat(note.duration_ms),
+                frequency: midiToFrequency(note.midi),
+                midi: note.midi,
+                pitch: note.pitch
+            }));
+            
+            log(`📡 Loaded ${myPillarNotes.length} notes for ${mySeat.id}`);
+            document.getElementById('notes-ind').className = myPillarNotes.length > 0 ? 'indicator active' : 'indicator error';
+            
+            if (myPillarNotes.length > 0) {
+                log(`   First note: ${myPillarNotes[0].pitch} at ${myPillarNotes[0].ms_offset}ms`);
+                log(`   Last note: ${myPillarNotes[myPillarNotes.length-1].pitch} at ${myPillarNotes[myPillarNotes.length-1].ms_offset}ms`);
+            }
+            
+            return myPillarNotes.length > 0;
+        }
+
+        // Schedule synthesized pillar notes
+        function schedulePillarNotes(startTime) {
+            if (!myPillarNotes.length) {
+                log(`⚠️ No notes to schedule for ${mySeat.id}`);
+                return;
+            }
+            
+            const nowWall = Date.now() + serverOffset;
+            log(`🎵 Scheduling ${myPillarNotes.length} synthesized notes for ${mySeat.id}`);
+            log(`   Start time: ${new Date(startTime).toISOString().substr(11, 12)}.${String(startTime % 1000).padStart(3, '0')}`);
+            
+            let scheduledCount = 0;
+            let firstNoteLogged = false;
+            
+            myPillarNotes.forEach(note => {
+                const absoluteTime = startTime + note.ms_offset;
+                const delayMs = absoluteTime - nowWall;
+                
+                if (delayMs > 0) {
+                    const timeoutId = setTimeout(() => {
+                        try {
+                            // Ensure audio context is running
+                            if (audioCtx && audioCtx.state === 'suspended') {
+                                audioCtx.resume();
+                            }
+                            
+                            playSynthesizedNote(note.frequency, note.duration_ms, SYNTH_VOLUME);
+                            
+                            // Visual feedback
+                            animateNoteFlash(note.pitch);
+                            
+                            if (!firstNoteLogged) {
+                                log(`🔊 Playing first note: ${note.pitch} (${note.frequency.toFixed(0)}Hz) at ${note.ms_offset}ms`);
+                                firstNoteLogged = true;
+                            }
+                            scheduledCount++;
+                        } catch (e) {
+                            log(`❌ Failed to play note ${note.index}: ${e.message}`);
+                        }
+                        activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
+                    }, delayMs);
+                    activeTimeouts.push(timeoutId);
+                } else if (delayMs > -500) {
+                    log(`⚠️ Note ${note.index} is ${Math.round(-delayMs)}ms late, playing immediately`);
+                    playSynthesizedNote(note.frequency, note.duration_ms, SYNTH_VOLUME);
+                    scheduledCount++;
+                } else {
+                    log(`❌ Note ${note.index} is too late (${Math.round(-delayMs)}ms), skipping`);
+                }
+            });
+            
+            log(`📅 Scheduled ${scheduledCount} synthesized notes`);
+        }
+
+        // Visual feedback when note plays
+        function animateNoteFlash(pitch) {
+            const canvas = document.getElementById('stage-canvas');
+            if (!canvas) return;
+            const ctx = canvas.getContext('2d');
+            
+            // Color based on pitch range
+            let color;
+            const midi = noteMidiFromPitch(pitch);
+            if (midi < 70) color = '#ffaa44';      // Low notes - orange
+            else if (midi < 80) color = '#44ffaa'; // Mid notes - cyan
+            else color = '#ff44aa';                 // High notes - pink
+            
+            ctx.fillStyle = color;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            setTimeout(() => {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+            }, 100);
+        }
+        
+        function noteMidiFromPitch(pitch) {
+            const noteMap = {
+                'C': 60, 'C#': 61, 'Db': 61, 'D': 62, 'D#': 63, 'Eb': 63,
+                'E': 64, 'F': 65, 'F#': 66, 'Gb': 66, 'G': 67, 'G#': 68,
+                'Ab': 68, 'A': 69, 'A#': 70, 'Bb': 70, 'B': 71
+            };
+            const match = pitch.match(/^([A-Z#b]+)(\d+)$/);
+            if (match) {
+                const note = match[1];
+                const octave = parseInt(match[2]);
+                return noteMap[note] + (octave - 4) * 12;
+            }
+            return 69; // Default A4
+        }
+
+        // Listen for tuning schedule
+        function listenForTuning() {
+            db.ref('tuning/current').on('value', snap => {
+                const schedule = snap.val();
+                
+                if (!schedule) {
+                    if (tuningStartTime) {
+                        log(`⚠️ Tuning schedule cleared`);
+                        tuningStartTime = 0;
+                        activeTimeouts.forEach(t => clearTimeout(t));
+                        activeTimeouts = [];
+                    }
+                    return;
+                }
+                
+                if (!schedule.startTime) {
+                    log(`⚠️ Schedule has no startTime`);
+                    return;
+                }
+                
+                const now = Date.now() + serverOffset;
+                const timeToStart = schedule.startTime - now;
+                
+                log(`🎵 Tuning schedule received`);
+                log(`   Start time: ${new Date(schedule.startTime).toISOString().substr(11, 12)}.${String(schedule.startTime % 1000).padStart(3, '0')}`);
+                log(`   Time to start: ${(timeToStart / 1000).toFixed(1)}s`);
+                
+                // Load notes for this pillar
+                if (!loadPillarNotes(schedule)) {
+                    log(`❌ No notes found for ${mySeat.id}`);
+                    return;
+                }
+                
+                tuningStartTime = schedule.startTime;
+                
+                // Schedule the notes
+                schedulePillarNotes(tuningStartTime);
+                
+                // Update UI
+                document.getElementById('performance-overlay').innerHTML = 
+                    `Pillar: ${mySeat.id} | Notes: ${myPillarNotes.length} | Playing: scheduled`;
+            });
+        }
+
+        // Initialize audio context
+        async function initAudio() {
+            try {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                log(`🎛️ Audio context created (state: ${audioCtx.state})`);
+                
+                if (audioCtx.state === 'suspended') {
+                    await audioCtx.resume();
+                    log(`🎛️ Audio context resumed (state: ${audioCtx.state})`);
+                }
+                return true;
+            } catch (e) {
+                log(`❌ Failed to create audio context: ${e.message}`);
+                return false;
+            }
+        }
+
+        // Start the pillar
+        async function startPillar() {
+            if (!audioCtx) {
+                const success = await initAudio();
+                if (!success) return;
+            }
+            
+            if (audioCtx.state === 'suspended') {
+                await audioCtx.resume();
+            }
+            
+            document.getElementById('setup-screen').style.display = 'none';
+            document.getElementById('show-screen').style.display = 'block';
+            
+            const canvas = document.getElementById('stage-canvas');
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            
+            isActive = true;
+            
+            // Start heartbeat
+            setInterval(() => {
+                if (mySeat) {
+                    db.ref(`devices/${mySeat.id}`).update({
+                        lastSeen: Date.now() + serverOffset,
+                        status: 'ACTIVE',
+                        notesLoaded: myPillarNotes.length,
+                        isSynthesized: true
+                    });
+                }
+            }, 10000);
+            
+            log(`🔊 Pillar ${mySeat.id} activated - will synthesize ${myPillarNotes.length} notes when tuning starts`);
+            
+            // Start listening for tuning
+            listenForTuning();
+        }
+
+        // Window load
+        window.onload = async () => {
+            log(`🎧 zpillar.html starting`);
+            
+            const idOk = await resolveIdentity();
+            if (!idOk) {
+                document.getElementById('system-msg').innerText = "Failed to identify pillar";
+                return;
+            }
+            
+            document.getElementById('ready-btn').disabled = false;
+            document.getElementById('system-msg').innerText = "Ready. Tap to activate.";
+            
+            document.getElementById('ready-btn').onclick = async () => {
+                await startPillar();
+            };
+        };
+        
+        window.onresize = () => {
+            const canvas = document.getElementById('stage-canvas');
+            if (canvas) {
+                canvas.width = window.innerWidth;
+                canvas.height = window.innerHeight;
+            }
+        };
+        
+        window.addEventListener('beforeunload', () => {
+            activeTimeouts.forEach(t => clearTimeout(t));
+        });
+    </script>
+</body>
+</html>
