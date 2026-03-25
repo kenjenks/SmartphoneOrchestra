@@ -2869,7 +2869,7 @@ async function startPillarFabric(startTime) {
 
                 const source = audioCtx.createBufferSource();
                 source.buffer = freshBuffer;  // Use the fresh buffer
-                source.loop = true;
+                source.loop = false;
                 const gainNode = audioCtx.createGain();
                 gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime);
                 source.connect(gainNode).connect(audioCtx.destination);
@@ -2901,7 +2901,7 @@ async function startPillarFabric(startTime) {
 
             const source = audioCtx.createBufferSource();
             source.buffer = freshBuffer;  // Use the fresh buffer
-            source.loop = true;
+            source.loop = false;
             const gainNode = audioCtx.createGain();
             gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime);
             source.connect(gainNode).connect(audioCtx.destination);
