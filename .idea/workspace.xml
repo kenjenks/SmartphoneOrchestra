@@ -4,8 +4,11 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="2a49255b-03b5-4ec9-ac94-23daadf8b64a" name="Changes" comment="Updated admin.html to restore the beacon map and add feedback after file upload.">
+    <list default="true" id="2a49255b-03b5-4ec9-ac94-23daadf8b64a" name="Changes" comment="xmusiclistener.html - webapp that tattles on the other devices, listening to the music and reporting to the distributed log about what it hears.">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/bach_tone_duration_extractor.json" beforeDir="false" afterPath="$PROJECT_DIR$/bach_tone_duration_extractor.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/firebase.json" beforeDir="false" afterPath="$PROJECT_DIR$/firebase.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/pillar_config.json" beforeDir="false" afterPath="$PROJECT_DIR$/pillar_config.json" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -15,39 +18,58 @@
   <component name="Git.Settings">
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
-  <component name="GitHubPullRequestSearchHistory"><![CDATA[{
-  "lastFilter": {
-    "state": "OPEN",
-    "assignee": "kenjenks"
+  <component name="GitHubPullRequestSearchHistory">{
+  &quot;lastFilter&quot;: {
+    &quot;state&quot;: &quot;OPEN&quot;,
+    &quot;assignee&quot;: &quot;kenjenks&quot;
   }
-}]]></component>
-  <component name="GithubPullRequestsUISettings"><![CDATA[{
-  "selectedUrlAndAccountId": {
-    "url": "https://github.com/kenjenks/SmartphoneOrchestra",
-    "accountId": "d5fc22bf-7f40-475a-a45c-a01082eacbf6"
+}</component>
+  <component name="GithubPullRequestsUISettings">{
+  &quot;selectedUrlAndAccountId&quot;: {
+    &quot;url&quot;: &quot;https://github.com/kenjenks/SmartphoneOrchestra&quot;,
+    &quot;accountId&quot;: &quot;d5fc22bf-7f40-475a-a45c-a01082eacbf6&quot;
   }
-}]]></component>
-  <component name="ProjectColorInfo"><![CDATA[{
-  "associatedIndex": 2
-}]]></component>
+}</component>
+  <component name="McpProjectServerCommands">
+    <commands />
+    <urls />
+  </component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 2
+}</component>
   <component name="ProjectId" id="3AHgPdW5i97QPh0wlN15gnoBsyX" />
   <component name="ProjectViewState">
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent"><![CDATA[{
-  "keyToString": {
-    "ModuleVcsDetector.initialDetectionPerformed": "true",
-    "RunOnceActivity.ShowReadmeOnStart": "true",
-    "RunOnceActivity.git.unshallow": "true",
-    "git-widget-placeholder": "master",
-    "ignore.virus.scanning.warn.message": "true"
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
+    &quot;Python.bach_analyzer.executor&quot;: &quot;Run&quot;,
+    &quot;Python.bach_baker.executor&quot;: &quot;Run&quot;,
+    &quot;Python.bach_barber.executor&quot;: &quot;Run&quot;,
+    &quot;Python.bach_butcher.executor&quot;: &quot;Run&quot;,
+    &quot;Python.bach_tester - Copy.executor&quot;: &quot;Run&quot;,
+    &quot;Python.bach_tester.executor&quot;: &quot;Run&quot;,
+    &quot;Python.bach_tone_duration_extractor.executor&quot;: &quot;Run&quot;,
+    &quot;Python.create_warble.executor&quot;: &quot;Run&quot;,
+    &quot;Python.generate_lighting.executor&quot;: &quot;Run&quot;,
+    &quot;Python.generate_stickers.executor&quot;: &quot;Run&quot;,
+    &quot;Python.generate_timeline.executor&quot;: &quot;Run&quot;,
+    &quot;Python.visual_timeline_test.executor&quot;: &quot;Run&quot;,
+    &quot;RunOnceActivity.MCP Project settings loaded&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;master&quot;,
+    &quot;ignore.virus.scanning.warn.message&quot;: &quot;true&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable&quot;
   }
-}]]></component>
+}</component>
   <component name="SharedIndexes">
     <attachedChunks>
       <set>
-        <option value="bundled-python-sdk-1f1b7bcced7d-64d779b69b7a-com.jetbrains.pycharm.pro.sharedIndexes.bundled-PY-251.29188.22" />
+        <option value="bundled-python-sdk-2653e85de345-6d6dccd035ac-com.jetbrains.pycharm.pro.sharedIndexes.bundled-PY-253.31033.139" />
       </set>
     </attachedChunks>
   </component>
@@ -59,204 +81,438 @@
       <option name="presentableId" value="Default" />
       <updated>1772254886720</updated>
     </task>
-    <task id="LOCAL-00001" summary="Initial Commit of distributed Smartphone Orchestra, an ad-hoc supercomputer for theatrical sound and light shows.">
+    <task id="LOCAL-00288" summary="bach_tone_duration_extractor.json - New URLs with constant flute in PILLAR_FL">
       <option name="closed" value="true" />
-      <created>1772256180319</created>
-      <option name="number" value="00001" />
-      <option name="presentableId" value="LOCAL-00001" />
+      <created>1774198926524</created>
+      <option name="number" value="00288" />
+      <option name="presentableId" value="LOCAL-00288" />
       <option name="project" value="LOCAL" />
-      <updated>1772256180319</updated>
+      <updated>1774198926525</updated>
     </task>
-    <task id="LOCAL-00002" summary="Initial Commit of distributed Smartphone Orchestra, an ad-hoc supercomputer for theatrical sound and light shows.">
+    <task id="LOCAL-00289" summary="conductor_server.js - Deleted cuz we can't run it on Firebase">
       <option name="closed" value="true" />
-      <created>1772256546474</created>
-      <option name="number" value="00002" />
-      <option name="presentableId" value="LOCAL-00002" />
+      <created>1774199018489</created>
+      <option name="number" value="00289" />
+      <option name="presentableId" value="LOCAL-00289" />
       <option name="project" value="LOCAL" />
-      <updated>1772256546474</updated>
+      <updated>1774199018490</updated>
     </task>
-    <task id="LOCAL-00003" summary="Initial Commit of distributed Smartphone Orchestra, an ad-hoc supercomputer for theatrical sound and light shows.">
+    <task id="LOCAL-00290" summary="Moved to Older Folder">
       <option name="closed" value="true" />
-      <created>1772257500446</created>
-      <option name="number" value="00003" />
-      <option name="presentableId" value="LOCAL-00003" />
+      <created>1774199048799</created>
+      <option name="number" value="00290" />
+      <option name="presentableId" value="LOCAL-00290" />
       <option name="project" value="LOCAL" />
-      <updated>1772257500446</updated>
+      <updated>1774199048799</updated>
     </task>
-    <task id="LOCAL-00004" summary="Initial Commit of distributed Smartphone Orchestra, an ad-hoc supercomputer for theatrical sound and light shows.">
+    <task id="LOCAL-00291" summary="Moved to Older Folder">
       <option name="closed" value="true" />
-      <created>1772258151808</created>
-      <option name="number" value="00004" />
-      <option name="presentableId" value="LOCAL-00004" />
+      <created>1774199064213</created>
+      <option name="number" value="00291" />
+      <option name="presentableId" value="LOCAL-00291" />
       <option name="project" value="LOCAL" />
-      <updated>1772258151808</updated>
+      <updated>1774199064213</updated>
     </task>
-    <task id="LOCAL-00005" summary="Add a better topline comment for laptopdist.html">
+    <task id="LOCAL-00292" summary="devicedist.html - Only do tuning mode once">
       <option name="closed" value="true" />
-      <created>1772260910133</created>
-      <option name="number" value="00005" />
-      <option name="presentableId" value="LOCAL-00005" />
+      <created>1774201317058</created>
+      <option name="number" value="00292" />
+      <option name="presentableId" value="LOCAL-00292" />
       <option name="project" value="LOCAL" />
-      <updated>1772260910133</updated>
+      <updated>1774201317058</updated>
     </task>
-    <task id="LOCAL-00006" summary="Added Firebase config. Deleted prototype relic smartphonedist.html.">
+    <task id="LOCAL-00293" summary="devicedist.html - Uses pillar reference continuously - devices listen to lower-octave pillar notes throughout the piece&#10;&#10;Combines both data sources in evaluation - pillars provide high-confidence anchor, neighbors provide cross-validation&#10;&#10;Can converge faster - with pillar data, may converge in 1-2 iterations instead of 3&#10;&#10;Falls back gracefully - if no neighbors, pillars alone can still calibrate">
       <option name="closed" value="true" />
-      <created>1772262513574</created>
-      <option name="number" value="00006" />
-      <option name="presentableId" value="LOCAL-00006" />
+      <created>1774202009852</created>
+      <option name="number" value="00293" />
+      <option name="presentableId" value="LOCAL-00293" />
       <option name="project" value="LOCAL" />
-      <updated>1772262513574</updated>
+      <updated>1774202009853</updated>
     </task>
-    <task id="LOCAL-00007" summary="Modified admin.html to upload pillar_config.json from laptop to Firebase database.">
+    <task id="LOCAL-00294" summary="admin.html - Remove the placeholder tuning/current write from admin upload - the conductor will create it when starting tuning&#10;&#10;Store pillar_notes and metadata only in tuning_mode - where they belong&#10;&#10;The conductor reads from tuning_mode when building the tuning/current object (it already does this correctly)&#10;&#10;Ensure wipeRealtimeData doesn't delete static configs">
       <option name="closed" value="true" />
-      <created>1772270913983</created>
-      <option name="number" value="00007" />
-      <option name="presentableId" value="LOCAL-00007" />
+      <created>1774202639738</created>
+      <option name="number" value="00294" />
+      <option name="presentableId" value="LOCAL-00294" />
       <option name="project" value="LOCAL" />
-      <updated>1772270913983</updated>
+      <updated>1774202639739</updated>
     </task>
-    <task id="LOCAL-00008" summary="Updated pillar_config.json structure to match the names of the entries the code is expecting.">
+    <task id="LOCAL-00295" summary="devicedist.html - Add return after pillar processing (already had this)&#10;&#10;Add return after patron device processing - THIS WAS THE MISSING PIECE&#10;&#10;Move the button disable logic to only run when there's no active schedule">
       <option name="closed" value="true" />
-      <created>1772271672750</created>
-      <option name="number" value="00008" />
-      <option name="presentableId" value="LOCAL-00008" />
+      <created>1774203290835</created>
+      <option name="number" value="00295" />
+      <option name="presentableId" value="LOCAL-00295" />
       <option name="project" value="LOCAL" />
-      <updated>1772271672750</updated>
+      <updated>1774203290835</updated>
     </task>
-    <task id="LOCAL-00009" summary="Updated pillar_config.json structure to match the names of the entries the code is expecting. Updated admin.html to match.">
+    <task id="LOCAL-00296" summary="devicedist.html - function initTuningListener() - Remove the Bottom Section That Sets pillarPlaybackStarted">
       <option name="closed" value="true" />
-      <created>1772271945905</created>
-      <option name="number" value="00009" />
-      <option name="presentableId" value="LOCAL-00009" />
+      <created>1774204022822</created>
+      <option name="number" value="00296" />
+      <option name="presentableId" value="LOCAL-00296" />
       <option name="project" value="LOCAL" />
-      <updated>1772271945905</updated>
+      <updated>1774204022822</updated>
     </task>
-    <task id="LOCAL-00010" summary="Updated admin.html to add confirmation to UI after loading config file.">
+    <task id="LOCAL-00297" summary="devicedist.html - Pillars: pillarPlaybackStarted prevents re-processing schedule; tuningPlaybackStarted prevents duplicate playback from show/currentCue&#10;&#10;Patrons: pillarPlaybackStarted is never set">
       <option name="closed" value="true" />
-      <created>1772272684098</created>
-      <option name="number" value="00010" />
-      <option name="presentableId" value="LOCAL-00010" />
+      <created>1774204992063</created>
+      <option name="number" value="00297" />
+      <option name="presentableId" value="LOCAL-00297" />
       <option name="project" value="LOCAL" />
-      <updated>1772272684098</updated>
+      <updated>1774204992063</updated>
     </task>
-    <task id="LOCAL-00011" summary="Updated admin.html to read the pillar values from the database">
+    <task id="LOCAL-00298" summary="devicedist.html - pillarPlaybackStarted is now set after tuning mode starts">
       <option name="closed" value="true" />
-      <created>1772273258297</created>
-      <option name="number" value="00011" />
-      <option name="presentableId" value="LOCAL-00011" />
+      <created>1774206307404</created>
+      <option name="number" value="00298" />
+      <option name="presentableId" value="LOCAL-00298" />
       <option name="project" value="LOCAL" />
-      <updated>1772273258297</updated>
+      <updated>1774206307404</updated>
     </task>
-    <task id="LOCAL-00012" summary="Updated admin.html clarify comments and force an update of the file in Firebase">
+    <task id="LOCAL-00299" summary="devicedist.html - Use universal timezone for all log entries">
       <option name="closed" value="true" />
-      <created>1772273999774</created>
-      <option name="number" value="00012" />
-      <option name="presentableId" value="LOCAL-00012" />
+      <created>1774210889144</created>
+      <option name="number" value="00299" />
+      <option name="presentableId" value="LOCAL-00299" />
       <option name="project" value="LOCAL" />
-      <updated>1772273999774</updated>
+      <updated>1774210889146</updated>
     </task>
-    <task id="LOCAL-00013" summary="Sending firebase.json to Github and Firebase.">
+    <task id="LOCAL-00300" summary="devicedist.html - Calculate pillar freq bins from tuning data, limiting upper limit below patron device piccolo part">
       <option name="closed" value="true" />
-      <created>1772274496446</created>
-      <option name="number" value="00013" />
-      <option name="presentableId" value="LOCAL-00013" />
+      <created>1774212274895</created>
+      <option name="number" value="00300" />
+      <option name="presentableId" value="LOCAL-00300" />
       <option name="project" value="LOCAL" />
-      <updated>1772274496446</updated>
+      <updated>1774212274895</updated>
     </task>
-    <task id="LOCAL-00014" summary="Modified comment in admin.html to push it to Firebase.">
+    <task id="LOCAL-00301" summary="devicedist.html - Closest note selection - Only process the single closest pillar reference note when a detection occurs, preventing multiple notes from being triggered by the same acoustic event.&#10;&#10;Propagation distance calculation - Compute pillar distances after mySeat is known, ensuring accurate propagation times (e.g., 16ms for B2 to PILLAR_FL).&#10;&#10;Prevent infinite loop - Check if piece already ended before starting new iterations, and remove the playTuningMovement() call from the retry branch so playback doesn't restart.">
       <option name="closed" value="true" />
-      <created>1772274617438</created>
-      <option name="number" value="00014" />
-      <option name="presentableId" value="LOCAL-00014" />
+      <created>1774214901986</created>
+      <option name="number" value="00301" />
+      <option name="presentableId" value="LOCAL-00301" />
       <option name="project" value="LOCAL" />
-      <updated>1772274617438</updated>
+      <updated>1774214901987</updated>
     </task>
-    <task id="LOCAL-00015" summary="Added databaseURL to firebaseConfig">
+    <task id="LOCAL-00302" summary="devicedist.html - Phase 1 mic delay now subtracts pillar speaker delay and propagation from raw delay&#10;&#10;Pillar reference detection now subtracts pillar speaker delay from raw delay to get patron speaker delay&#10;&#10;Neighbor measurements now account for pillar mic delay when reporting to pillars&#10;&#10;No negative clamping - we accept the actual calculated values which should now be positive (0-200ms)&#10;&#10;Removed the evaluateIteration() clamping since the values should now be correct">
       <option name="closed" value="true" />
-      <created>1772275357314</created>
-      <option name="number" value="00015" />
-      <option name="presentableId" value="LOCAL-00015" />
+      <created>1774218811002</created>
+      <option name="number" value="00302" />
+      <option name="presentableId" value="LOCAL-00302" />
       <option name="project" value="LOCAL" />
-      <updated>1772275357314</updated>
+      <updated>1774218811002</updated>
     </task>
-    <task id="LOCAL-00016" summary="Get Pillar ID from URL">
+    <task id="LOCAL-00303" summary="bach_tone_duration_extractor.json - New louder PILLAR_FL MP3">
       <option name="closed" value="true" />
-      <created>1772276011154</created>
-      <option name="number" value="00016" />
-      <option name="presentableId" value="LOCAL-00016" />
+      <created>1774221293442</created>
+      <option name="number" value="00303" />
+      <option name="presentableId" value="LOCAL-00303" />
       <option name="project" value="LOCAL" />
-      <updated>1772276011154</updated>
+      <updated>1774221293442</updated>
     </task>
-    <task id="LOCAL-00017" summary="Change Firebase reference in seat_survey_beacon.html to include the active_pillars/ prefix.">
+    <task id="LOCAL-00304" summary="devicedist.html - Set default speaker delay to 261 ms and default mic delay to 13 ms, like Google Pixel 6">
       <option name="closed" value="true" />
-      <created>1772276368368</created>
-      <option name="number" value="00017" />
-      <option name="presentableId" value="LOCAL-00017" />
+      <created>1774241390065</created>
+      <option name="number" value="00304" />
+      <option name="presentableId" value="LOCAL-00304" />
       <option name="project" value="LOCAL" />
-      <updated>1772276368368</updated>
+      <updated>1774241390065</updated>
     </task>
-    <task id="LOCAL-00018" summary="seat_survey.html now checks the Firebase active_pillars/ path first before reading local copy of pillar_config.json">
+    <task id="LOCAL-00305" summary="devicedist.html - REALLY Set default speaker delay to 261 ms and set default mic delay to 6 ms, like Google Pixel 6">
       <option name="closed" value="true" />
-      <created>1772277027104</created>
-      <option name="number" value="00018" />
-      <option name="presentableId" value="LOCAL-00018" />
+      <created>1774242243131</created>
+      <option name="number" value="00305" />
+      <option name="presentableId" value="LOCAL-00305" />
       <option name="project" value="LOCAL" />
-      <updated>1772277027104</updated>
+      <updated>1774242243131</updated>
     </task>
-    <task id="LOCAL-00019" summary="Updated db.ref in all scripts to use the correct prefix, and make sure cue.json is on the Firebase server. Updated devicedist.html to read x,y from QR code and animate light and sound cues along a path. Updated generate_stickers.py to print the new QR codes.">
+    <task id="LOCAL-00306" summary="devicedist.html - initTuningListener function with the fix to prevent duplicate tuning playback">
       <option name="closed" value="true" />
-      <created>1772314313243</created>
-      <option name="number" value="00019" />
-      <option name="presentableId" value="LOCAL-00019" />
+      <created>1774243027135</created>
+      <option name="number" value="00306" />
+      <option name="presentableId" value="LOCAL-00306" />
       <option name="project" value="LOCAL" />
-      <updated>1772314313243</updated>
+      <updated>1774243027135</updated>
     </task>
-    <task id="LOCAL-00020" summary="Updated db.ref in all scripts to use the correct prefix, and make sure cue.json is on the Firebase server. Updated devicedist.html to read x,y from QR code and animate light and sound cues along a path. Updated generate_stickers.py to print the new QR codes.">
+    <task id="LOCAL-00307" summary="conductor.html - Show active pillars as green in GUI">
       <option name="closed" value="true" />
-      <created>1772315468068</created>
-      <option name="number" value="00020" />
-      <option name="presentableId" value="LOCAL-00020" />
+      <created>1774243453962</created>
+      <option name="number" value="00307" />
+      <option name="presentableId" value="LOCAL-00307" />
       <option name="project" value="LOCAL" />
-      <updated>1772315468068</updated>
+      <updated>1774243453962</updated>
     </task>
-    <task id="LOCAL-00021" summary="Updated cue.json to add correct MP3 URLs on Wix server.">
+    <task id="LOCAL-00308" summary="devicedist.html - function handleMovementStart with logging to verify speaker delay is being applied">
       <option name="closed" value="true" />
-      <created>1772315635424</created>
-      <option name="number" value="00021" />
-      <option name="presentableId" value="LOCAL-00021" />
+      <created>1774244007835</created>
+      <option name="number" value="00308" />
+      <option name="presentableId" value="LOCAL-00308" />
       <option name="project" value="LOCAL" />
-      <updated>1772315635424</updated>
+      <updated>1774244007835</updated>
     </task>
-    <task id="LOCAL-00022" summary="Updated admin.html to restore the beacon map and add feedback after file upload.">
+    <task id="LOCAL-00309" summary="reset_pillar.html - Part of the SmartphoneOrchestra&#10;&#10;Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at each corner of the house.">
       <option name="closed" value="true" />
-      <created>1772316357666</created>
-      <option name="number" value="00022" />
-      <option name="presentableId" value="LOCAL-00022" />
+      <created>1774302620842</created>
+      <option name="number" value="00309" />
+      <option name="presentableId" value="LOCAL-00309" />
       <option name="project" value="LOCAL" />
-      <updated>1772316357666</updated>
+      <updated>1774302620844</updated>
     </task>
-    <option name="localTasksCounter" value="23" />
+    <task id="LOCAL-00310" summary="reset_pillar.html - Test tone buttons are generated immediately using default pillar data if Firebase config isn't loaded yet&#10;&#10;getDefaultPillarData() provides fallback positions and frequencies so the UI renders instantly&#10;&#10;The buttons are always visible and enabled from page load—no dependency on all pillars being online&#10;&#10;The buttons work on the device they're running on—each pillar can trigger its own test tone, but the buttons for other pillars are also visible (they just won't produce sound because the tone is synthesized locally, not sent over the network)">
+      <option name="closed" value="true" />
+      <created>1774303116842</created>
+      <option name="number" value="00310" />
+      <option name="presentableId" value="LOCAL-00310" />
+      <option name="project" value="LOCAL" />
+      <updated>1774303116842</updated>
+    </task>
+    <task id="LOCAL-00311" summary="reset_pillar.html - Update to match data structure in pillar_config.json (which is uploaded to Firebase by admin.html)">
+      <option name="closed" value="true" />
+      <created>1774309346748</created>
+      <option name="number" value="00311" />
+      <option name="presentableId" value="LOCAL-00311" />
+      <option name="project" value="LOCAL" />
+      <updated>1774309346749</updated>
+    </task>
+    <task id="LOCAL-00312" summary="reset_pillar.html - Use those MP3 URLS">
+      <option name="closed" value="true" />
+      <created>1774316535355</created>
+      <option name="number" value="00312" />
+      <option name="presentableId" value="LOCAL-00312" />
+      <option name="project" value="LOCAL" />
+      <updated>1774316535355</updated>
+    </task>
+    <task id="LOCAL-00313" summary="reset_pillar.html - Balance tone buttons Always enabled. Clock synchronization. Initialize solver with existing values from pillar_config.json (45ms speaker, 18ms mic).">
+      <option name="closed" value="true" />
+      <created>1774317898771</created>
+      <option name="number" value="00313" />
+      <option name="presentableId" value="LOCAL-00313" />
+      <option name="project" value="LOCAL" />
+      <updated>1774317898771</updated>
+    </task>
+    <task id="LOCAL-00314" summary="reset_pillar.html - function loadPillarConfig - simplified version that ensures the UI renders immediately">
+      <option name="closed" value="true" />
+      <created>1774318289598</created>
+      <option name="number" value="00314" />
+      <option name="presentableId" value="LOCAL-00314" />
+      <option name="project" value="LOCAL" />
+      <updated>1774318289598</updated>
+    </task>
+    <task id="LOCAL-00315" summary="devicedist.html - function reportMeasurement - Only add pillar-specific fields if the playing device is actually a pillar">
+      <option name="closed" value="true" />
+      <created>1774368955330</created>
+      <option name="number" value="00315" />
+      <option name="presentableId" value="LOCAL-00315" />
+      <option name="project" value="LOCAL" />
+      <updated>1774368955330</updated>
+    </task>
+    <task id="LOCAL-00316" summary="conductor.html - set MAX_LOG_ENTRIES = 1000">
+      <option name="closed" value="true" />
+      <created>1774369711575</created>
+      <option name="number" value="00316" />
+      <option name="presentableId" value="LOCAL-00316" />
+      <option name="project" value="LOCAL" />
+      <updated>1774369711575</updated>
+    </task>
+    <task id="LOCAL-00317" summary="devicedist.html - source.loop = false; to finally stop the apparent re-start of the tuning movement">
+      <option name="closed" value="true" />
+      <created>1774370668241</created>
+      <option name="number" value="00317" />
+      <option name="presentableId" value="LOCAL-00317" />
+      <option name="project" value="LOCAL" />
+      <updated>1774370668241</updated>
+    </task>
+    <task id="LOCAL-00318" summary="devicedist.html - The COPY LOGS button now copies MAX_LOG_ENTRIES not just 500">
+      <option name="closed" value="true" />
+      <created>1774375697347</created>
+      <option name="number" value="00318" />
+      <option name="presentableId" value="LOCAL-00318" />
+      <option name="project" value="LOCAL" />
+      <updated>1774375697347</updated>
+    </task>
+    <task id="LOCAL-00319" summary="devicedist.html - The COPY LOGS button now copies MAX_LOG_ENTRIES not just 500. Add logging.">
+      <option name="closed" value="true" />
+      <created>1774376828048</created>
+      <option name="number" value="00319" />
+      <option name="presentableId" value="LOCAL-00319" />
+      <option name="project" value="LOCAL" />
+      <updated>1774376828048</updated>
+    </task>
+    <task id="LOCAL-00320" summary="devicedist.html - More debugging log entries.">
+      <option name="closed" value="true" />
+      <created>1774382149005</created>
+      <option name="number" value="00320" />
+      <option name="presentableId" value="LOCAL-00320" />
+      <option name="project" value="LOCAL" />
+      <updated>1774382149005</updated>
+    </task>
+    <task id="LOCAL-00321" summary="conductor.html - UTC logging (all timestamps use .toISOString().substr(11, 12))&#10;&#10;Removed hardcoded default pillar URLs - now loads from tuning_mode.json&#10;&#10;Clears stale tuning schedule before each start&#10;&#10;Proper pillar URL loading from tuning_mode.json assets">
+      <option name="closed" value="true" />
+      <created>1774384000320</created>
+      <option name="number" value="00321" />
+      <option name="presentableId" value="LOCAL-00321" />
+      <option name="project" value="LOCAL" />
+      <updated>1774384000320</updated>
+    </task>
+    <task id="LOCAL-00322" summary="xlisten.html - debugging tool for listening to the conversation between conductor.html and devicedist.html about note timing">
+      <option name="closed" value="true" />
+      <created>1774419019971</created>
+      <option name="number" value="00322" />
+      <option name="presentableId" value="LOCAL-00322" />
+      <option name="project" value="LOCAL" />
+      <updated>1774419019971</updated>
+    </task>
+    <task id="LOCAL-00323" summary="devicedist.html - Immediate Note Scheduling: Added a block that calls schedulePhase2Notes right after the schedule is loaded, before Phase 1 windows are set up. This ensures notes are queued to play at their correct times, regardless of calibration status.&#10;&#10;Pillar Playback Timing: Corrected the pillar's start delay calculation to use only speaker delay: schedule.startTime - nowWall - calibratedSpeakerDelay.&#10;&#10;Disabled Blocking Calibration: The call to startIterativeCalibration() is commented out. This function was designed to run sequentially and blocked note playback. The real-time calibration via pillar/neighbor reports will run concurrently.&#10;&#10;Fallback Scheduling: Added a fallback in the Phase 1 completion timeout to schedule notes if they weren't already scheduled (e.g., if pillarWindows was empty).">
+      <option name="closed" value="true" />
+      <created>1774420348312</created>
+      <option name="number" value="00323" />
+      <option name="presentableId" value="LOCAL-00323" />
+      <option name="project" value="LOCAL" />
+      <updated>1774420348312</updated>
+    </task>
+    <task id="LOCAL-00324" summary="xlisten.html - Enable download button immediately.">
+      <option name="closed" value="true" />
+      <created>1774420620845</created>
+      <option name="number" value="00324" />
+      <option name="presentableId" value="LOCAL-00324" />
+      <option name="project" value="LOCAL" />
+      <updated>1774420620845</updated>
+    </task>
+    <task id="LOCAL-00325" summary="devicedist.html - Use default speaker delay until neighbors can help recalibrate it">
+      <option name="closed" value="true" />
+      <created>1774421679015</created>
+      <option name="number" value="00325" />
+      <option name="presentableId" value="LOCAL-00325" />
+      <option name="project" value="LOCAL" />
+      <updated>1774421679015</updated>
+    </task>
+    <task id="LOCAL-00326" summary="devicedist.html - Pre-load pillar timing music to prevent startup delays later">
+      <option name="closed" value="true" />
+      <created>1774422264321</created>
+      <option name="number" value="00326" />
+      <option name="presentableId" value="LOCAL-00326" />
+      <option name="project" value="LOCAL" />
+      <updated>1774422264321</updated>
+    </task>
+    <task id="LOCAL-00327" summary="devicedist.html - Removed mic delay from playback calculation">
+      <option name="closed" value="true" />
+      <created>1774422922873</created>
+      <option name="number" value="00327" />
+      <option name="presentableId" value="LOCAL-00327" />
+      <option name="project" value="LOCAL" />
+      <updated>1774422922873</updated>
+    </task>
+    <task id="LOCAL-00328" summary="devicedist.html - Try again to preload pillar tuning MP3">
+      <option name="closed" value="true" />
+      <created>1774423293082</created>
+      <option name="number" value="00328" />
+      <option name="presentableId" value="LOCAL-00328" />
+      <option name="project" value="LOCAL" />
+      <updated>1774423293082</updated>
+    </task>
+    <task id="LOCAL-00329" summary="devicedist.html - Change the timing calc to include speaker delay (again)">
+      <option name="closed" value="true" />
+      <created>1774423938230</created>
+      <option name="number" value="00329" />
+      <option name="presentableId" value="LOCAL-00329" />
+      <option name="project" value="LOCAL" />
+      <updated>1774423938230</updated>
+    </task>
+    <task id="LOCAL-00330" summary="xplay and xrecord - test programs to see if mic can hear pillar music">
+      <option name="closed" value="true" />
+      <created>1774425276780</created>
+      <option name="number" value="00330" />
+      <option name="presentableId" value="LOCAL-00330" />
+      <option name="project" value="LOCAL" />
+      <updated>1774425276780</updated>
+    </task>
+    <task id="LOCAL-00331" summary="devicedist.html - function initTuningListener now corrected pillar playback logic (tuningPlaybackStarted set only after actual playback starts) and patron device handling">
+      <option name="closed" value="true" />
+      <created>1774426094728</created>
+      <option name="number" value="00331" />
+      <option name="presentableId" value="LOCAL-00331" />
+      <option name="project" value="LOCAL" />
+      <updated>1774426094728</updated>
+    </task>
+    <task id="LOCAL-00332" summary="devicedist.html - large mods for pitch-aware note detection">
+      <option name="closed" value="true" />
+      <created>1774428779540</created>
+      <option name="number" value="00332" />
+      <option name="presentableId" value="LOCAL-00332" />
+      <option name="project" value="LOCAL" />
+      <updated>1774428779540</updated>
+    </task>
+    <task id="LOCAL-00333" summary="devicedist.html - //REDUCE LOG CLUTTER">
+      <option name="closed" value="true" />
+      <created>1774430262413</created>
+      <option name="number" value="00333" />
+      <option name="presentableId" value="LOCAL-00333" />
+      <option name="project" value="LOCAL" />
+      <updated>1774430262413</updated>
+    </task>
+    <task id="LOCAL-00334" summary="devicedist.html - schedulePhase2Notes() - Use estimatedDeviceDelayMs (261ms) as default. processDetectionWindows() - Use wide window (500ms) initially, then narrow with calibrated player delays. getPlayerSpeakerDelay() - Add function to lookup player's delay (pillar=45ms, calibrated patrons, default=261ms).">
+      <option name="closed" value="true" />
+      <created>1774431401504</created>
+      <option name="number" value="00334" />
+      <option name="presentableId" value="LOCAL-00334" />
+      <option name="project" value="LOCAL" />
+      <updated>1774431401504</updated>
+    </task>
+    <task id="LOCAL-00335" summary="devicedist.html - Phase 1 ends normally at 20.6 seconds, but we have a fallback at 25 seconds. The fallback was erroneously set at GO+25 s, now set at GO+buffer+25 s.">
+      <option name="closed" value="true" />
+      <created>1774450201952</created>
+      <option name="number" value="00335" />
+      <option name="presentableId" value="LOCAL-00335" />
+      <option name="project" value="LOCAL" />
+      <updated>1774450201952</updated>
+    </task>
+    <task id="LOCAL-00336" summary="xmusiclistener.html - webapp that tattles on the other devices, listening to the music and reporting to the distributed log about what it hears.">
+      <option name="closed" value="true" />
+      <created>1774452004294</created>
+      <option name="number" value="00336" />
+      <option name="presentableId" value="LOCAL-00336" />
+      <option name="project" value="LOCAL" />
+      <updated>1774452004294</updated>
+    </task>
+    <option name="localTasksCounter" value="337" />
     <servers />
   </component>
+  <component name="Vcs.Log.Tabs.Properties">
+    <option name="TAB_STATES">
+      <map>
+        <entry key="MAIN">
+          <value>
+            <State />
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
   <component name="VcsManagerConfiguration">
-    <MESSAGE value="Initial Commit of distributed Smartphone Orchestra, an ad-hoc supercomputer for theatrical sound and light shows." />
-    <MESSAGE value="Add a better topline comment for laptopdist.html" />
-    <MESSAGE value="Added Firebase config. Deleted prototype relic smartphonedist.html." />
-    <MESSAGE value="Modified admin.html to upload pillar_config.json from laptop to Firebase database." />
-    <MESSAGE value="Updated pillar_config.json structure to match the names of the entries the code is expecting." />
-    <MESSAGE value="Updated pillar_config.json structure to match the names of the entries the code is expecting. Updated admin.html to match." />
-    <MESSAGE value="Updated admin.html to add confirmation to UI after loading config file." />
-    <MESSAGE value="Updated admin.html to read the pillar values from the database" />
-    <MESSAGE value="Updated admin.html clarify comments and force an update of the file in Firebase" />
-    <MESSAGE value="Sending firebase.json to Github and Firebase." />
-    <MESSAGE value="Modified comment in admin.html to push it to Firebase." />
-    <MESSAGE value="Added databaseURL to firebaseConfig" />
-    <MESSAGE value="Get Pillar ID from URL" />
-    <MESSAGE value="Change Firebase reference in seat_survey_beacon.html to include the active_pillars/ prefix." />
-    <MESSAGE value="seat_survey.html now checks the Firebase active_pillars/ path first before reading local copy of pillar_config.json" />
-    <MESSAGE value="Updated db.ref in all scripts to use the correct prefix, and make sure cue.json is on the Firebase server. Updated devicedist.html to read x,y from QR code and animate light and sound cues along a path. Updated generate_stickers.py to print the new QR codes." />
-    <MESSAGE value="Updated cue.json to add correct MP3 URLs on Wix server." />
-    <MESSAGE value="Updated admin.html to restore the beacon map and add feedback after file upload." />
-    <option name="LAST_COMMIT_MESSAGE" value="Updated admin.html to restore the beacon map and add feedback after file upload." />
+    <MESSAGE value="reset_pillar.html - Use those MP3 URLS" />
+    <MESSAGE value="reset_pillar.html - Balance tone buttons Always enabled. Clock synchronization. Initialize solver with existing values from pillar_config.json (45ms speaker, 18ms mic)." />
+    <MESSAGE value="reset_pillar.html - function loadPillarConfig - simplified version that ensures the UI renders immediately" />
+    <MESSAGE value="devicedist.html - function reportMeasurement - Only add pillar-specific fields if the playing device is actually a pillar" />
+    <MESSAGE value="conductor.html - set MAX_LOG_ENTRIES = 1000" />
+    <MESSAGE value="devicedist.html - source.loop = false; to finally stop the apparent re-start of the tuning movement" />
+    <MESSAGE value="devicedist.html - The COPY LOGS button now copies MAX_LOG_ENTRIES not just 500" />
+    <MESSAGE value="devicedist.html - The COPY LOGS button now copies MAX_LOG_ENTRIES not just 500. Add logging." />
+    <MESSAGE value="devicedist.html - More debugging log entries." />
+    <MESSAGE value="conductor.html - UTC logging (all timestamps use .toISOString().substr(11, 12))&#10;&#10;Removed hardcoded default pillar URLs - now loads from tuning_mode.json&#10;&#10;Clears stale tuning schedule before each start&#10;&#10;Proper pillar URL loading from tuning_mode.json assets" />
+    <MESSAGE value="xlisten.html - debugging tool for listening to the conversation between conductor.html and devicedist.html about note timing" />
+    <MESSAGE value="devicedist.html - Immediate Note Scheduling: Added a block that calls schedulePhase2Notes right after the schedule is loaded, before Phase 1 windows are set up. This ensures notes are queued to play at their correct times, regardless of calibration status.&#10;&#10;Pillar Playback Timing: Corrected the pillar's start delay calculation to use only speaker delay: schedule.startTime - nowWall - calibratedSpeakerDelay.&#10;&#10;Disabled Blocking Calibration: The call to startIterativeCalibration() is commented out. This function was designed to run sequentially and blocked note playback. The real-time calibration via pillar/neighbor reports will run concurrently.&#10;&#10;Fallback Scheduling: Added a fallback in the Phase 1 completion timeout to schedule notes if they weren't already scheduled (e.g., if pillarWindows was empty)." />
+    <MESSAGE value="xlisten.html - Enable download button immediately." />
+    <MESSAGE value="devicedist.html - Use default speaker delay until neighbors can help recalibrate it" />
+    <MESSAGE value="devicedist.html - Pre-load pillar timing music to prevent startup delays later" />
+    <MESSAGE value="devicedist.html - Removed mic delay from playback calculation" />
+    <MESSAGE value="devicedist.html - Try again to preload pillar tuning MP3" />
+    <MESSAGE value="devicedist.html - Change the timing calc to include speaker delay (again)" />
+    <MESSAGE value="xplay and xrecord - test programs to see if mic can hear pillar music" />
+    <MESSAGE value="devicedist.html - function initTuningListener now corrected pillar playback logic (tuningPlaybackStarted set only after actual playback starts) and patron device handling" />
+    <MESSAGE value="devicedist.html - large mods for pitch-aware note detection" />
+    <MESSAGE value="devicedist.html - //REDUCE LOG CLUTTER" />
+    <MESSAGE value="devicedist.html - schedulePhase2Notes() - Use estimatedDeviceDelayMs (261ms) as default. processDetectionWindows() - Use wide window (500ms) initially, then narrow with calibrated player delays. getPlayerSpeakerDelay() - Add function to lookup player's delay (pillar=45ms, calibrated patrons, default=261ms)." />
+    <MESSAGE value="devicedist.html - Phase 1 ends normally at 20.6 seconds, but we have a fallback at 25 seconds. The fallback was erroneously set at GO+25 s, now set at GO+buffer+25 s." />
+    <MESSAGE value="xmusiclistener.html - webapp that tattles on the other devices, listening to the music and reporting to the distributed log about what it hears." />
+    <option name="LAST_COMMIT_MESSAGE" value="xmusiclistener.html - webapp that tattles on the other devices, listening to the music and reporting to the distributed log about what it hears." />
   </component>
 </project>

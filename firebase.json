@@ -3,6 +3,9 @@
     "public": ".",
     "ignore": [
       "firebase.json",
+      "**/*.py",
+      "**/.json",
+      "assets/**",
       "**/.*",
       "**/node_modules/**"
     ]
