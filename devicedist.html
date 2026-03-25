@@ -1123,6 +1123,7 @@ let assetsPreloaded = false;
 async function preloadAssets() {
     document.getElementById('asset-progress').style.display = 'block';
     log("📦 Starting asset preload...");
+    const startFetchTime = Date.now();
 
     try {
         // 1. Preload show movement assets
