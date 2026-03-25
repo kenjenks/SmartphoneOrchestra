@@ -78,9 +78,6 @@
             color: #666;
             margin-right: 8px;
         }
-        .detected {
-            color: #ffaa44;
-        }
     </style>
 </head>
 <body>
@@ -95,11 +92,11 @@
         <div class="info-panel">
             <div class="info-row">
                 <span>🎯 Pillar ID:</span>
-                <span id="pillar-id">--</span>
+                <span id="pillar-id">PILLAR_FL</span>
             </div>
             <div class="info-row">
                 <span>🎵 Pillar URL:</span>
-                <span id="pillar-url">--</span>
+                <span id="pillar-url">Waiting for schedule...</span>
             </div>
             <div class="info-row">
                 <span>⏱️ Audio Context:</span>
@@ -143,7 +140,7 @@
         // State
         let audioCtx = null;
         let serverOffset = 0;
-        let myPillarId = "PILLAR_FL";  // Hardcoded for FL pillar
+        let myPillarId = "PILLAR_FL";
         let myPillarUrl = null;
         let tuningStartTime = null;
         let playbackScheduled = false;
@@ -190,41 +187,6 @@
             }
         });
 
-        // Load pillar config to get URL
-        async function loadPillarConfig() {
-            try {
-                const snap = await db.ref('pillar_config').once('value');
-                const data = snap.val();
-                
-                if (data && data.pillars) {
-                    const pillar = data.pillars.find(p => p.id === myPillarId);
-                    if (pillar) {
-                        log(`📡 Found pillar config for ${myPillarId}`);
-                        document.getElementById('pillar-id').innerText = myPillarId;
-                        return true;
-                    }
-                }
-                
-                // Also check tuning_mode for pillar URLs
-                const tuningSnap = await db.ref('tuning_mode').once('value');
-                const tuningData = tuningSnap.val();
-                if (tuningData && tuningData.assets && tuningData.assets.pillars) {
-                    if (tuningData.assets.pillars.FL) {
-                        myPillarUrl = tuningData.assets.pillars.FL;
-                        log(`📡 Got pillar URL from tuning_mode: ${myPillarUrl.split('/').pop()}`);
-                        document.getElementById('pillar-url').innerText = myPillarUrl.split('/').pop();
-                        return true;
-                    }
-                }
-                
-                log(`❌ Could not find URL for ${myPillarId}`);
-                return false;
-            } catch (e) {
-                log(`❌ Failed to load pillar config: ${e.message}`);
-                return false;
-            }
-        }
-
         // Preload audio file
         async function preloadAudio(url, label) {
             log(`📥 Loading ${label}: ${url.split('/').pop()}`);
@@ -233,7 +195,7 @@
                 const arrayBuf = await res.arrayBuffer();
                 log(`📥 Downloaded ${Math.round(arrayBuf.byteLength / 1024)} KB`);
                 const audioBuffer = await audioCtx.decodeAudioData(arrayBuf);
-                
+
                 // Check amplitude
                 const channelData = audioBuffer.getChannelData(0);
                 let maxAmp = 0;
@@ -261,18 +223,18 @@
                 log("⚠️ Audio context not initialized");
                 return;
             }
-            
+
             if (audioCtx.state === 'suspended') {
                 await audioCtx.resume();
                 log("🎛️ Audio context resumed");
             }
-            
+
             if (!testAudioBuffer) {
                 log("📥 Loading test note...");
                 testAudioBuffer = await preloadAudio(TEST_NOTE_URL, "test note");
                 if (!testAudioBuffer) return;
             }
-            
+
             try {
                 const source = audioCtx.createBufferSource();
                 source.buffer = testAudioBuffer;
@@ -292,25 +254,59 @@
                 log("❌ Audio context not initialized");
                 return false;
             }
-            
-            if (!pillarAudioBuffer) {
-                log("📥 Loading pillar audio...");
-                pillarAudioBuffer = await preloadAudio(myPillarUrl, "pillar audio");
-                if (!pillarAudioBuffer) return false;
+
+            if (!myPillarUrl) {
+                log("❌ No pillar URL available - cannot play");
+                document.getElementById('schedule-status').innerHTML = "No URL";
+                return false;
             }
-            
+
+            log(`🎵 Loading pillar audio from: ${myPillarUrl.split('/').pop()}`);
+
+            // Always force fresh decode
+            log(`🔄 Forcing fresh decode of pillar audio...`);
+            let freshBuffer = null;
+            try {
+                const res = await fetch(myPillarUrl);
+                const arrayBuf = await res.arrayBuffer();
+                log(`📥 Downloaded ${Math.round(arrayBuf.byteLength / 1024)} KB`);
+                freshBuffer = await audioCtx.decodeAudioData(arrayBuf);
+
+                // Check amplitude
+                const channelData = freshBuffer.getChannelData(0);
+                let maxAmp = 0;
+                for (let i = 0; i < Math.min(10000, channelData.length); i++) {
+                    maxAmp = Math.max(maxAmp, Math.abs(channelData[i]));
+                }
+                log(`🎵 Decoded: ${freshBuffer.duration.toFixed(1)}s, peak amplitude ${maxAmp.toFixed(4)}`);
+                if (maxAmp < 0.01) {
+                    log(`⚠️ WARNING: Audio appears to be SILENT! Peak amplitude ${maxAmp.toFixed(4)}`);
+                    return false;
+                } else if (maxAmp < 0.1) {
+                    log(`⚠️ Audio may be quiet (peak ${maxAmp.toFixed(4)})`);
+                } else {
+                    log(`✅ Audio level appears normal (peak ${maxAmp.toFixed(4)})`);
+                }
+
+                pillarAudioBuffer = freshBuffer;
+
+            } catch (e) {
+                log(`❌ Failed to decode pillar audio: ${e.message}`);
+                return false;
+            }
+
             const nowWall = Date.now() + serverOffset;
             const startDelay = startTime - nowWall;
-            
+
             log(`📊 Playback timing:`);
             log(`   Start time: ${new Date(startTime).toISOString().substr(11, 12)}.${String(startTime % 1000).padStart(3, '0')}`);
             log(`   Now: ${new Date(nowWall).toISOString().substr(11, 12)}.${String(nowWall % 1000).padStart(3, '0')}`);
             log(`   Delay: ${startDelay}ms`);
-            
+
             // Warm-up pulse (play at low volume to wake hardware)
             const warmUpTime = startTime - WARMUP_ADVANCE_MS;
             const warmUpDelay = warmUpTime - nowWall;
-            
+
             if (warmUpDelay > 0) {
                 log(`🔇 Scheduling warm-up in ${Math.round(warmUpDelay)}ms`);
                 setTimeout(async () => {
@@ -318,7 +314,7 @@
                         const source = audioCtx.createBufferSource();
                         source.buffer = pillarAudioBuffer;
                         const gainNode = audioCtx.createGain();
-                        gainNode.gain.setValueAtTime(0.01, audioCtx.currentTime); // Very quiet
+                        gainNode.gain.setValueAtTime(0.01, audioCtx.currentTime);
                         source.connect(gainNode).connect(audioCtx.destination);
                         source.start(0);
                         source.stop(audioCtx.currentTime + (SILENT_WARMUP_MS / 1000));
@@ -328,7 +324,7 @@
                     }
                 }, warmUpDelay);
             }
-            
+
             // Main playback
             if (startDelay > 0) {
                 log(`🎵 Scheduling main playback in ${Math.round(startDelay)}ms`);
@@ -339,28 +335,27 @@
                             await audioCtx.resume();
                             log("🎛️ Audio context resumed for playback");
                         }
-                        
+
                         const source = audioCtx.createBufferSource();
                         source.buffer = pillarAudioBuffer;
                         const gainNode = audioCtx.createGain();
                         gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime);
                         source.connect(gainNode).connect(audioCtx.destination);
                         source.start(0);
-                        
+
                         const actualTime = Date.now() + serverOffset;
                         log(`🏛️ PILLAR PLAYBACK STARTED at ${new Date(actualTime).toISOString().substr(11, 12)}`);
                         log(`   Scheduled: ${new Date(startTime).toISOString().substr(11, 12)}`);
                         log(`   Error: ${actualTime - startTime}ms`);
                         document.getElementById('playback-status').innerHTML = "Playing";
                         document.getElementById('playback-status').style.color = "#ffaa44";
-                        
-                        // Log when playback ends
+
                         source.onended = () => {
                             log(`🏛️ Playback ended`);
                             document.getElementById('playback-status').innerHTML = "Complete";
                             document.getElementById('playback-status').style.color = "#44ffaa";
                         };
-                        
+
                         playbackTimeout = null;
                     } catch (e) {
                         log(`❌ Playback failed: ${e.message}`);
@@ -393,6 +388,7 @@
             }
         }
 
+        // Listen for tuning schedule
         function listenForTuning() {
             db.ref('tuning/current').on('value', snap => {
                 const schedule = snap.val();
@@ -416,27 +412,29 @@
                 const now = Date.now() + serverOffset;
                 const timeToStart = schedule.startTime - now;
 
-                // *** Update pillar URL from the schedule ***
+                // *** CRITICAL FIX: Update pillar URL from the schedule ***
                 if (schedule.pillars && schedule.pillars.FL) {
                     const newUrl = schedule.pillars.FL;
+                    log(`📡 SCHEDULE HAS PILLAR URL: ${newUrl.split('/').pop()}`);
                     if (newUrl !== myPillarUrl) {
                         log(`📡 UPDATING pillar URL from schedule: ${newUrl.split('/').pop()}`);
                         myPillarUrl = newUrl;
-                        // Invalidate cached buffer to force fresh load
-                        if (testAudioBuffer && testAudioBuffer !== pillarAudioBuffer) {
-                            // Keep test audio buffer separate
-                        }
-                        if (pillarAudioBuffer) {
-                            pillarAudioBuffer = null;
-                            log(`   Cleared old buffer cache for new URL`);
-                        }
+                        // Invalidate cached buffer
+                        pillarAudioBuffer = null;
                         document.getElementById('pillar-url').innerHTML = myPillarUrl.split('/').pop();
+                        log(`   Pillar URL now set to: ${myPillarUrl.split('/').pop()}`);
+                    } else {
+                        log(`📡 Pillar URL unchanged: ${myPillarUrl.split('/').pop()}`);
                     }
+                } else {
+                    log(`⚠️ Schedule has no pillars.FL URL`);
+                    document.getElementById('schedule-status').innerHTML = "No URL in schedule";
                 }
 
                 log(`🎵 Tuning schedule received`);
                 log(`   Start time: ${new Date(schedule.startTime).toISOString().substr(11, 12)}.${String(schedule.startTime % 1000).padStart(3, '0')}`);
                 log(`   Time to start: ${(timeToStart / 1000).toFixed(1)}s`);
+                log(`   Pillar URL: ${myPillarUrl ? myPillarUrl.split('/').pop() : 'NOT SET'}`);
 
                 document.getElementById('schedule-status').innerHTML = `Received, starts in ${Math.round(timeToStart/1000)}s`;
 
@@ -464,22 +462,20 @@
                 document.getElementById('audio-state').innerHTML = audioCtx.state;
                 return;
             }
-            
+
             try {
                 audioCtx = new (window.AudioContext || window.webkitAudioContext)();
                 log(`🎛️ Audio context created (state: ${audioCtx.state})`);
                 document.getElementById('audio-state').innerHTML = audioCtx.state;
-                
-                // Resume on user interaction
+
                 if (audioCtx.state === 'suspended') {
                     await audioCtx.resume();
                     log(`🎛️ Audio context resumed (state: ${audioCtx.state})`);
                     document.getElementById('audio-state').innerHTML = audioCtx.state;
                 }
-                
-                // Enable test button
+
                 document.getElementById('test-play-btn').disabled = false;
-                
+
                 return true;
             } catch (e) {
                 log(`❌ Failed to create audio context: ${e.message}`);
@@ -490,28 +486,29 @@
         // Initialize everything
         window.onload = async () => {
             log("🎧 xplaypillar started");
-            
-            await loadPillarConfig();
-            
+
+            document.getElementById('pillar-id').innerHTML = myPillarId;
+
             // Set up UI buttons
             document.getElementById('init-audio-btn').onclick = async () => {
                 await initAudio();
             };
-            
+
             document.getElementById('test-play-btn').onclick = async () => {
                 if (!audioCtx) {
                     await initAudio();
                 }
                 await playTestNote();
             };
-            
+
             // Start listening for tuning schedule
             listenForTuning();
-            
+
             log("Ready. Click 'Initialize Audio' to start.");
             log("   Then wait for conductor to start tuning.");
+            log("   The pillar URL should update when schedule arrives.");
         };
-        
+
         window.addEventListener('beforeunload', () => {
             if (playbackTimeout) clearTimeout(playbackTimeout);
         });
