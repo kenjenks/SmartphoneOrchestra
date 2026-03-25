@@ -1548,23 +1548,40 @@ function initTuningListener() {
                     calibrationComplete = true;
                 }
 
-                // Start pillar playback
-                if (!tuningPlaybackStarted && PICCOLO_URL) {
+                // Start pillar playback - only if we have a URL to play
+                if (PICCOLO_URL) {
                     const nowWall = Date.now() + serverOffset;
-                    // Pillars also use only speaker delay for playback timing
-                    const startDelay = schedule.startTime - nowWall - calibratedSpeakerDelay;
+                    const pillarSpeakerDelay = calibratedSpeakerDelay;
+                    const startDelay = schedule.startTime - nowWall - pillarSpeakerDelay;
+
+                    log(`📊 Pillar ${mySeat.id} - startDelay calculation:`);
+                    log(`   schedule.startTime: ${schedule.startTime} (${new Date(schedule.startTime).toISOString().substr(11, 12)})`);
+                    log(`   nowWall: ${nowWall} (${new Date(nowWall).toISOString().substr(11, 12)})`);
+                    log(`   pillarSpeakerDelay: ${pillarSpeakerDelay}ms`);
+                    log(`   startDelay: ${startDelay.toFixed(0)}ms`);
 
                     if (startDelay > 0) {
-                        setTimeout(() => {
+                        const timeoutId = setTimeout(() => {
+                            const actualStartTime = Date.now() + serverOffset;
+                            log(`🏛️ ${mySeat.id} STARTING playback at ${new Date(actualStartTime).toISOString().substr(11, 12)}.${String(actualStartTime % 1000).padStart(3, '0')}`);
                             startPillarFabric(schedule.startTime);
+                            tuningPlaybackStarted = true;  // Set ONLY after playback actually starts
+                            activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
                         }, startDelay);
+                        activeTimeouts.push(timeoutId);
+                        log(`🏛️ Pillar ${mySeat.id} playback scheduled in ${Math.round(startDelay)}ms`);
                     } else if (startDelay > -1000) {
                         log(`⚠️ Pillar start is ${Math.round(-startDelay)}ms late, playing immediately`);
+                        const actualStartTime = Date.now() + serverOffset;
+                        log(`🏛️ ${mySeat.id} STARTING playback immediately at ${new Date(actualStartTime).toISOString().substr(11, 12)}.${String(actualStartTime % 1000).padStart(3, '0')}`);
                         startPillarFabric(schedule.startTime);
+                        tuningPlaybackStarted = true;  // Set because playback is starting now
                     } else {
                         log(`❌ Pillar start is too late (${Math.round(-startDelay)}ms), skipping`);
+                        // Don't set tuningPlaybackStarted because we're not playing
                     }
-                    tuningPlaybackStarted = true;
+                } else {
+                    log(`⚠️ No PICCOLO_URL for pillar ${mySeat.id}, cannot play`);
                 }
 
                 pillarPlaybackStarted = true;
@@ -1579,11 +1596,6 @@ function initTuningListener() {
             // Enable microphone for neighbor listening (only for patron devices)
             enableMicrophone();
 
-            // Do NOT start iterative calibration that blocks playback.
-            // Instead, rely on the real-time pillar reports (from processPillarReferenceDetection)
-            // to refine the speaker delay estimate and reschedule remaining notes.
-            // startIterativeCalibration(); // This function currently blocks and should be replaced/disabled.
-
             // Start listening for pillar reference detections (they will feed speaker delay samples)
             // This is already handled by the main detection loop (detectNeighborNotes calls processPillarReferenceDetection)
 
@@ -1592,8 +1604,9 @@ function initTuningListener() {
 
             log("🎧 Listening for pillar references and neighbor reports to refine speaker delay");
 
-            // IMPORTANT: Set tuningPlaybackStarted to prevent duplicate triggers
-            tuningPlaybackStarted = true;
+            // IMPORTANT: Do NOT set tuningPlaybackStarted here for patrons - it should only be set
+            // when Phase 2 playback actually starts (in playTuningMovement)
+            // tuningPlaybackStarted = true; // <-- DO NOT SET HERE
 
             // Note: pillarPlaybackStarted remains false for patrons
             return;
