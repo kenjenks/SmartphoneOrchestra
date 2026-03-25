@@ -472,7 +472,7 @@ devicedist.html: Feature List
     let heartbeatTimer = null;
 
     // --- CONSTANTS ---
-    const SILENT_WARMUP_MS = 100;
+    const SILENT_WARMUP_MS = 1000; // DEBUG one second instead of 0.1 s
     const WARMUP_ADVANCE_MS = 500;
     const HEARTBEAT_BASE_INTERVAL_MS = 10000;
     const HEARTBEAT_JITTER_MS = 2000;
@@ -2814,7 +2814,7 @@ async function startPillarFabric(startTime) {
                 const source = audioCtx.createBufferSource();
                 source.buffer = bufferCache[myUrl];
                 const gainNode = audioCtx.createGain();
-                gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+                gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime); //DEBUG full volume
                 source.connect(gainNode).connect(audioCtx.destination);
                 source.start(0);
                 source.stop(audioCtx.currentTime + (SILENT_WARMUP_MS / 1000));
