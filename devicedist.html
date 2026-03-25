@@ -1225,6 +1225,51 @@ function calculateMedian(values) {
 }
 
 // --- TUNING SCHEDULE HANDLER ---
+
+let scheduledTimeouts = [];
+
+function schedulePhase2Notes(pieceStartTime, speakerDelayMs) {
+    const nowWall = Date.now() + serverOffset;
+
+    assignedNotes.forEach(note => {
+        const absoluteTime = pieceStartTime + note.startMs;
+        const adjustedTime = absoluteTime - speakerDelayMs - (myMicDelayMs || 0);
+        const delayMs = adjustedTime - nowWall;
+
+        if (delayMs > 0) {
+            const timeoutId = setTimeout(() => playSingleNote(note), delayMs);
+            scheduledTimeouts.push({ noteIndex: note.noteIndex, timeoutId, adjustedTime });
+        }
+    });
+}
+
+function rescheduleRemainingPhase2Notes(pieceStartTime, newSpeakerDelayMs) {
+    const nowWall = Date.now() + serverOffset;
+
+    // Clear pending timeouts for notes not yet played
+    scheduledTimeouts.forEach(({ noteIndex, timeoutId, adjustedTime }) => {
+        if (adjustedTime > nowWall) {
+            clearTimeout(timeoutId);
+        }
+    });
+
+    scheduledTimeouts = [];
+
+    // Reschedule remaining notes
+    assignedNotes.forEach(note => {
+        const absoluteTime = pieceStartTime + note.startMs;
+        const adjustedTime = absoluteTime - newSpeakerDelayMs - (myMicDelayMs || 0);
+        const delayMs = adjustedTime - nowWall;
+
+        if (delayMs > 0) {
+            const timeoutId = setTimeout(() => playSingleNote(note), delayMs);
+            scheduledTimeouts.push({ noteIndex: note.noteIndex, timeoutId, adjustedTime });
+        }
+    });
+
+    log(`🔄 Rescheduled remaining notes with refined speaker delay ${newSpeakerDelayMs.toFixed(1)}ms`);
+}
+
 function initTuningListener() {
     db.ref('tuning/current').on('value', snap => {
         const schedule = snap.val();
@@ -1362,6 +1407,17 @@ function initTuningListener() {
                 log(`📊 Using initial mic delay estimate: ${myMicDelayMs}ms (will refine in Phase 1)`);
             }
 
+            // Schedule Phase 2 notes IMMEDIATELY with current speaker delay estimate (0 or default)
+            // This must happen BEFORE Phase 1 starts, because Phase 2 notes begin ~28s into the piece
+            // but we need them scheduled now so they fire at the correct absolute time.
+            if (!mySeat.id.startsWith('PILLAR_') && assignedNotes.length > 0 && !phase2PlaybackStarted) {
+                // Use current speaker delay estimate (0 initially, will be refined by pillar reports)
+                const currentSpeakerEstimate = calibratedSpeakerDelay !== null ? calibratedSpeakerDelay : 0;
+                log(`🎵 Scheduling ${assignedNotes.length} Phase 2 notes with initial speaker delay ${currentSpeakerEstimate}ms`);
+                schedulePhase2Notes(tuningStartTime, currentSpeakerEstimate);
+                phase2PlaybackStarted = true;
+            }
+
             if (pillarWindows.length > 0 && pillarNoteSchedule.length > 0) {
                 currentPillarWindow = pillarWindows[0];
                 const windowStartAbs = tuningStartTime + currentPillarWindow.start_ms;
@@ -1381,7 +1437,6 @@ function initTuningListener() {
 
             if (pillarWindows.length > 0) {
                 const lastWindow = pillarWindows[pillarWindows.length - 1];
-                const phase1EndTime = tuningStartTime + lastWindow.end_ms;
                 const phase1Duration = lastWindow.end_ms;
 
                 setTimeout(() => {
@@ -1406,6 +1461,14 @@ function initTuningListener() {
 
                         document.getElementById('debug-mic-delay').innerText = myMicDelayMs ? `${myMicDelayMs.toFixed(1)}ms` : '0ms (fallback)';
                         document.getElementById('debug-phase1-samples').innerText = micDelaySamples.length;
+                    }
+
+                    // Phase 1 is complete. If we haven't already scheduled Phase 2 notes (e.g., if pillarWindows was empty), do it now.
+                    if (!phase2PlaybackStarted && assignedNotes.length > 0 && !mySeat.id.startsWith('PILLAR_')) {
+                        const currentSpeakerEstimate = calibratedSpeakerDelay !== null ? calibratedSpeakerDelay : 0;
+                        log(`🎵 Phase 1 complete. Scheduling ${assignedNotes.length} Phase 2 notes with speaker delay ${currentSpeakerEstimate}ms`);
+                        schedulePhase2Notes(tuningStartTime, currentSpeakerEstimate);
+                        phase2PlaybackStarted = true;
                     }
                 }, phase1Duration);
             }
@@ -1445,7 +1508,8 @@ function initTuningListener() {
                 // Start pillar playback
                 if (!tuningPlaybackStarted && PICCOLO_URL) {
                     const nowWall = Date.now() + serverOffset;
-                    const startDelay = schedule.startTime - nowWall - calibratedSpeakerDelay - myMicDelayMs;
+                    // Pillars also use only speaker delay for playback timing
+                    const startDelay = schedule.startTime - nowWall - calibratedSpeakerDelay;
 
                     if (startDelay > 0) {
                         setTimeout(() => {
@@ -1472,8 +1536,18 @@ function initTuningListener() {
             // Enable microphone for neighbor listening (only for patron devices)
             enableMicrophone();
 
-            // Start iterative calibration (only for patron devices)
-            startIterativeCalibration();
+            // Do NOT start iterative calibration that blocks playback.
+            // Instead, rely on the real-time pillar reports (from processPillarReferenceDetection)
+            // to refine the speaker delay estimate and reschedule remaining notes.
+            // startIterativeCalibration(); // This function currently blocks and should be replaced/disabled.
+
+            // Start listening for pillar reference detections (they will feed speaker delay samples)
+            // This is already handled by the main detection loop (detectNeighborNotes calls processPillarReferenceDetection)
+
+            // Also listen for neighbor reports (they will also feed speaker delay samples)
+            // This is already handled by listenForTimingReports and the main detection loop.
+
+            log("🎧 Listening for pillar references and neighbor reports to refine speaker delay");
 
             // IMPORTANT: Set tuningPlaybackStarted to prevent duplicate triggers
             tuningPlaybackStarted = true;
@@ -1592,7 +1666,7 @@ async function playTuningMovement(cue) {
         return;
     }
 
-    // FIX: Use the schedule's startTime, not cue.startTime which might be different
+    // Use the schedule's startTime, not cue.startTime which might be different
     const movementStartTime = tuningStartTime;
 
     if (mySeat.id.startsWith('PILLAR_')) {
@@ -1651,7 +1725,7 @@ async function playTuningMovement(cue) {
     log(`   Using mic delay: ${(myMicDelayMs || 0).toFixed(1)}ms, speaker delay: ${(calibratedSpeakerDelay || 0).toFixed(1)}ms`);
 
     blocks.forEach((block, blockIndex) => {
-        // FIX: Use tuningStartTime as the single reference
+        // Use tuningStartTime as the single reference
         const blockStartWall = tuningStartTime + block.startMs;
 
         let adjustedStartWall = blockStartWall;
