@@ -179,7 +179,6 @@
             return 440 * Math.pow(2, (midi - 69) / 12);
         }
 
-        // Synthesize a single note with rich harmonics for detectability
         function playSynthesizedNote(frequency, durationMs, volume = SYNTH_VOLUME) {
             if (!audioCtx || audioCtx.state !== 'running') {
                 log(`⚠️ Cannot play note - audio context not running (state: ${audioCtx?.state})`);
@@ -194,7 +193,7 @@
             masterGain.gain.setValueAtTime(0, now);
             masterGain.connect(audioCtx.destination);
 
-            // OSCILLATOR 1: Sine wave (fundamental, clean tone)
+            // OSCILLATOR 1: Sine wave (fundamental, clean tone) - no vibrato to avoid modulation noise
             const osc1 = audioCtx.createOscillator();
             osc1.type = 'sine';
             osc1.frequency.setValueAtTime(frequency, now);
@@ -204,33 +203,21 @@
             osc2.type = 'triangle';
             osc2.frequency.setValueAtTime(frequency, now);
 
-            // OSCILLATOR 3: Square wave one octave higher (adds brightness)
+            // OSCILLATOR 3: Square wave one octave higher (adds brightness) - but at lower volume to reduce clicks
             const osc3 = audioCtx.createOscillator();
             osc3.type = 'square';
             osc3.frequency.setValueAtTime(frequency * 2, now);
-
-            // Add vibrato for richness (helps detection by frequency sweep)
-            const vibrato = audioCtx.createOscillator();
-            vibrato.frequency.setValueAtTime(6, now);  // 6 Hz vibrato
-            const vibratoGain = audioCtx.createGain();
-            vibratoGain.gain.setValueAtTime(8, now);   // ±8 Hz modulation
-            vibrato.connect(vibratoGain);
-            vibratoGain.connect(osc1.frequency);
-            vibratoGain.connect(osc2.frequency);
-            vibratoGain.connect(osc3.frequency);
-            vibrato.start();
-            vibrato.stop(now + duration);
 
             // Individual gain controls for mixing harmonics
             const gain1 = audioCtx.createGain();
             const gain2 = audioCtx.createGain();
             const gain3 = audioCtx.createGain();
 
-            // Mix: sine 100%, triangle 60%, octave square 40%
+            // Mix: sine 100%, triangle 60%, octave square 30% (reduced to minimize clicks)
             const effectiveVolume = volume * MASTER_GAIN_BOOST;
             gain1.gain.setValueAtTime(effectiveVolume * 1.0, now);
             gain2.gain.setValueAtTime(effectiveVolume * 0.6, now);
-            gain3.gain.setValueAtTime(effectiveVolume * 0.4, now);
+            gain3.gain.setValueAtTime(effectiveVolume * 0.3, now);
 
             // Connect oscillators to their gains
             osc1.connect(gain1);
@@ -242,30 +229,33 @@
             gain2.connect(masterGain);
             gain3.connect(masterGain);
 
-            // ADSR Envelope - fast attack for clear onset detection
-            const ATTACK = 0.005;   // 5ms attack
-            const DECAY = 0.02;     // 20ms decay
-            const SUSTAIN = 0.85;   // 85% sustain
-            const RELEASE = 0.03;   // 30ms release
+            // ADSR Envelope - smoother attack and release to eliminate clicks
+            const ATTACK = 0.008;    // 8ms attack (slightly slower to avoid click)
+            const DECAY = 0.02;      // 20ms decay
+            const SUSTAIN = 0.85;    // 85% sustain
+            const RELEASE = 0.05;    // 50ms release (longer to avoid pop at end)
 
-            // Apply envelope to master gain
+            // Apply envelope to master gain - use linear ramps for smoother transitions
             masterGain.gain.setValueAtTime(0, now);
             masterGain.gain.linearRampToValueAtTime(effectiveVolume, now + ATTACK);
             masterGain.gain.setValueAtTime(effectiveVolume, now + ATTACK + DECAY);
             masterGain.gain.linearRampToValueAtTime(effectiveVolume * SUSTAIN, now + ATTACK + DECAY + 0.01);
-            masterGain.gain.exponentialRampToValueAtTime(0.001, now + duration - RELEASE);
+
+            // CRITICAL: Ensure gain reaches true zero before next note
+            // Use linear ramp to zero (more reliable than exponential for silent stop)
+            masterGain.gain.linearRampToValueAtTime(0, now + duration - RELEASE);
+            // Force zero at the exact end
+            masterGain.gain.setValueAtTime(0, now + duration);
 
             // Start all oscillators
             osc1.start();
             osc2.start();
             osc3.start();
-            vibrato.start();
 
-            // Stop all oscillators
-            osc1.stop(now + duration);
-            osc2.stop(now + duration);
-            osc3.stop(now + duration);
-            vibrato.stop(now + duration);
+            // Stop all oscillators - add a tiny buffer after gain reaches zero
+            osc1.stop(now + duration + 0.01);
+            osc2.stop(now + duration + 0.01);
+            osc3.stop(now + duration + 0.01);
 
             // Log first few notes for debugging
             if (!window._noteCount) window._noteCount = 0;
@@ -274,7 +264,7 @@
                 log(`🔊 Playing note: ${frequency.toFixed(0)}Hz for ${durationMs}ms at volume ${(effectiveVolume * 100).toFixed(0)}%`);
             }
 
-            return { osc1, osc2, osc3, gain1, gain2, gain3, masterGain, vibrato };
+            return { osc1, osc2, osc3, gain1, gain2, gain3, masterGain };
         }
 
         // Play a warm-up pulse to wake the A9's audio DSP
