@@ -1179,171 +1179,160 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         conductorLog(`Started ${Object.keys(pillarUrls).length} pillars`, 'info');
     }
 
+    // ==================== COMPLETE TUNING FLOW WITH ITERATION ====================
+
     async function startTuningMovement() {
-        // Clear any stale tuning schedule first
-        conductorLog("🗑️ Clearing any stale tuning schedule before starting new session", 'info');
+        // Clear any stale tuning schedule
         await db.ref('tuning/current').remove();
 
-        // Load the full tuning_mode config first
         const tuningModeSnap = await db.ref('tuning_mode').once('value');
         const tuningModeData = tuningModeSnap.val();
 
         if (!tuningModeData || !tuningModeData.piano_notes) {
-            conductorLog("No tuning configuration found. Please upload via admin.html", 'error');
-            alert("No tuning configuration found. Please upload via admin.html");
+            log("No tuning configuration found", 'error');
+            alert("No tuning configuration found");
             return;
         }
 
-        // Extract notes from tuning_mode
+        // Load note timings
         noteTimings = tuningModeData.piano_notes.map((note, index) => ({
             index: index,
             startMs: note.ms_offset,
             durationMs: note.duration_ms || 500,
             measure: note.measure,
-            id: note.id,
-            pitch: note.pitch
+            pitch: note.pitch,
+            midi: note.midi
         }));
+        log(`📋 Loaded ${noteTimings.length} piccolo notes`);
 
-        // Get piccolo URL from tuning_mode
+        // Load all pillar notes for later filtering
+        if (tuningModeData.pillar_notes) {
+            allPillarNotes = tuningModeData.pillar_notes.map(note => ({
+                pillar_id: note.pillar_id,
+                index: note.index,
+                ms_offset: note.ms_offset,
+                duration_ms: note.duration_ms,
+                pitch: note.pitch,
+                midi: note.midi
+            }));
+            log(`📡 Loaded ${allPillarNotes.length} pillar notes (will filter at runtime)`);
+
+            // Log breakdown by pillar
+            const pillarCounts = {};
+            allPillarNotes.forEach(note => {
+                pillarCounts[note.pillar_id] = (pillarCounts[note.pillar_id] || 0) + 1;
+            });
+            Object.entries(pillarCounts).forEach(([pillarId, count]) => {
+                log(`   ${pillarId}: ${count} notes`);
+            });
+        }
+
+        // Load calibration windows
+        if (tuningModeData.metadata && tuningModeData.metadata.pillar_cal_windows) {
+            pillarWindows = tuningModeData.metadata.pillar_cal_windows;
+            phase1EndMs = pillarWindows[pillarWindows.length - 1].end_ms;
+            log(`📡 Loaded ${pillarWindows.length} calibration windows, Phase 1 ends at ${phase1EndMs}ms`);
+
+            // Log windows for debugging
+            pillarWindows.forEach(w => {
+                log(`   ${w.pillar_id}: measures ${w.start_measure}-${w.end_measure} → ${w.start_ms}ms-${w.end_ms}ms (${w.note_count} notes)`);
+            });
+        }
+
+        // Get piccolo URL
         if (tuningModeData.assets && tuningModeData.assets.piccolo) {
             PICCOLO_URL = tuningModeData.assets.piccolo;
-        } else if (tuningModeData.metadata && tuningModeData.metadata.source_audio_url) {
-            PICCOLO_URL = tuningModeData.metadata.source_audio_url;
-        }
-
-        if (!PICCOLO_URL) {
-            conductorLog("No piccolo URL configured in tuning_mode.json", 'error');
-            alert("No piccolo URL configured in tuning_mode.json");
+            log(`🎵 Piccolo URL: ${PICCOLO_URL.split('/').pop()}`);
+        } else {
+            log("No piccolo URL configured", 'error');
+            alert("No piccolo URL configured");
             return;
         }
 
-        // Load pillar URLs from tuning_mode.json - NO HARDCODED DEFAULTS
-        PILLAR_URLS = {};
+        // Get test pulse URL
+        if (tuningModeData.assets && tuningModeData.assets.test_pulse) {
+            TEST_PULSE_URL = tuningModeData.assets.test_pulse;
+            log(`🔊 Test pulse URL: ${TEST_PULSE_URL.split('/').pop()}`);
+        }
 
-        // Try to load from assets.pillars first
+        // Get pillar URLs
         if (tuningModeData.assets && tuningModeData.assets.pillars) {
-            PILLAR_URLS = { ...tuningModeData.assets.pillars };
-            conductorLog(`📡 Loaded ${Object.keys(PILLAR_URLS).length} pillar URLs from tuning_mode.json assets.pillars`, 'info');
-        }
-        // Fallback to metadata source_audio_* if assets.pillars not present
-        else if (tuningModeData.metadata) {
-            if (tuningModeData.metadata.source_audio_FL) PILLAR_URLS.FL = tuningModeData.metadata.source_audio_FL;
-            if (tuningModeData.metadata.source_audio_FR) PILLAR_URLS.FR = tuningModeData.metadata.source_audio_FR;
-            if (tuningModeData.metadata.source_audio_BL) PILLAR_URLS.BL = tuningModeData.metadata.source_audio_BL;
-            if (tuningModeData.metadata.source_audio_BR) PILLAR_URLS.BR = tuningModeData.metadata.source_audio_BR;
-            if (Object.keys(PILLAR_URLS).length > 0) {
-                conductorLog(`📡 Loaded ${Object.keys(PILLAR_URLS).length} pillar URLs from metadata`, 'info');
-            }
+            pillarUrls = tuningModeData.assets.pillars;
+            log(`🏛️ Pillar URLs loaded: ${Object.keys(pillarUrls).join(', ')}`);
         }
 
-        // If STILL no URLs, error out - no hardcoded fallbacks
-        if (Object.keys(PILLAR_URLS).length === 0) {
-            conductorLog("❌ ERROR: No pillar URLs found in tuning_mode.json. Please check the file.", 'error');
-            alert("No pillar URLs found in tuning_mode.json. Please upload a valid tuning_mode.json with assets.pillars.");
-            return;
-        }
-
-        // Log each pillar URL
-        Object.entries(PILLAR_URLS).forEach(([pos, url]) => {
-            conductorLog(`   Pillar ${pos}: ${url.split('/').pop()}`, 'info');
-        });
-
+        // Get active patron devices
         await refreshActiveDevices();
-
         if (activeDevices.length === 0) {
-            conductorLog("No active devices found!", 'error');
-            alert("No active devices found!");
+            log("No active patron devices found!", 'error');
+            alert("No active patron devices found!");
+            return;
+        }
+        log(`👥 Active patron devices: ${activeDevices.map(d => d.id).join(', ')}`);
+
+        // Create spiral order for patron devices
+        const patronDeviceOrder = createSpiralPath(activeDevices);
+        if (patronDeviceOrder.length === 0) {
+            log("No active patron devices found for spiral path", 'error');
+            alert("No active patron devices found");
+            return;
+        }
+        log(`🌀 Spiral order: ${patronDeviceOrder.join(', ')}`);
+
+        // Get active pillars from pillarConfig (pillars that are actually running)
+        // In a real deployment, this would come from heartbeat data
+        // For now, use all pillars defined in pillarConfig
+        const activePillars = Object.keys(pillarConfig);
+        log(`🏛️ Active pillars: ${activePillars.length > 0 ? activePillars.join(', ') : 'none'}`);
+
+        // Combine full device order (pillars first, then patrons)
+        const fullDeviceOrder = [...activePillars, ...patronDeviceOrder];
+        log(`📋 Full device order (${fullDeviceOrder.length} devices): ${fullDeviceOrder.join(', ')}`);
+
+        // Distribute notes to patron devices only (pillars don't play piccolo)
+        const tuningSchedule = distributeNotes(patronDeviceOrder);
+        if (!tuningSchedule) {
+            log("Failed to distribute notes", 'error');
             return;
         }
 
-        const deviceOrder = createSpiralPath(activeDevices);
-
-        if (deviceOrder.length === 0) {
-            conductorLog("No active patron devices found for piccolo path", 'error');
-            alert("No active patron devices found for piccolo path");
-            return;
-        }
-
-        tuningSchedule = distributeNotes(deviceOrder);
+        // Calculate start time (5 second buffer)
         const nowWall = Date.now() + serverOffset;
-        tuningStartTime = nowWall + TUNING_MODE_BUFFER_SEC * 1000;
+        const tuningStartTimeAbs = nowWall + 5000;
+        log(`📡 Writing tuning/current with startTime: ${tuningStartTimeAbs} (${new Date(tuningStartTimeAbs).toISOString().substr(11, 12)})`);
 
-        conductorLog(`📡 Writing tuning/current with startTime: ${tuningStartTime} (${new Date(tuningStartTime).toISOString().substr(11, 12)}.${String(tuningStartTime % 1000).padStart(3, '0')})`, 'info');
-
-        await startPillars(tuningStartTime);
-
-        // Build the tuning/current object with ALL data from tuning_mode.json
+        // Build the complete tuning schedule object
         const tuningCurrentObj = {
             status: 'ACTIVE',
             piccoloUrl: PICCOLO_URL,
-            pillars: PILLAR_URLS,
+            pillars: pillarUrls,
             schedule: tuningSchedule.notes,
-            deviceOrder: deviceOrder,
-            startTime: tuningStartTime,
+            deviceOrder: fullDeviceOrder,           // Includes both pillars and patrons!
+            startTime: tuningStartTimeAbs,
             totalNotes: tuningSchedule.totalNotes,
             deviceCount: tuningSchedule.deviceCount,
+            patronCount: patronDeviceOrder.length,
+            pillarCount: activePillars.length,
             generatedAt: Date.now() + serverOffset,
-            activeDevices: activeDevices.map(d => ({
-                id: d.id,
-                x: d.x,
-                y: d.y,
-                isPillar: d.isPillar
-            }))
+            activeDevices: activeDevices.map(d => ({ id: d.id, x: d.x, y: d.y })),
+            activePillars: activePillars,
+            // Include all pillar notes (will be filtered at runtime by active pillars)
+            pillar_notes: allPillarNotes,
+            metadata: {
+                pillar_cal_windows: pillarWindows,
+                total_duration_ms: tuningModeData.metadata?.total_duration_ms || 182571,
+                tempo: tuningModeData.metadata?.tempo || 70,
+                time_signature: tuningModeData.metadata?.time_signature || "3/4"
+            }
         };
 
-        // ADD THE PILLAR DATA FROM tuning_mode.json
-        if (tuningModeData.pillar_notes && tuningModeData.pillar_notes.length > 0) {
-            tuningCurrentObj.pillar_notes = tuningModeData.pillar_notes;
-            conductorLog(`📡 Added ${tuningModeData.pillar_notes.length} pillar notes to tuning schedule`, 'info');
-        } else {
-            conductorLog("⚠️ No pillar_notes found in tuning_mode.json", 'warning');
-        }
-
-        // Add pillar calibration windows
-        let windowsAdded = false;
-        if (tuningModeData.metadata && tuningModeData.metadata.pillar_cal_windows) {
-            tuningCurrentObj.metadata = tuningCurrentObj.metadata || {};
-            tuningCurrentObj.metadata.pillar_cal_windows = tuningModeData.metadata.pillar_cal_windows;
-            conductorLog(`📡 Added ${tuningModeData.metadata.pillar_cal_windows.length} pillar calibration windows from metadata`, 'info');
-            windowsAdded = true;
-        }
-
-        if (!windowsAdded && tuningModeData.pillar_cal_windows) {
-            tuningCurrentObj.metadata = tuningCurrentObj.metadata || {};
-            tuningCurrentObj.metadata.pillar_cal_windows = tuningModeData.pillar_cal_windows;
-            conductorLog(`📡 Added ${tuningModeData.pillar_cal_windows.length} pillar calibration windows (root)`, 'info');
-            windowsAdded = true;
-        }
-
-        if (!windowsAdded) {
-            conductorLog("⚠️ No pillar_cal_windows found in tuning_mode.json", 'warning');
-        }
-
-        // Also include the original metadata for reference
-        if (tuningModeData.metadata) {
-            tuningCurrentObj.metadata = tuningCurrentObj.metadata || {};
-            tuningCurrentObj.metadata.tempo = tuningModeData.metadata.tempo;
-            tuningCurrentObj.metadata.time_signature = tuningModeData.metadata.time_signature;
-            tuningCurrentObj.metadata.total_notes = tuningModeData.metadata.total_notes;
-            tuningCurrentObj.metadata.total_measures = tuningModeData.metadata.total_measures;
-            tuningCurrentObj.metadata.total_duration_ms = tuningModeData.metadata.total_duration_ms;
-        }
-
+        // Write to Firebase
         await db.ref('tuning/current').set(tuningCurrentObj);
+        log(`✅ Tuning schedule written to Firebase`);
 
-        // Verify what was actually written
-        const verifySnap = await db.ref('tuning/current/startTime').once('value');
-        const writtenStartTime = verifySnap.val();
-        conductorLog(`📡 Verified startTime in Firebase: ${writtenStartTime} (${new Date(writtenStartTime).toISOString().substr(11, 12)}.${String(writtenStartTime % 1000).padStart(3, '0')})`, 'info');
-
-        if (writtenStartTime !== tuningStartTime) {
-            conductorLog(`❌❌❌ CRITICAL: startTime mismatch! Expected ${tuningStartTime}, got ${writtenStartTime}`, 'error');
-        }
-
-        isTuningActive = true;
-        document.getElementById('tuning-progress').style.display = 'block';
-        conductorLog(`🎯 Tuning started: ${deviceOrder.length} devices, ${noteTimings.length} notes, startTime=${new Date(tuningStartTime).toISOString().substr(11, 12)}`, 'match');
-        renderMap();
+        // Note: We do NOT write to show/currentCue anymore - devices listen directly to tuning/current
+        log(`🎯 Tuning started: ${patronDeviceOrder.length} patron devices, ${activePillars.length} pillars, ${noteTimings.length} notes`);
+        log(`   Start time: ${new Date(tuningStartTimeAbs).toISOString().substr(11, 12)}`);
     }
 
     async function stopTuning(manualStop = true) {
