@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>ePillar - Smartphone Orchestra Pillar</title>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
+    <style>
+        body {
+            margin: 0;
+            background: #0a0a0a;
+            color: #eee;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+        }
+        #setup-screen {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            text-align: center;
+            padding: 20px;
+        }
+        #status-registry {
+            background: rgba(255,255,255,0.05);
+            border: 1px solid #333;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 30px;
+            width: 80%;
+            max-width: 400px;
+        }
+        .status-item {
+            display: flex;
+            justify-content: space-between;
+            margin: 10px 0;
+            font-size: 0.9rem;
+        }
+        .indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: inline-block;
+            background: #222;
+            margin-left: 10px;
+        }
+        .active { background: #ffaa44; box-shadow: 0 0 8px #ffaa44; }
+        .ready { background: #00ffcc; box-shadow: 0 0 8px #00ffcc; }
+        #ready-btn {
+            padding: 18px 45px;
+            font-size: 1.1rem;
+            font-weight: bold;
+            border-radius: 50px;
+            border: none;
+            background: #ffaa44;
+            color: #000;
+            cursor: pointer;
+        }
+        #ready-btn:disabled { background: #333; color: #666; cursor: not-allowed; }
+        #show-screen { display: none; height: 100vh; width: 100vw; background: #000; }
+        canvas { width: 100%; height: 100%; display: block; }
+        #performance-overlay {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            font-family: monospace;
+            font-size: 10px;
+            color: #ffaa44;
+            pointer-events: none;
+            background: rgba(0,0,0,0.5);
+            padding: 4px 8px;
+            border-radius: 4px;
+        }
+        .pillar-badge {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            font-family: monospace;
+            font-size: 9px;
+            color: #888;
+            background: rgba(0,0,0,0.5);
+            padding: 4px 8px;
+            border-radius: 4px;
+        }
+        .visualizer {
+            position: absolute;
+            bottom: 50px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 80%;
+            height: 4px;
+            background: #333;
+            border-radius: 2px;
+            overflow: hidden;
+        }
+        .visualizer-fill {
+            height: 100%;
+            width: 0%;
+            background: #ffaa44;
+            transition: width 0.1s linear;
+        }
+    </style>
+</head>
+<body>
+    <div id="setup-screen">
+        <h1 id="seat-label">Identifying Pillar...</h1>
+        <div id="status-registry">
+            <div class="status-item">
+                <span>Identity Resolve</span>
+                <span id="id-ind" class="indicator"></span>
+            </div>
+            <div class="status-item">
+                <span>Clock Synchronization</span>
+                <span id="sync-ind" class="indicator"></span>
+            </div>
+            <div class="status-item">
+                <span>Audio Loaded</span>
+                <span id="audio-ind" class="indicator"></span>
+            </div>
+        </div>
+        <button id="ready-btn" disabled>ACTIVATE PILLAR</button>
+        <p id="system-msg" style="margin-top:20px; font-size: 0.8rem; color: #888;">Waiting for Audio Context...</p>
+    </div>
+    <div id="show-screen">
+        <div id="performance-overlay">Pillar: -- | Status: Waiting</div>
+        <canvas id="stage-canvas"></canvas>
+        <div class="pillar-badge" id="pillar-badge">ePillar v1.0</div>
+        <div class="visualizer" id="visualizer">
+            <div class="visualizer-fill" id="visualizer-fill"></div>
+        </div>
+    </div>
+
+    <script>
+        // ==================== FIREBASE CONFIGURATION ====================
+        const firebaseConfig = {
+            apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
+            authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
+            databaseURL: "https://smartphoneorchestra-dwt-default-rtdb.firebaseio.com/",
+            projectId: "smartphoneorchestra-dwt"
+        };
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
+        // ==================== STATE VARIABLES ====================
+        let audioCtx = null;
+        let mySeat = null;
+        let serverOffset = 0;
+        let isActive = false;
+        let activeTimeout = null;
+        let heartbeatInterval = null;
+        let pillarAudioElement = null;
+        let animationFrame = null;
+        let isPlaying = false;
+        let currentPlaybackType = null; // 'tuning' or 'show'
+
+        // Constants
+        const SPEED_OF_SOUND = 343;
+        const HEARTBEAT_INTERVAL_MS = 10000;
+
+        // ==================== UTILITY FUNCTIONS ====================
+        function log(message, type = 'info') {
+            const serverTimestamp = Date.now() + (serverOffset || 0);
+            const timeStr = new Date(serverTimestamp).toISOString().substr(11, 12);
+            console.log(`[${timeStr}] [${mySeat?.id || 'unknown'}] ${message}`);
+        }
+
+        // ==================== CLOCK SYNC ====================
+        db.ref(".info/serverTimeOffset").on("value", snap => {
+            serverOffset = snap.val() || 0;
+            document.getElementById('sync-ind').className = 'indicator active';
+            log(`⏱️ Server offset: ${serverOffset}ms`);
+        });
+
+        // ==================== IDENTITY RESOLUTION ====================
+        async function resolveIdentity() {
+            try {
+                const urlParams = new URLSearchParams(window.location.search);
+                const seatId = urlParams.get('seat');
+
+                if (!seatId || !seatId.startsWith('PILLAR_')) {
+                    log(`Invalid pillar ID: ${seatId}`);
+                    document.getElementById('id-ind').className = 'indicator error';
+                    return false;
+                }
+
+                mySeat = { id: seatId };
+                document.getElementById('seat-label').innerText = `Pillar ${seatId}`;
+                document.getElementById('id-ind').className = 'indicator active';
+                document.getElementById('pillar-badge').innerHTML = `🎵 ${seatId} | ePillar v1.0`;
+                document.getElementById('performance-overlay').innerHTML = `Pillar: ${seatId} | Status: Ready`;
+                log(`✅ Resolved pillar: ${mySeat.id}`);
+                return true;
+            } catch (e) {
+                log(`❌ Identity Resolution Error: ${e.message}`);
+                document.getElementById('id-ind').className = 'indicator error';
+                return false;
+            }
+        }
+
+        // ==================== PILLAR CONFIGURATION ====================
+        let pillarConfig = {};
+
+        async function loadPillarConfig() {
+            try {
+                const snap = await db.ref('pillar_config').once('value');
+                const data = snap.val();
+                if (data && data.pillars) {
+                    data.pillars.forEach(p => {
+                        pillarConfig[p.id] = {
+                            id: p.id,
+                            label: p.label,
+                            x: p.x,
+                            y: p.y,
+                            speakerDelayMs: p.speakerDelayMs || 45,
+                            micDelayMs: p.micDelayMs || 18,
+                            audioUrl: p.audioUrl
+                        };
+                    });
+                    log(`📡 Loaded ${Object.keys(pillarConfig).length} pillar configs`);
+
+                    // Check if this pillar has an audio URL
+                    const myConfig = pillarConfig[mySeat?.id];
+                    if (myConfig && myConfig.audioUrl) {
+                        document.getElementById('audio-ind').className = 'indicator active';
+                        log(`   Audio URL: ${myConfig.audioUrl.split('/').pop()}`);
+                    } else {
+                        log(`⚠️ No audio URL found for ${mySeat?.id}`);
+                        document.getElementById('audio-ind').className = 'indicator error';
+                    }
+                }
+            } catch (e) {
+                log(`⚠️ Failed to load pillar config: ${e.message}`);
+                document.getElementById('audio-ind').className = 'indicator error';
+            }
+        }
+
+        // ==================== VISUALIZER ====================
+        function startVisualizer() {
+            if (animationFrame) cancelAnimationFrame(animationFrame);
+
+            function updateVisualizer() {
+                if (pillarAudioElement && isPlaying) {
+                    const duration = pillarAudioElement.duration;
+                    const currentTime = pillarAudioElement.currentTime;
+                    if (duration && !isNaN(duration)) {
+                        const percent = (currentTime / duration) * 100;
+                        document.getElementById('visualizer-fill').style.width = percent + '%';
+                    }
+                }
+                animationFrame = requestAnimationFrame(updateVisualizer);
+            }
+            updateVisualizer();
+        }
+
+        function stopVisualizer() {
+            if (animationFrame) {
+                cancelAnimationFrame(animationFrame);
+                animationFrame = null;
+            }
+            document.getElementById('visualizer-fill').style.width = '0%';
+        }
+
+        // ==================== PLAY PILLAR AUDIO ====================
+        function playPillarAudio(audioUrl) {
+            if (!audioUrl) {
+                audioUrl = pillarConfig[mySeat.id]?.audioUrl;
+            }
+            if (!audioUrl) {
+                log(`❌ No audio URL for ${mySeat.id}`);
+                return;
+            }
+
+            try {
+                // Stop any existing playback
+                if (pillarAudioElement) {
+                    pillarAudioElement.pause();
+                    pillarAudioElement = null;
+                }
+
+                // Create new audio element
+                pillarAudioElement = new Audio(audioUrl);
+                pillarAudioElement.volume = 1.0;
+                pillarAudioElement.loop = false;
+
+                // Listen for playback events
+                pillarAudioElement.onplay = () => {
+                    isPlaying = true;
+                    log(`🔊 Pillar ${mySeat.id} STARTED playing (${currentPlaybackType || 'unknown'})`);
+                    document.getElementById('performance-overlay').innerHTML =
+                        `Pillar: ${mySeat.id} | Status: PLAYING (${currentPlaybackType || ''}) | Delay: ${pillarConfig[mySeat.id]?.speakerDelayMs || 45}ms`;
+
+                    // Visual flash on start
+                    const canvas = document.getElementById('stage-canvas');
+                    const ctx = canvas.getContext('2d');
+                    ctx.fillStyle = '#ffaa44';
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                    setTimeout(() => ctx.clearRect(0, 0, canvas.width, canvas.height), 200);
+
+                    startVisualizer();
+                };
+
+                pillarAudioElement.onended = () => {
+                    log(`🔊 Pillar ${mySeat.id} FINISHED playing`);
+                    isPlaying = false;
+                    document.getElementById('performance-overlay').innerHTML =
+                        `Pillar: ${mySeat.id} | Status: Ready`;
+                    stopVisualizer();
+                };
+
+                pillarAudioElement.onerror = (e) => {
+                    log(`❌ Pillar audio error: ${e.message}`);
+                    isPlaying = false;
+                    document.getElementById('performance-overlay').innerHTML =
+                        `Pillar: ${mySeat.id} | Status: ERROR`;
+                };
+
+                // Start playing
+                const playPromise = pillarAudioElement.play();
+                if (playPromise) {
+                    playPromise.catch(e => {
+                        log(`❌ Playback failed: ${e.message}`);
+                        isPlaying = false;
+                    });
+                }
+
+            } catch (e) {
+                log(`❌ Failed to create audio element: ${e.message}`);
+            }
+        }
+
+        // ==================== SCHEDULE PLAYBACK ====================
+        function schedulePlayback(startTime, audioUrl, type = 'show') {
+            const myConfig = pillarConfig[mySeat.id];
+            if (!myConfig || !myConfig.audioUrl) {
+                log(`❌ Cannot schedule - no audio URL for ${mySeat.id}`);
+                return;
+            }
+
+            const nowWall = Date.now() + serverOffset;
+            const pillarSpeakerDelay = myConfig.speakerDelayMs || 45;
+
+            // Use provided URL or fallback to pillar config URL
+            const urlToPlay = audioUrl || myConfig.audioUrl;
+
+            // Calculate when to start playing (account for speaker delay)
+            const adjustedStartTime = startTime - pillarSpeakerDelay;
+            const delayMs = adjustedStartTime - nowWall;
+
+            log(`🎵 Scheduling pillar ${mySeat.id} playback (${type})`);
+            log(`   Audio: ${urlToPlay.split('/').pop()}`);
+            log(`   Speaker delay: ${pillarSpeakerDelay}ms`);
+            log(`   Scheduled start: ${new Date(startTime).toISOString().substr(11, 12)}.${String(startTime % 1000).padStart(3, '0')}`);
+            log(`   Adjusted start: ${new Date(adjustedStartTime).toISOString().substr(11, 12)}.${String(adjustedStartTime % 1000).padStart(3, '0')}`);
+            log(`   Delay: ${delayMs.toFixed(0)}ms`);
+
+            // Clear any existing scheduled playback
+            if (activeTimeout) {
+                clearTimeout(activeTimeout);
+                activeTimeout = null;
+            }
+
+            // Schedule the playback
+            if (delayMs > 0) {
+                activeTimeout = setTimeout(() => {
+                    currentPlaybackType = type;
+                    playPillarAudio(urlToPlay);
+                    activeTimeout = null;
+                }, delayMs);
+                log(`📅 Playback scheduled in ${(delayMs/1000).toFixed(1)}s`);
+            } else if (delayMs > -1000) {
+                log(`⚠️ Playback is ${Math.round(-delayMs)}ms late, playing immediately`);
+                currentPlaybackType = type;
+                playPillarAudio(urlToPlay);
+            } else {
+                log(`❌ Playback too late (${Math.round(-delayMs)}ms), skipping`);
+            }
+        }
+
+        // ==================== STOP PLAYBACK ====================
+        function stopPlayback() {
+            if (pillarAudioElement) {
+                pillarAudioElement.pause();
+                pillarAudioElement = null;
+                log(`⏹️ Playback stopped`);
+            }
+            if (activeTimeout) {
+                clearTimeout(activeTimeout);
+                activeTimeout = null;
+            }
+            isPlaying = false;
+            currentPlaybackType = null;
+            stopVisualizer();
+        }
+
+        // ==================== HEARTBEAT ====================
+        function startHeartbeat() {
+            if (!mySeat) return;
+            if (heartbeatInterval) clearInterval(heartbeatInterval);
+
+            heartbeatInterval = setInterval(() => {
+                if (mySeat) {
+                    db.ref(`devices/${mySeat.id}`).update({
+                        lastSeen: Date.now() + serverOffset,
+                        status: isPlaying ? 'PLAYING' : 'ACTIVE',
+                        type: 'pillar',
+                        audioUrl: pillarConfig[mySeat.id]?.audioUrl?.split('/').pop() || 'none',
+                        speakerDelay: pillarConfig[mySeat.id]?.speakerDelayMs || 45,
+                        micDelay: pillarConfig[mySeat.id]?.micDelayMs || 18,
+                        isPlaying: isPlaying,
+                        playbackType: currentPlaybackType
+                    });
+                }
+            }, HEARTBEAT_INTERVAL_MS);
+            log(`💓 Heartbeat started for ${mySeat.id}`);
+        }
+
+        function stopHeartbeat() {
+            if (heartbeatInterval) {
+                clearInterval(heartbeatInterval);
+                heartbeatInterval = null;
+                log(`💓 Heartbeat stopped for ${mySeat?.id}`);
+            }
+        }
+
+        // ==================== TUNING LISTENER ====================
+        function listenForTuning() {
+            db.ref('tuning/current').on('value', snap => {
+                const schedule = snap.val();
+
+                if (!schedule) {
+                    if (activeTimeout) {
+                        log(`⚠️ Tuning schedule cleared`);
+                        stopPlayback();
+                    }
+                    return;
+                }
+
+                if (!schedule.startTime) {
+                    log(`⚠️ Schedule has no startTime`);
+                    return;
+                }
+
+                const now = Date.now() + serverOffset;
+                const timeToStart = schedule.startTime - now;
+
+                log(`🎵 Tuning schedule received`);
+                log(`   Start time: ${new Date(schedule.startTime).toISOString().substr(11, 12)}.${String(schedule.startTime % 1000).padStart(3, '0')}`);
+                log(`   Time to start: ${(timeToStart / 1000).toFixed(1)}s`);
+
+                // Stop any ongoing show playback
+                stopPlayback();
+
+                // Schedule tuning playback
+                schedulePlayback(schedule.startTime, null, 'tuning');
+            });
+        }
+
+        // ==================== SHOW MOVEMENT LISTENER ====================
+        function listenForShowMovement() {
+            db.ref('show/currentCue').on('value', snap => {
+                const cue = snap.val();
+
+                if (!cue) return;
+
+                // Handle KILL signal
+                if (cue.action === 'KILL') {
+                    log(`💀 KILL signal received - stopping playback`);
+                    stopPlayback();
+                    stopHeartbeat();
+                    setTimeout(() => location.reload(), 500);
+                    return;
+                }
+
+                // Handle GO signal (show movement)
+                if (cue.action === 'GO' && cue.startTime && cue.movement && cue.cues) {
+                    log(`🎭 Show movement received: "${cue.movement}"`);
+                    log(`   Start time: ${new Date(cue.startTime).toISOString().substr(11, 12)}.${String(cue.startTime % 1000).padStart(3, '0')}`);
+
+                    // Find pillar assets in this movement's cues
+                    let foundPillarAsset = null;
+
+                    for (const movementCue of cue.cues) {
+                        if (movementCue.assets) {
+                            for (const asset of movementCue.assets) {
+                                if (asset.type === 'pillar' && asset.id === mySeat.id) {
+                                    foundPillarAsset = asset;
+                                    break;
+                                }
+                            }
+                        }
+                        if (foundPillarAsset) break;
+                    }
+
+                    if (foundPillarAsset && foundPillarAsset.audio_url) {
+                        log(`🎵 Found pillar asset for ${mySeat.id}: ${foundPillarAsset.audio_url.split('/').pop()}`);
+                        // Stop any ongoing tuning playback
+                        stopPlayback();
+                        // Schedule show playback
+                        schedulePlayback(cue.startTime, foundPillarAsset.audio_url, 'show');
+                    } else {
+                        log(`⚠️ No pillar asset found for ${mySeat.id} in movement "${cue.movement}"`);
+                    }
+                }
+            });
+        }
+
+        // ==================== AUDIO CONTEXT (for visualizer sync) ====================
+        async function initAudio() {
+            try {
+                // Create audio context for visualizer sync (optional)
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                log(`🎛️ Audio context created (state: ${audioCtx.state})`);
+
+                if (audioCtx.state === 'suspended') {
+                    // Resume on user interaction
+                    document.body.addEventListener('click', () => {
+                        if (audioCtx && audioCtx.state === 'suspended') {
+                            audioCtx.resume();
+                            log(`🎛️ Audio context resumed by user interaction`);
+                        }
+                    }, { once: true });
+                }
+                return true;
+            } catch (e) {
+                log(`⚠️ Audio context not available: ${e.message}`);
+                return false;
+            }
+        }
+
+        // ==================== TEST TONE (verify audio output) ====================
+        function playTestTone() {
+            if (!pillarAudioElement) {
+                // Create a quick test tone using Web Audio if available
+                if (audioCtx && audioCtx.state === 'running') {
+                    try {
+                        const osc = audioCtx.createOscillator();
+                        const gain = audioCtx.createGain();
+                        osc.type = 'sine';
+                        osc.frequency.setValueAtTime(440, audioCtx.currentTime);
+                        gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+                        gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.5);
+                        osc.connect(gain);
+                        gain.connect(audioCtx.destination);
+                        osc.start();
+                        osc.stop(audioCtx.currentTime + 0.5);
+                        log(`🔊 Test tone played (440Hz)`);
+                    } catch (e) {
+                        log(`⚠️ Could not play test tone: ${e.message}`);
+                    }
+                }
+            }
+        }
+
+        // ==================== ACTIVATE PILLAR ====================
+        async function activatePillar() {
+            await initAudio();
+
+            document.getElementById('setup-screen').style.display = 'none';
+            document.getElementById('show-screen').style.display = 'block';
+
+            const canvas = document.getElementById('stage-canvas');
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+
+            isActive = true;
+
+            startHeartbeat();
+
+            log(`🔊 Pillar ${mySeat.id} activated`);
+            log(`   Audio: ${pillarConfig[mySeat.id]?.audioUrl?.split('/').pop() || 'none'}`);
+            log(`   Speaker delay: ${pillarConfig[mySeat.id]?.speakerDelayMs || 45}ms`);
+
+            // Play test tone to verify audio output
+            setTimeout(() => playTestTone(), 500);
+
+            // Start listening for both tuning and show movements
+            listenForTuning();
+            listenForShowMovement();
+        }
+
+        // ==================== INITIALIZATION ====================
+        window.onload = async () => {
+            log(`🎧 ePillar starting`);
+
+            const idOk = await resolveIdentity();
+            if (!idOk) {
+                document.getElementById('system-msg').innerText = "Failed to identify pillar";
+                return;
+            }
+
+            await loadPillarConfig();
+
+            // Check if audio URL is configured
+            const hasAudio = pillarConfig[mySeat.id]?.audioUrl;
+            if (!hasAudio) {
+                document.getElementById('system-msg').innerText = "No audio URL configured for this pillar";
+                document.getElementById('ready-btn').disabled = true;
+            } else {
+                document.getElementById('ready-btn').disabled = false;
+                document.getElementById('system-msg').innerHTML = "✅ Ready. Tap to activate.";
+            }
+
+            document.getElementById('ready-btn').onclick = async () => {
+                await activatePillar();
+            };
+        };
+
+        window.onresize = () => {
+            const canvas = document.getElementById('stage-canvas');
+            if (canvas) {
+                canvas.width = window.innerWidth;
+                canvas.height = window.innerHeight;
+            }
+        };
+
+        window.addEventListener('beforeunload', () => {
+            stopPlayback();
+            stopHeartbeat();
+            if (activeTimeout) clearTimeout(activeTimeout);
+        });
+    </script>
+</body>
+</html>
