@@ -1804,24 +1804,27 @@
         db.ref('tuning/current').on('value', async snap => {
             const schedule = snap.val();
 
+            // If we're already in a tuning session with the same start time, ignore
+            if (tuningStartTime && tuningStartTime === schedule?.startTime) {
+                return;
+            }
+
+            // If we have a different start time while active, reload
             if (tuningStartTime && tuningStartTime !== schedule?.startTime) {
                 log(`⚠️ New tuning schedule received during active session - reloading`);
                 location.reload();
                 return;
             }
 
-            if (tuningStartTime) {
-                log(`⚠️ Tuning already active, ignoring duplicate`);
-                return;
-            }
-
-            if (schedule && schedule.status === 'ACTIVE') {
+            // Only process if we're in calibration mode and have a valid schedule
+            if (calibrationMode && schedule && schedule.status === 'ACTIVE') {
                 if (!schedule.startTime || schedule.startTime < Date.now() + serverOffset - 60000) {
                     log(`❌ Invalid startTime - rejecting schedule`);
                     return;
                 }
 
-                calibrationMode = true;
+                log(`🎵 Tuning schedule loaded: startTime=${new Date(schedule.startTime).toISOString().substr(11, 12)}`);
+
                 currentTuningSchedule = schedule;
                 tuningStartTime = schedule.startTime;
 
@@ -1845,6 +1848,7 @@
                     phase1EndMs = pillarWindows[pillarWindows.length - 1].end_ms;
                 }
 
+                // Setup Phase 1
                 phase1Complete = false;
                 phase1WindowActive = true;
                 micDelaySamples = [];
@@ -1855,6 +1859,7 @@
 
                 await enableMicrophone();
 
+                // Schedule Phase 1 completion
                 const phase1Duration = pillarWindows[pillarWindows.length - 1].end_ms;
                 setTimeout(() => {
                     if (phase1WindowActive && !phase1Complete) {
@@ -1867,7 +1872,6 @@
                             myMicDelayMs = calculateMedian(micDelaySamples);
                             log(`🎤 Phase 1 complete: mic delay = ${myMicDelayMs.toFixed(1)}ms from ${micDelaySamples.length} samples`);
                         }
-
                         startIterativeCalibration();
                     }
                 }, phase1Duration);
@@ -2133,105 +2137,8 @@
     }
 
     // ============================================================================
-    // SECTION 13: START TUNING MOVEMENT
+    // SECTION 13: (DELETED)
     // ============================================================================
-
-    async function startTuningMovement() {
-        await db.ref('tuning/current').remove();
-
-        const tuningModeSnap = await db.ref('tuning_mode').once('value');
-        const tuningModeData = tuningModeSnap.val();
-
-        if (!tuningModeData || !tuningModeData.piano_notes) {
-            log("No tuning configuration found", 'error');
-            alert("No tuning configuration found");
-            return;
-        }
-
-        noteTimings = tuningModeData.piano_notes.map((note, index) => ({
-            index: index,
-            startMs: note.ms_offset,
-            durationMs: note.duration_ms || 500,
-            measure: note.measure,
-            pitch: note.pitch,
-            midi: note.midi
-        }));
-
-        if (tuningModeData.pillar_notes) {
-            pillarNoteSchedule = tuningModeData.pillar_notes.map(note => ({
-                pillar_id: note.pillar_id,
-                index: note.index,
-                ms_offset: note.ms_offset,
-                duration_ms: note.duration_ms,
-                pitch: note.pitch,
-                midi: note.midi
-            }));
-            log(`📡 Loaded ${pillarNoteSchedule.length} pillar notes`);
-        }
-
-        if (tuningModeData.metadata && tuningModeData.metadata.pillar_cal_windows) {
-            pillarWindows = tuningModeData.metadata.pillar_cal_windows;
-            phase1EndMs = pillarWindows[pillarWindows.length - 1].end_ms;
-            log(`📡 Loaded ${pillarWindows.length} calibration windows, Phase 1 ends at ${phase1EndMs}ms`);
-        }
-
-        if (tuningModeData.assets && tuningModeData.assets.piccolo) {
-            PICCOLO_URL = tuningModeData.assets.piccolo;
-        }
-
-        if (!PICCOLO_URL) {
-            log("No piccolo URL configured", 'error');
-            alert("No piccolo URL configured");
-            return;
-        }
-
-        await refreshActiveDevices();
-        if (activeDevices.length === 0) {
-            log("No active devices found!", 'error');
-            alert("No active devices found!");
-            return;
-        }
-
-        const deviceOrder = createSpiralPath(activeDevices);
-        if (deviceOrder.length === 0) {
-            log("No active patron devices found", 'error');
-            alert("No active patron devices found");
-            return;
-        }
-
-        const tuningSchedule = distributeNotes(deviceOrder);
-        const nowWall = Date.now() + serverOffset;
-        const tuningStartTimeAbs = nowWall + 5000;
-
-        log(`📡 Writing tuning/current with startTime: ${tuningStartTimeAbs}`);
-
-        const tuningCurrentObj = {
-            status: 'ACTIVE',
-            piccoloUrl: PICCOLO_URL,
-            schedule: tuningSchedule.notes,
-            deviceOrder: deviceOrder,
-            startTime: tuningStartTimeAbs,
-            totalNotes: tuningSchedule.totalNotes,
-            deviceCount: tuningSchedule.deviceCount,
-            generatedAt: Date.now() + serverOffset,
-            pillar_notes: pillarNoteSchedule,
-            metadata: {
-                pillar_cal_windows: pillarWindows,
-                total_duration_ms: tuningModeData.metadata?.total_duration_ms || 182571
-            }
-        };
-
-        await db.ref('tuning/current').set(tuningCurrentObj);
-
-        await db.ref('show/currentCue').set({
-            type: "TUNING_MOVEMENT",
-            file: PICCOLO_URL,
-            startTime: tuningStartTimeAbs
-        });
-
-        calibrationMode = true;
-        log(`🎯 Tuning started: ${deviceOrder.length} devices, ${noteTimings.length} notes, startTime=${new Date(tuningStartTimeAbs).toISOString().substr(11, 12)}`);
-    }
 
     // ============================================================================
     // SECTION 14: INITIALIZATION
@@ -2257,32 +2164,50 @@
             masterGain.connect(audioCtx.destination);
         }
         if (audioCtx.state === 'suspended') await audioCtx.resume();
+
         document.getElementById('setup-screen').style.display = 'none';
         document.getElementById('show-screen').style.display = 'block';
+
         const canvas = document.getElementById('stage-canvas');
         canvas.width = window.innerWidth;
         canvas.height = window.innerHeight;
         await requestWakeLock();
         requestAnimationFrame(frame);
+
+        // Listen for conductor cues
         db.ref('show/currentCue').on('value', snap => {
             const cue = snap.val();
             if (!cue) return;
             if (cue.action === 'KILL') { log("💀 KILL signal received - reloading"); location.reload(); }
             else if (cue.action === 'GO') handleMovementStart(cue);
             else if (cue.type === 'TUNING_MOVEMENT') {
-                if (phase2PlaybackStarted) {
-                    log(`⚠️ Tuning playback already started, skipping duplicate`);
+                if (calibrationMode) {
+                    log(`⚠️ Tuning already active, ignoring duplicate`);
                     return;
                 }
+                log(`🎵 Tuning movement signaled - waiting for tuning/current schedule`);
                 calibrationMode = true;
-                startTuningMovement();
+                // The schedule will come via tuning/current
             }
-            else if (cue.type === 'AUDIO' && cue.metadata?.purpose === 'seat_test') { if (cue.metadata.seatId === mySeat.id) handleSeatTest(cue); }
+            else if (cue.type === 'AUDIO' && cue.metadata?.purpose === 'seat_test') {
+                if (cue.metadata.seatId === mySeat.id) handleSeatTest(cue);
+            }
         });
+
         initTuningListener();
         initSelfCalibrationListener();
+
         if (mySeat) {
-            await db.ref(`devices/${mySeat.id}`).update({ lastSeen: Date.now() + serverOffset, status: 'ACTIVE', x: mySeat.x, y: mySeat.y, neighborCount: myNeighbors.length, micDelay: myMicDelayMs || 0, phase1Complete: phase1Complete, micPermission: micPermissionGranted });
+            await db.ref(`devices/${mySeat.id}`).update({
+                lastSeen: Date.now() + serverOffset,
+                status: 'ACTIVE',
+                x: mySeat.x,
+                y: mySeat.y,
+                neighborCount: myNeighbors.length,
+                micDelay: myMicDelayMs || 0,
+                phase1Complete: phase1Complete,
+                micPermission: micPermissionGranted
+            });
             startHeartbeat();
         }
     };
