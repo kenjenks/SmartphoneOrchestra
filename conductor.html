@@ -1182,6 +1182,8 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
     // ==================== COMPLETE TUNING FLOW WITH ITERATION ====================
 
     async function startTuningMovement() {
+        log("🔴 START PICCOLO BUTTON PRESSED");
+
         // Clear any stale tuning schedule
         await db.ref('tuning/current').remove();
 
