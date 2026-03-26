@@ -398,6 +398,8 @@
     // Pillar baseline for adaptive threshold
     let pillarRefBaseline = 0;
     let pillarRefBaselineSamples = [];
+    let allPillarNotes = [];
+    let pillarUrls = {};
 
     // ============================================================================
     // SECTION 2: LOGGING AND UTILITIES
@@ -639,6 +641,7 @@
                 return;
             }
 
+            // ============ LOAD PICCOLO NOTES ============
             noteTimings = tuningData.piano_notes.map((note, index) => ({
                 index: index,
                 startMs: note.ms_offset,
@@ -647,9 +650,12 @@
                 pitch: note.pitch,
                 midi: note.midi
             }));
+            log(`📋 Loaded ${noteTimings.length} piccolo notes`);
 
+            // ============ LOAD ALL PILLAR NOTES (will be filtered at runtime) ============
             if (tuningData.pillar_notes) {
-                pillarNoteSchedule = tuningData.pillar_notes.map(note => ({
+                // Store all pillar notes - will be filtered in initTuningListener based on active pillars
+                allPillarNotes = tuningData.pillar_notes.map(note => ({
                     pillar_id: note.pillar_id,
                     index: note.index,
                     ms_offset: note.ms_offset,
@@ -657,25 +663,66 @@
                     pitch: note.pitch,
                     midi: note.midi
                 }));
-                log(`📡 Loaded ${pillarNoteSchedule.length} pillar notes`);
+                log(`📡 Loaded ${allPillarNotes.length} pillar notes from config (will filter at runtime)`);
+
+                // Log breakdown by pillar
+                const pillarCounts = {};
+                allPillarNotes.forEach(note => {
+                    pillarCounts[note.pillar_id] = (pillarCounts[note.pillar_id] || 0) + 1;
+                });
+                Object.entries(pillarCounts).forEach(([pillarId, count]) => {
+                    log(`   ${pillarId}: ${count} notes`);
+                });
+            } else {
+                allPillarNotes = [];
+                log(`⚠️ No pillar_notes in tuning_mode.json`);
             }
 
+            // ============ LOAD CALIBRATION WINDOWS ============
             if (tuningData.metadata && tuningData.metadata.pillar_cal_windows) {
                 const lastWindow = tuningData.metadata.pillar_cal_windows[tuningData.metadata.pillar_cal_windows.length - 1];
                 phase1EndMs = lastWindow.end_ms;
                 pillarWindows = tuningData.metadata.pillar_cal_windows;
                 log(`📡 Loaded ${pillarWindows.length} calibration windows, Phase 1 ends at ${phase1EndMs}ms`);
+
+                // Log windows for debugging
+                pillarWindows.forEach(w => {
+                    log(`   ${w.pillar_id}: measures ${w.start_measure}-${w.end_measure} → ${w.start_ms}ms-${w.end_ms}ms (${w.note_count} notes)`);
+                });
+            } else {
+                log(`⚠️ No calibration windows found in tuning_mode.json`);
             }
 
+            // ============ LOAD ASSET URLs ============
             if (tuningData.assets) {
-                if (tuningData.assets.piccolo) PICCOLO_URL = tuningData.assets.piccolo;
-                if (tuningData.assets.test_pulse) TEST_PULSE_URL = tuningData.assets.test_pulse;
+                if (tuningData.assets.piccolo) {
+                    PICCOLO_URL = tuningData.assets.piccolo;
+                    log(`🎵 Piccolo URL: ${PICCOLO_URL.split('/').pop()}`);
+                }
+                if (tuningData.assets.test_pulse) {
+                    TEST_PULSE_URL = tuningData.assets.test_pulse;
+                    log(`🔊 Test pulse URL: ${TEST_PULSE_URL.split('/').pop()}`);
+                }
+                if (tuningData.assets.pillars) {
+                    // Store pillar URLs for potential future use
+                    pillarUrls = tuningData.assets.pillars;
+                    log(`🏛️ Pillar URLs loaded: ${Object.keys(pillarUrls).join(', ')}`);
+                }
+            } else {
+                log(`⚠️ No assets section in tuning_mode.json`);
             }
 
-            log(`📋 Loaded ${noteTimings.length} total notes`);
+            // ============ LOAD METADATA ============
+            if (tuningData.metadata) {
+                const totalDuration = tuningData.metadata.total_duration_ms;
+                log(`📊 Total duration: ${(totalDuration / 1000).toFixed(2)}s at ${tuningData.metadata.tempo} BPM`);
+            }
+
+            log(`✅ Tuning configuration loaded successfully`);
 
         } catch (e) {
             log(`❌ Failed to load tuning config: ${e.message}`);
+            console.error(e);
         }
     }
 
@@ -1744,17 +1791,27 @@
         db.ref('tuning/current').on('value', async snap => {
             const schedule = snap.val();
 
-            if (!schedule || schedule.status !== 'ACTIVE') return;
-            if (tuningStartTime === schedule.startTime) return;
+            // No schedule or not active
+            if (!schedule || schedule.status !== 'ACTIVE') {
+                return;
+            }
+
+            // Already processing this schedule
+            if (tuningStartTime === schedule.startTime) {
+                return;
+            }
+
+            // New schedule while active - reload
             if (tuningStartTime && tuningStartTime !== schedule.startTime) {
-                log(`⚠️ New tuning schedule - reloading`);
+                log(`⚠️ New tuning schedule received while active - reloading`);
                 location.reload();
                 return;
             }
 
+            // Validate start time
             const now = Date.now() + serverOffset;
             if (schedule.startTime < now - 60000) {
-                log(`❌ Schedule startTime in past - rejecting`);
+                log(`❌ Schedule startTime is in the past - rejecting`);
                 return;
             }
 
@@ -1763,44 +1820,106 @@
             currentTuningSchedule = schedule;
             tuningStartTime = schedule.startTime;
 
+            // ============ EXTRACT ACTIVE PILLARS FROM DEVICE ORDER ============
+            const activePillars = (schedule.deviceOrder || []).filter(id => id.startsWith('PILLAR_'));
+            log(`📡 Active pillars: ${activePillars.length > 0 ? activePillars.join(', ') : 'none'}`);
+
+            // ============ LOAD PATRON NOTE SCHEDULE ============
             if (schedule.schedule) {
                 noteSchedule = schedule.schedule.map(note => ({
                     ...note,
                     startMs: parseFloat(note.startMs),
                     durationMs: parseFloat(note.durationMs)
                 }));
+
                 assignedNotes = noteSchedule.filter(note => note.deviceId === mySeat.id);
                 log(`🎯 This device assigned ${assignedNotes.length} notes`);
             }
 
-            // Detect single device mode
+            // ============ LOAD PILLAR NOTES (FILTERED TO ACTIVE PILLARS) ============
+            if (schedule.pillar_notes) {
+                // Filter to only pillars that are actually playing
+                pillarNoteSchedule = schedule.pillar_notes.filter(note =>
+                    activePillars.includes(note.pillar_id)
+                );
+                log(`📡 Loaded ${pillarNoteSchedule.length} pillar notes (filtered to active pillars: ${activePillars.join(', ')})`);
+
+                // Log first few notes for debugging
+                if (pillarNoteSchedule.length > 0) {
+                    log(`   First pillar note: ${pillarNoteSchedule[0].pillar_id} note ${pillarNoteSchedule[0].index} (${pillarNoteSchedule[0].pitch}) at ${pillarNoteSchedule[0].ms_offset}ms`);
+                }
+            } else {
+                log(`⚠️ No pillar_notes in schedule`);
+                pillarNoteSchedule = [];
+            }
+
+            // ============ LOAD CALIBRATION WINDOWS ============
+            if (schedule.metadata && schedule.metadata.pillar_cal_windows) {
+                pillarWindows = schedule.metadata.pillar_cal_windows;
+                phase1EndMs = pillarWindows[pillarWindows.length - 1].end_ms;
+                log(`📡 Loaded ${pillarWindows.length} calibration windows, Phase 1 ends at ${phase1EndMs}ms`);
+            }
+
+            // ============ DETECT SINGLE DEVICE MODE ============
             if (schedule.deviceOrder) {
                 const patronDeviceOrder = schedule.deviceOrder.filter(id => !id.startsWith('PILLAR_'));
                 isSingleDeviceMode = (patronDeviceOrder.length === 1);
 
                 if (isSingleDeviceMode) {
-                    log(`🎯 Single device mode - I'm the only patron device`);
+                    log(`🎯 Single device mode - I'm the only patron device (${patronDeviceOrder[0]})`);
                 } else {
                     log(`🎯 Multi-device mode - ${patronDeviceOrder.length} patron devices`);
                 }
             }
 
-            if (schedule.pillar_notes) {
-                pillarNoteSchedule = schedule.pillar_notes;
+            // ============ SET UP PHASE 1 MIC DELAY ============
+            // Reset mic delay state
+            phase1Complete = false;
+            phase1WindowActive = true;
+            micDelaySamples = [];
+            myMicDelayMs = null;
+
+            // Set the first calibration window
+            if (pillarWindows.length > 0) {
+                currentPillarWindow = pillarWindows[0];
+                log(`🎤 Phase 1 window: listening for ${currentPillarWindow.pillar_id} from ${currentPillarWindow.start_ms}ms to ${currentPillarWindow.end_ms}ms`);
+            } else {
+                log(`⚠️ No calibration windows - Phase 1 will be skipped`);
+                phase1Complete = true;
+                myMicDelayMs = 0;
             }
 
-            if (schedule.metadata && schedule.metadata.pillar_cal_windows) {
-                pillarWindows = schedule.metadata.pillar_cal_windows;
-            }
-
-            // Start continuous playback
+            // ============ START CONTINUOUS PLAYBACK ============
             const initialSpeakerDelay = calibratedSpeakerDelay !== null ? calibratedSpeakerDelay : estimatedDeviceDelayMs;
             log(`🎵 Starting continuous playback with speaker delay: ${initialSpeakerDelay.toFixed(1)}ms`);
+            log(`   Mode: ${isSingleDeviceMode ? 'Single Device (full volume)' : 'Normal (envelope mode)'}`);
             startContinuousPlayback(tuningStartTime, initialSpeakerDelay);
 
-            // Enable microphone
+            // ============ ENABLE MICROPHONE FOR DETECTION ============
             await enableMicrophone();
             log("🎧 Listening for pillars and neighbors...");
+
+            // ============ SCHEDULE PHASE 1 TIMEOUT (FALLBACK) ============
+            if (pillarWindows.length > 0) {
+                const phase1Duration = pillarWindows[pillarWindows.length - 1].end_ms;
+                setTimeout(() => {
+                    // Only act if Phase 1 hasn't already completed from detection
+                    if (phase1WindowActive && !phase1Complete) {
+                        log(`⏱️ Phase 1 timeout: no detections, using fallback`);
+                        phase1WindowActive = false;
+                        phase1Complete = true;
+                        if (micDelaySamples.length === 0) {
+                            myMicDelayMs = 0;
+                            log(`⚠️ Phase 1 closed with no samples - using 0ms mic delay`);
+                        } else {
+                            myMicDelayMs = calculateMedian(micDelaySamples);
+                            log(`🎤 Phase 1 complete (timeout): mic delay = ${myMicDelayMs.toFixed(1)}ms from ${micDelaySamples.length} samples`);
+                        }
+                        // Note: No need to start iteration here - detection will handle it
+                    }
+                }, phase1Duration);
+                log(`⏱️ Phase 1 timeout set for ${phase1Duration}ms`);
+            }
         });
     }
 
