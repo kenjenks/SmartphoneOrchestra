@@ -253,11 +253,13 @@
     </div>
 
     <script>
+    // ============================================================================
     // SECTION 1: GLOBAL STATE VARIABLES AND CONSTANTS
     // ============================================================================
 
     // Playback state
     let audioCtx = null;
+    let masterGain = null;
     let mySeat = null;
     let serverOffset = 0;
     let bufferCache = {};
@@ -320,11 +322,7 @@
     let targetSyncWindowMs = 25;
     let convergenceStdDevMs = 20;
     let minSelfSamples = 6;
-    let pillarWeight = 0.7;
-    let neighborWeight = 0.3;
-    let pillarOnlyIterationThreshold = 2;
     let iterationActive = false;
-    let iterationPillarEstimates = [];
     let iterationNeighborEstimates = [];
     let iterationFinalDelays = [];
     let iterationStartTime = 0;
@@ -355,20 +353,20 @@
     const HEARTBEAT_BASE_INTERVAL_MS = 10000;
     const HEARTBEAT_JITTER_MS = 2000;
     const SPEED_OF_SOUND = 343;
+    const MASTER_PLAYBACK_GAIN = 1.5;  // 50% volume boost
 
     // ONSET DETECTION PARAMETERS
     const PICCOLO_MIN_FREQ = 500;
     const PICCOLO_MAX_FREQ = 2100;
     const FFT_SIZE = 2048;
     const BASELINE_SAMPLES_MS = 200;
-    const BASELINE_THRESHOLD_MULTIPLIER = 1.2;
+    const BASELINE_THRESHOLD_MULTIPLIER = 1.1;  // More sensitive
     const LOOKBACK_MS = 500;
     const DETECTION_WINDOW_MS = 1500;
     const ENERGY_CHECK_INTERVAL_MS = 50;
     const BASELINE_MAX_SAMPLES = 50;
-    const PITCH_DETECTION_TOLERANCE_BINS = 4;
-    const MIN_DETECTION_ENERGY = 0.05;
-    const HARMONIC_WEIGHT = 0.5;
+    const PITCH_DETECTION_TOLERANCE_BINS = 6;   // Wider for harmonic detection
+    const MIN_DETECTION_ENERGY = 0.03;          // Lower threshold
 
     // PHASE 1 DETECTION CONSTANTS
     const PILLAR_ONSET_THRESHOLD = 2.0;
@@ -376,6 +374,10 @@
     const MIC_DELAY_SANITY_MIN = 0;
     const MIC_DELAY_SANITY_MAX = 150;
     const MIN_MIC_SAMPLES = 4;
+
+    // WARM-UP CONSTANTS
+    const TUNING_WARMUP_MS = 150;              // 150ms silent warm-up
+    const WARMUP_TO_PLAYBACK_GAP_MS = 50;      // 50ms gap between warm-up and first note
 
     // ADAPTIVE DELAY LEARNING
     let estimatedDeviceDelayMs = 261;
@@ -388,6 +390,7 @@
     const ROLLOFF_LINEAR = 'linear';
     const ROLLOFF_NONE = 'none';
 
+    // ============================================================================
     // SECTION 2: LOGGING AND UTILITIES
     // ============================================================================
 
@@ -493,6 +496,26 @@
         return Math.min(Math.max(0, bin), fftSize / 2 - 1);
     }
 
+    function calculateEnergyAtFrequency(frequency, sampleRate, fftSize) {
+        const targetBin = getBinForFrequency(frequency, sampleRate, fftSize);
+        const safeBin = Math.min(Math.max(0, targetBin), fftSize / 2 - 1);
+
+        let energy = 0;
+        let binsChecked = 0;
+
+        for (let i = Math.max(0, safeBin - PITCH_DETECTION_TOLERANCE_BINS);
+             i <= Math.min(fftSize / 2 - 1, safeBin + PITCH_DETECTION_TOLERANCE_BINS);
+             i++) {
+            if (frequencyData && i < frequencyData.length) {
+                energy += frequencyData[i] / 255;
+                binsChecked++;
+            }
+        }
+
+        return binsChecked > 0 ? energy / binsChecked : 0;
+    }
+
+    // ============================================================================
     // SECTION 3: FIREBASE, IDENTITY, CLOCK SYNC, HEARTBEAT, ASSET PRELOAD
     // ============================================================================
 
@@ -505,13 +528,11 @@
     firebase.initializeApp(firebaseConfig);
     const db = firebase.database();
 
-    // Clock sync
     db.ref(".info/serverTimeOffset").on("value", snap => {
         serverOffset = snap.val() || 0;
         document.getElementById('sync-ind').className = 'indicator active';
     });
 
-    // Identity resolution
     async function resolveIdentity() {
         try {
             const urlParams = new URLSearchParams(window.location.search);
@@ -567,7 +588,6 @@
         }
     }
 
-    // Load neighbor map
     async function loadNeighborMap() {
         if (!mySeat) return false;
 
@@ -598,7 +618,6 @@
         }
     }
 
-    // Load tuning configuration
     async function loadTuningConfig() {
         try {
             const tuningSnap = await db.ref('tuning_mode').once('value');
@@ -649,7 +668,6 @@
         }
     }
 
-    // Heartbeat functions
     function startHeartbeat() {
         if (!mySeat) return;
         if (heartbeatInterval) clearInterval(heartbeatInterval);
@@ -698,7 +716,6 @@
         log(`💓 Heartbeat stopped for ${mySeat?.id}`);
     }
 
-    // Asset preloading
     let assetsPreloaded = false;
 
     async function preloadAssets() {
@@ -786,6 +803,7 @@
         document.getElementById('asset-progress-fill').style.width = `${percent}%`;
     }
 
+    // ============================================================================
     // SECTION 4: MICROPHONE
     // ============================================================================
 
@@ -868,6 +886,9 @@
         try {
             if (!audioCtx) {
                 audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                masterGain = audioCtx.createGain();
+                masterGain.gain.value = MASTER_PLAYBACK_GAIN;
+                masterGain.connect(audioCtx.destination);
             }
 
             if (!micStream) {
@@ -884,7 +905,7 @@
 
             const source = audioCtx.createMediaStreamSource(micStream);
             const micGain = audioCtx.createGain();
-            micGain.gain.value = 2.0;
+            micGain.gain.value = 3.0;  // Boosted mic gain
             source.connect(micGain);
 
             analyser = audioCtx.createAnalyser();
@@ -907,6 +928,7 @@
 
             log(`🎤 Microphone active (${allListeningTargets.length} listening targets)`);
             log(`   Piccolo band: ${PICCOLO_MIN_FREQ}-${PICCOLO_MAX_FREQ}Hz (bins ${binIndices.start}-${binIndices.end})`);
+            log(`   Mic gain: 3.0x, Playback gain: ${MASTER_PLAYBACK_GAIN}x`);
 
             requestAnimationFrame(detectNeighborNotes);
 
@@ -936,6 +958,7 @@
         log("🎤 Microphone disabled");
     }
 
+    // ============================================================================
     // SECTION 5: PHASE 1 MIC DELAY (Pillar Detection)
     // ============================================================================
 
@@ -977,24 +1000,7 @@
         const noteKey = `pillar_${closestNote.pillar_id}_${closestNote.ms_offset}`;
         if (processedMeasurements.has(noteKey)) return;
 
-        const frequency = getFrequencyFromMidi(closestNote.midi);
-        const targetBin = getBinForFrequency(frequency, sampleRate, fftSize);
-        const safeBin = Math.min(Math.max(0, targetBin), fftSize / 2 - 1);
-
-        let energy = 0;
-        let binsChecked = 0;
-
-        for (let i = Math.max(0, safeBin - PITCH_DETECTION_TOLERANCE_BINS);
-             i <= Math.min(fftSize / 2 - 1, safeBin + PITCH_DETECTION_TOLERANCE_BINS);
-             i++) {
-            if (frequencyData && i < frequencyData.length) {
-                energy += frequencyData[i] / 255;
-                binsChecked++;
-            }
-        }
-
-        if (binsChecked === 0) return;
-        energy = energy / binsChecked;
+        const energy = calculateEnergyAtFrequency(getFrequencyFromMidi(closestNote.midi), sampleRate, fftSize);
 
         let threshold = MIN_DETECTION_ENERGY;
         if (pillarRefBaseline > 0) {
@@ -1005,10 +1011,8 @@
             const expectedDetection = tuningStartTime + closestNote.ms_offset;
             const rawDelay = now - expectedDetection;
 
-            // For Phase 1, we don't have pillar config loaded (pillars are separate)
-            // Use default pillar speaker delay of 45ms and calculate distance
             const pillarSpeakerDelay = 45;
-            const dx = mySeat.x - 0; // Pillar FL at (0,0) - simplified
+            const dx = mySeat.x - 0;
             const dy = mySeat.y - 0;
             const distance = Math.sqrt(dx*dx + dy*dy);
             const propagationMs = (distance / SPEED_OF_SOUND) * 1000;
@@ -1058,7 +1062,8 @@
         }
     }
 
-    // SECTION 6: PHASE 2 NEIGHBOR DETECTION
+    // ============================================================================
+    // SECTION 6: PHASE 2 NEIGHBOR DETECTION with Harmonic Detection
     // ============================================================================
 
     function processDetectionWindows(now, avgEnergy, dominantFreq, ratioToBaseline) {
@@ -1072,7 +1077,7 @@
 
         let currentWindowMs = adaptiveWindowMs;
         if (calibratedSpeakerDelay === null) {
-            currentWindowMs = 500;
+            currentWindowMs = 1000;  // Wider window for initial detection
         }
 
         const candidateNotes = noteSchedule.filter(note => {
@@ -1105,44 +1110,52 @@
                         baselineSamples: [],
                         baselineComplete: false,
                         baselineEnergy: 0,
-                        expectedFreq: getFrequencyFromMidi(expectedNote.midi)
+                        expectedFreq: getFrequencyFromMidi(expectedNote.midi),
+                        falsePositiveCount: 0
                     });
+                    if (note.noteIndex < 10) {
+                        log(`🔍 WINDOW ${note.noteIndex} (${note.deviceId}) opened`);
+                    }
                 }
 
                 const windowData = detectionWindows.get(noteKey);
-                const targetBin = getBinForFrequency(windowData.expectedFreq, sampleRate, FFT_SIZE);
-                let noteEnergy = 0;
-                let binsChecked = 0;
 
-                for (let i = Math.max(0, targetBin - PITCH_DETECTION_TOLERANCE_BINS);
-                     i <= Math.min(FFT_SIZE/2 - 1, targetBin + PITCH_DETECTION_TOLERANCE_BINS);
-                     i++) {
-                    if (frequencyData && i < frequencyData.length) {
-                        noteEnergy += frequencyData[i] / 255;
-                        binsChecked++;
-                    }
-                }
-                if (binsChecked > 0) noteEnergy = noteEnergy / binsChecked;
+                // Calculate energies at fundamental and harmonics
+                const fundamentalEnergy = calculateEnergyAtFrequency(windowData.expectedFreq, sampleRate, FFT_SIZE);
+                const harmonic2Energy = calculateEnergyAtFrequency(windowData.expectedFreq * 2, sampleRate, FFT_SIZE);
+                const harmonic3Energy = calculateEnergyAtFrequency(windowData.expectedFreq * 3, sampleRate, FFT_SIZE);
+
+                // Combine energies: fundamental 100%, 2nd harmonic 50%, 3rd harmonic 25%
+                const combinedEnergy = (fundamentalEnergy + harmonic2Energy * 0.5 + harmonic3Energy * 0.25) / 1.75;
 
                 if (!windowData.baselineComplete) {
                     if (now - windowData.baselineStart < BASELINE_SAMPLES_MS) {
-                        windowData.baselineSamples.push(noteEnergy);
+                        windowData.baselineSamples.push(combinedEnergy);
                     } else {
                         if (windowData.baselineSamples.length > 0) {
                             const sorted = [...windowData.baselineSamples].sort((a, b) => a - b);
                             windowData.baselineEnergy = sorted[Math.floor(sorted.length / 2)];
                             windowData.baselineComplete = true;
+                            if (note.noteIndex < 10) {
+                                log(`   Baseline for note ${note.noteIndex}: ${windowData.baselineEnergy.toFixed(4)}`);
+                            }
                         }
                     }
                 }
 
                 if (windowData.baselineComplete) {
-                    const dynamicThreshold = Math.max(
+                    let dynamicThreshold = Math.max(
                         windowData.baselineEnergy * BASELINE_THRESHOLD_MULTIPLIER,
                         MIN_DETECTION_ENERGY
                     );
 
-                    if (noteEnergy > dynamicThreshold) {
+                    if (windowData.falsePositiveCount > 3) {
+                        dynamicThreshold *= 1.2;
+                    }
+
+                    const energyRatio = combinedEnergy / windowData.baselineEnergy;
+
+                    if (combinedEnergy > dynamicThreshold) {
                         const rawDelay = songPosition - note.startMs;
                         const playingSeatId = note.deviceId;
                         const playingX = note.originX;
@@ -1154,11 +1167,31 @@
                         const speakerDelay = rawDelay - propagationMs - (myMicDelayMs || 0);
 
                         if (speakerDelay >= -50 && speakerDelay <= 500) {
+                            if (selfSamples.length < 20) {
+                                log(`📡 DETECTED: note ${note.noteIndex} from ${playingSeatId} (${expectedNote.pitch})`);
+                                log(`   raw=${rawDelay.toFixed(1)}ms, speaker=${speakerDelay.toFixed(1)}ms, energy=${combinedEnergy.toFixed(4)} (${energyRatio.toFixed(1)}x baseline)`);
+
+                                const flash = document.getElementById('detection-flash');
+                                if (flash) {
+                                    flash.style.background = '#ffaa44';
+                                    flash.style.transform = 'scale(1.5)';
+                                    setTimeout(() => {
+                                        flash.style.background = '#333';
+                                        flash.style.transform = 'scale(1)';
+                                    }, 200);
+                                }
+                            }
+
                             reportMeasurement(note.noteIndex, playingSeatId, speakerDelay, rawDelay, propagationMs, now);
                             processedMeasurements.add(noteKey);
                             detectionWindows.delete(noteKey);
                             updateEstimatedDelay(rawDelay);
+                            windowData.falsePositiveCount = 0;
                         }
+                    } else if (combinedEnergy > windowData.baselineEnergy) {
+                        windowData.falsePositiveCount++;
+                    } else {
+                        windowData.falsePositiveCount = 0;
                     }
                 }
             } else if (detectionWindows.has(noteKey)) {
@@ -1229,6 +1262,7 @@
         consecutiveMisses = 0;
     }
 
+    // ============================================================================
     // SECTION 7: TUNING SCHEDULER AND PLAYBACK
     // ============================================================================
 
@@ -1302,102 +1336,140 @@
             }
         });
 
-        document.getElementById('device-count-value').innerText = activeDevices.length;
         return activeDevices;
     }
 
-    async function startTuningMovement() {
-        await db.ref('tuning/current').remove();
+    // ============================================================================
+    // SECTION 8: PLAYBACK FUNCTIONS with Volume Boost and Warm-Up
+    // ============================================================================
 
-        const tuningModeSnap = await db.ref('tuning_mode').once('value');
-        const tuningModeData = tuningModeSnap.val();
-
-        if (!tuningModeData || !tuningModeData.piano_notes) {
-            log("No tuning configuration found. Please upload via admin.html", 'error');
-            alert("No tuning configuration found. Please upload via admin.html");
+    function playTuningWarmUp() {
+        if (!PICCOLO_URL || !bufferCache[PICCOLO_URL]) {
             return;
         }
 
-        noteTimings = tuningModeData.piano_notes.map((note, index) => ({
-            index: index,
-            startMs: note.ms_offset,
-            durationMs: note.duration_ms || 500,
-            measure: note.measure,
-            id: note.id,
-            pitch: note.pitch
-        }));
-
-        if (tuningModeData.assets && tuningModeData.assets.piccolo) {
-            PICCOLO_URL = tuningModeData.assets.piccolo;
-        }
-
-        if (!PICCOLO_URL) {
-            log("No piccolo URL configured in tuning_mode.json", 'error');
-            alert("No piccolo URL configured in tuning_mode.json");
+        if (!audioCtx || audioCtx.state !== 'running') {
             return;
         }
 
-        await refreshActiveDevices();
+        try {
+            const source = audioCtx.createBufferSource();
+            source.buffer = bufferCache[PICCOLO_URL];
 
-        if (activeDevices.length === 0) {
-            log("No active devices found!", 'error');
-            alert("No active devices found!");
-            return;
+            const gainNode = audioCtx.createGain();
+            gainNode.gain.setValueAtTime(0, audioCtx.currentTime);  // SILENT
+
+            source.connect(gainNode);
+            gainNode.connect(masterGain || audioCtx.destination);
+
+            source.start(0);
+            source.stop(audioCtx.currentTime + (TUNING_WARMUP_MS / 1000));
+
+            log(`🔊 Tuning warm-up (${TUNING_WARMUP_MS}ms silent)`);
+
+        } catch (e) {
+            log(`⚠️ Tuning warm-up failed: ${e.message}`);
         }
-
-        const deviceOrder = createSpiralPath(activeDevices);
-        if (deviceOrder.length === 0) {
-            log("No active patron devices found for piccolo path", 'error');
-            alert("No active patron devices found for piccolo path");
-            return;
-        }
-
-        const tuningSchedule = distributeNotes(deviceOrder);
-        const nowWall = Date.now() + serverOffset;
-        const tuningStartTimeAbs = nowWall + 10000;
-
-        log(`📡 Writing tuning/current with startTime: ${tuningStartTimeAbs}`);
-
-        const tuningCurrentObj = {
-            status: 'ACTIVE',
-            piccoloUrl: PICCOLO_URL,
-            schedule: tuningSchedule.notes,
-            deviceOrder: deviceOrder,
-            startTime: tuningStartTimeAbs,
-            totalNotes: tuningSchedule.totalNotes,
-            deviceCount: tuningSchedule.deviceCount,
-            generatedAt: Date.now() + serverOffset,
-            activeDevices: activeDevices.map(d => ({ id: d.id, x: d.x, y: d.y }))
-        };
-
-        if (tuningModeData.pillar_notes && tuningModeData.pillar_notes.length > 0) {
-            tuningCurrentObj.pillar_notes = tuningModeData.pillar_notes;
-        }
-
-        if (tuningModeData.metadata && tuningModeData.metadata.pillar_cal_windows) {
-            tuningCurrentObj.metadata = tuningCurrentObj.metadata || {};
-            tuningCurrentObj.metadata.pillar_cal_windows = tuningModeData.metadata.pillar_cal_windows;
-        }
-
-        await db.ref('tuning/current').set(tuningCurrentObj);
-
-        await db.ref('show/currentCue').set({
-            type: "TUNING_MOVEMENT",
-            file: PICCOLO_URL,
-            startTime: tuningStartTimeAbs
-        });
-
-        calibrationMode = true;
-        document.getElementById('tuning-progress').style.display = 'block';
-        log(`🎯 Tuning started: ${deviceOrder.length} devices, ${noteTimings.length} notes`);
     }
 
-    // SECTION 8: ITERATIVE CALIBRATION
+    function playSingleNote(note) {
+        if (!PICCOLO_URL || !bufferCache[PICCOLO_URL]) return;
+
+        const source = audioCtx.createBufferSource();
+        source.buffer = bufferCache[PICCOLO_URL];
+
+        const gainNode = audioCtx.createGain();
+        gainNode.gain.setValueAtTime(MASTER_PLAYBACK_GAIN, audioCtx.currentTime);
+
+        source.connect(gainNode);
+        gainNode.connect(masterGain || audioCtx.destination);
+
+        const seekSeconds = note.startMs / 1000;
+        const durationSeconds = note.durationMs / 1000;
+
+        source.start(0, seekSeconds);
+
+        gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + durationSeconds - 0.03);
+        source.stop(audioCtx.currentTime + durationSeconds);
+
+        animateNoteBrightness(note.durationMs);
+    }
+
+    function schedulePhase2Notes(pieceStartTime, speakerDelayMs) {
+        let effectiveSpeakerDelay = speakerDelayMs;
+        if (effectiveSpeakerDelay === null || effectiveSpeakerDelay === undefined || effectiveSpeakerDelay === 0) {
+            effectiveSpeakerDelay = estimatedDeviceDelayMs;
+        }
+
+        const nowWall = Date.now() + serverOffset;
+        let firstNoteLogged = false;
+        let scheduledCount = 0;
+
+        scheduledTimeouts.forEach(({ timeoutId }) => clearTimeout(timeoutId));
+        scheduledTimeouts = [];
+
+        const firstNote = assignedNotes[0];
+        if (firstNote) {
+            const firstAbsoluteTime = pieceStartTime + firstNote.startMs;
+            const firstAdjustedTime = firstAbsoluteTime - effectiveSpeakerDelay;
+            const firstDelayMs = firstAdjustedTime - nowWall;
+
+            // Schedule warm-up with gap before first note
+            const warmUpEndTime = firstAdjustedTime - WARMUP_TO_PLAYBACK_GAP_MS;
+            const warmUpStartTime = warmUpEndTime - TUNING_WARMUP_MS;
+            const warmUpDelayMs = warmUpStartTime - nowWall;
+
+            if (warmUpDelayMs > 0) {
+                const warmUpTimeout = setTimeout(() => {
+                    playTuningWarmUp();
+                }, warmUpDelayMs);
+                activeTimeouts.push(warmUpTimeout);
+
+                log(`📅 Warm-up: starts in ${(warmUpDelayMs/1000).toFixed(2)}s, ends ${WARMUP_TO_PLAYBACK_GAP_MS}ms before first note`);
+            } else if (warmUpDelayMs > -100) {
+                log(`⚠️ Warm-up would be late (${Math.round(-warmUpDelayMs)}ms), playing immediately`);
+                playTuningWarmUp();
+            }
+        }
+
+        assignedNotes.forEach(note => {
+            const absoluteTime = pieceStartTime + note.startMs;
+            const adjustedTime = absoluteTime - effectiveSpeakerDelay;
+            const delayMs = adjustedTime - nowWall;
+
+            if (delayMs > 0) {
+                const timeoutId = setTimeout(() => playSingleNote(note), delayMs);
+                scheduledTimeouts.push({ noteIndex: note.noteIndex, timeoutId, adjustedTime });
+                scheduledCount++;
+
+                if (!firstNoteLogged && note.noteIndex === firstNote?.noteIndex) {
+                    log(`📅 First note (index ${note.noteIndex}) scheduled with speaker delay ${effectiveSpeakerDelay.toFixed(1)}ms`);
+                    firstNoteLogged = true;
+                }
+            } else if (delayMs > -500) {
+                playSingleNote(note);
+                scheduledCount++;
+            }
+        });
+
+        log(`📅 Scheduled ${scheduledCount}/${assignedNotes.length} notes`);
+    }
+
+    function animateNoteBrightness(durationMs) {
+        const canvas = document.getElementById('stage-canvas');
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        setTimeout(() => { ctx.fillStyle = 'rgba(255, 255, 255, 0.5)'; ctx.fillRect(0, 0, canvas.width, canvas.height); }, durationMs / 2);
+        setTimeout(() => { ctx.fillStyle = 'rgba(255, 255, 255, 0.1)'; ctx.fillRect(0, 0, canvas.width, canvas.height); }, durationMs * 0.75);
+        setTimeout(() => { ctx.clearRect(0, 0, canvas.width, canvas.height); }, durationMs);
+    }
+
+    // ============================================================================
+    // SECTION 9: ITERATIVE CALIBRATION
     // ============================================================================
 
     function listenForTimingReports() {
-        if (mySeat.id.startsWith('PILLAR_')) return;
-
         log("👂 Starting to listen for timing reports about this device");
 
         db.ref('measurements').on('child_added', (noteSnap) => {
@@ -1430,59 +1502,12 @@
     }
 
     async function startIterativeCalibration() {
-        log("🎵 Starting iterative tuning calibration");
+        log(`🎵 Starting iterative tuning calibration`);
         log(`   Target sync: ±${targetSyncWindowMs}ms, Max iterations: ${maxIterations}`);
-
-        const waitForPhase1 = () => {
-            return new Promise((resolve) => {
-                if (phase1Complete) {
-                    resolve();
-                    return;
-                }
-
-                if (pillarWindows.length === 0) {
-                    log("⚠️ No pillar windows, skipping Phase 1 wait");
-                    phase1Complete = true;
-                    myMicDelayMs = 0;
-                    resolve();
-                    return;
-                }
-
-                const lastWindow = pillarWindows[pillarWindows.length - 1];
-                const phase1EndTime = tuningStartTime + lastWindow.end_ms;
-                const now = Date.now() + serverOffset;
-                const timeUntilPhase1End = Math.max(0, phase1EndTime - now);
-
-                const fallbackTimeout = setTimeout(() => {
-                    if (!phase1Complete) {
-                        log(`⚠️ Phase 1 timeout - proceeding with micDelay=0`);
-                        phase1Complete = true;
-                        myMicDelayMs = 0;
-                        clearInterval(checkInterval);
-                        resolve();
-                    }
-                }, timeUntilPhase1End + 1000);
-
-                const checkInterval = setInterval(() => {
-                    if (phase1Complete) {
-                        clearInterval(checkInterval);
-                        clearTimeout(fallbackTimeout);
-                        resolve();
-                    }
-                }, 100);
-            });
-        };
-
-        await waitForPhase1();
-
-        if (!PICCOLO_URL) {
-            log("❌ No piccolo URL available for iterative calibration");
-            return;
-        }
+        log(`   Mic delay: ${myMicDelayMs?.toFixed(1) || '0'}ms`);
 
         calibrationIteration = 0;
         iterationActive = true;
-        iterationPillarEstimates = [];
         iterationNeighborEstimates = [];
         iterationFinalDelays = [];
         iterationHasNeighbors = false;
@@ -1514,18 +1539,13 @@
         processedMeasurements.clear();
         selfSamples = [];
 
-        let speakerDelayForIteration = 0;
+        let speakerDelayForIteration;
         if (calibratedSpeakerDelay !== null && calibrationIteration > 1) {
-            const lastError = getLastTimingError();
-            if (lastError !== null) {
-                const correction = lastError * 0.3;
-                speakerDelayForIteration = Math.max(0, calibratedSpeakerDelay + correction);
-                log(`   Applying correction: ${correction > 0 ? '+' : ''}${correction.toFixed(1)}ms → new delay: ${speakerDelayForIteration.toFixed(1)}ms`);
-            } else {
-                speakerDelayForIteration = calibratedSpeakerDelay;
-            }
-        } else if (calibratedSpeakerDelay !== null) {
             speakerDelayForIteration = calibratedSpeakerDelay;
+            log(`   Using previous speaker delay: ${speakerDelayForIteration.toFixed(1)}ms`);
+        } else if (calibrationIteration === 1) {
+            speakerDelayForIteration = 0;
+            log(`   First iteration - using initial delay: 0ms (will use default 261ms)`);
         } else {
             speakerDelayForIteration = estimatedDeviceDelayMs;
         }
@@ -1552,36 +1572,53 @@
         iterationPlaybackScheduled = true;
 
         const totalDurationMs = currentTuningSchedule?.metadata?.total_duration_ms || 182571;
-        const iterationStartTimeAbs = tuningStartTime + (calibrationIteration - 1) * totalDurationMs;
         const nowWall = Date.now() + serverOffset;
 
-        let finalStartTime = iterationStartTimeAbs;
-        if (finalStartTime < nowWall) {
-            const timeSinceStart = nowWall - tuningStartTime;
-            const cyclesCompleted = Math.floor(timeSinceStart / totalDurationMs);
-            finalStartTime = tuningStartTime + (cyclesCompleted + 1) * totalDurationMs;
+        let iterationStartTimeAbs;
+        if (calibrationIteration === 1) {
+            iterationStartTimeAbs = tuningStartTime;
+        } else {
+            const previousEndTime = tuningStartTime + (calibrationIteration - 1) * totalDurationMs;
+            iterationStartTimeAbs = previousEndTime + iterationPauseMs;
         }
 
-        const delayToStart = finalStartTime - nowWall;
+        const delayToStart = iterationStartTimeAbs - nowWall;
 
         log(`📅 Iteration ${calibrationIteration} playback:`);
         log(`   Speaker delay: ${speakerDelayMs.toFixed(1)}ms`);
+        log(`   Start time: ${new Date(iterationStartTimeAbs).toISOString().substr(11, 12)}`);
+        log(`   Delay to start: ${delayToStart.toFixed(0)}ms`);
+
+        // Schedule warm-up with gap before iteration starts
+        if (delayToStart > (TUNING_WARMUP_MS + WARMUP_TO_PLAYBACK_GAP_MS)) {
+            const warmUpStartTime = iterationStartTimeAbs - TUNING_WARMUP_MS - WARMUP_TO_PLAYBACK_GAP_MS;
+            const warmUpDelay = warmUpStartTime - nowWall;
+            if (warmUpDelay > 0) {
+                const warmUpTimeout = setTimeout(() => {
+                    playTuningWarmUp();
+                    log(`🔊 Iteration ${calibrationIteration} warm-up (${TUNING_WARMUP_MS}ms silent)`);
+                }, warmUpDelay);
+                activeTimeouts.push(warmUpTimeout);
+            }
+        }
 
         if (delayToStart > 0) {
             const playbackTimeout = setTimeout(() => {
-                activeAudioCues.forEach(cue => { if (cue.source) try { cue.source.stop(); } catch(e) {} });
+                log(`🔊 Starting MP3 playback for iteration ${calibrationIteration}`);
+
+                activeAudioCues.forEach(cue => {
+                    if (cue.source) try { cue.source.stop(); } catch(e) {}
+                });
                 activeAudioCues = [];
 
-                if (assignedNotes.length > 0) {
-                    schedulePhase2Notes(finalStartTime, speakerDelayMs);
-                }
+                schedulePhase2Notes(iterationStartTimeAbs, speakerDelayMs);
+
                 iterationPlaybackScheduled = false;
             }, delayToStart);
             activeTimeouts.push(playbackTimeout);
         } else {
-            if (assignedNotes.length > 0) {
-                schedulePhase2Notes(finalStartTime, speakerDelayMs);
-            }
+            log(`⚠️ Starting playback immediately (${Math.round(-delayToStart)}ms late)`);
+            schedulePhase2Notes(iterationStartTimeAbs, speakerDelayMs);
             iterationPlaybackScheduled = false;
         }
     }
@@ -1593,8 +1630,7 @@
         if (recentErrors.length === 0) return null;
 
         const errors = recentErrors.map(e => e.error);
-        const median = calculateMedian(errors);
-        return median;
+        return calculateMedian(errors);
     }
 
     function evaluateIteration() {
@@ -1605,30 +1641,46 @@
 
         if (selfSamples.length >= minSelfSamples) {
             iterationHasNeighbors = true;
-            const recentSamples = selfSamples.slice(-minSelfSamples);
-            const mean = recentSamples.reduce((a,b) => a+b, 0) / recentSamples.length;
-            const variance = recentSamples.reduce((a,b) => a + Math.pow(b - mean, 2), 0) / recentSamples.length;
+            const medianDelay = calculateMedian(selfSamples);
+            const mean = selfSamples.reduce((a,b) => a+b, 0) / selfSamples.length;
+            const variance = selfSamples.reduce((a,b) => a + Math.pow(b - mean, 2), 0) / selfSamples.length;
             stdDev = Math.sqrt(variance);
-            neighborDelayEstimate = mean;
+            neighborDelayEstimate = medianDelay;
+
             log(`📊 Neighbor estimate: ${neighborDelayEstimate.toFixed(1)}ms from ${selfSamples.length} samples, σ=${stdDev.toFixed(1)}ms`);
             iterationNeighborEstimates.push(neighborDelayEstimate);
         } else {
-            iterationNeighborEstimates.push(null);
             log(`⚠️ Insufficient neighbor samples (${selfSamples.length}/${minSelfSamples})`);
+            iterationNeighborEstimates.push(null);
         }
 
-        let finalDelay = neighborDelayEstimate;
-        if (finalDelay === null && calibrationIteration === 1) {
-            finalDelay = estimatedDeviceDelayMs;
-            log(`   Using default estimate: ${finalDelay}ms`);
-        }
+        const timingError = getLastTimingError();
+        let newDelay = null;
 
-        if (finalDelay !== null) {
+        if (neighborDelayEstimate !== null) {
             if (calibratedSpeakerDelay === null) {
-                calibratedSpeakerDelay = finalDelay;
+                newDelay = neighborDelayEstimate;
             } else {
-                calibratedSpeakerDelay = calibratedSpeakerDelay * 0.3 + finalDelay * 0.7;
+                const error = neighborDelayEstimate - calibratedSpeakerDelay;
+                const correction = error * 0.3;
+                newDelay = calibratedSpeakerDelay + correction;
+                log(`   Correction: ${error > 0 ? '+' : ''}${error.toFixed(1)}ms → ${correction > 0 ? '+' : ''}${correction.toFixed(1)}ms → new delay: ${newDelay.toFixed(1)}ms`);
             }
+        } else if (timingError !== null && Math.abs(timingError) < 100) {
+            if (calibratedSpeakerDelay === null) {
+                newDelay = Math.max(0, -timingError);
+            } else {
+                const correction = -timingError * 0.3;
+                newDelay = calibratedSpeakerDelay + correction;
+                log(`   Timing error correction: ${timingError > 0 ? '+' : ''}${timingError.toFixed(1)}ms → new delay: ${newDelay.toFixed(1)}ms`);
+            }
+        } else if (calibrationIteration === 1) {
+            newDelay = estimatedDeviceDelayMs;
+            log(`   No data, using default: ${newDelay}ms`);
+        }
+
+        if (newDelay !== null) {
+            calibratedSpeakerDelay = Math.max(0, Math.min(500, newDelay));
             iterationFinalDelays.push(calibratedSpeakerDelay);
 
             log(`📊 Updated speaker delay: ${calibratedSpeakerDelay.toFixed(1)}ms (iteration ${calibrationIteration})`);
@@ -1660,7 +1712,9 @@
             activeTimeouts.forEach(t => clearTimeout(t));
             activeTimeouts = [];
 
-            activeAudioCues.forEach(cue => { if (cue.source) try { cue.source.stop(); } catch(e) {} });
+            activeAudioCues.forEach(cue => {
+                if (cue.source) try { cue.source.stop(); } catch(e) {}
+            });
             activeAudioCues = [];
 
             if (iterationTimeout) clearTimeout(iterationTimeout);
@@ -1677,8 +1731,6 @@
         if (iterationFinalDelays.length < 2) return false;
 
         const recentDelays = iterationFinalDelays.slice(-3);
-        if (recentDelays.length < 2) return false;
-
         const stdDev = calculateStdDev(recentDelays);
         const lastError = getLastTimingError();
 
@@ -1714,9 +1766,11 @@
         log(`✅✅✅ CALIBRATION COMPLETE ✅✅✅`);
         log(`   Iterations: ${calibrationIteration}`);
         log(`   Final speaker delay: ${calibratedSpeakerDelay.toFixed(1)}ms`);
-        log(`   Mic delay: ${myMicDelayMs?.toFixed(1) || 'unknown'}ms`);
+        log(`   Mic delay: ${myMicDelayMs?.toFixed(1) || '0'}ms`);
+        log(`   Neighbor samples: ${selfSamples.length}`);
 
         isHappy = true;
+
         db.ref(`devices/${mySeat.id}`).update({
             status: 'HAPPY',
             calibrationIterations: calibrationIteration,
@@ -1733,6 +1787,7 @@
         });
 
         document.getElementById('debug-status').innerHTML = 'HAPPY ✓';
+        document.getElementById('debug-speaker-delay').innerText = calibratedSpeakerDelay.toFixed(1) + 'ms';
 
         const flash = document.getElementById('detection-flash');
         if (flash) {
@@ -1741,73 +1796,89 @@
         }
     }
 
-    function schedulePhase2Notes(pieceStartTime, speakerDelayMs) {
-        let effectiveSpeakerDelay = speakerDelayMs;
-        if (effectiveSpeakerDelay === null || effectiveSpeakerDelay === undefined || effectiveSpeakerDelay === 0) {
-            effectiveSpeakerDelay = estimatedDeviceDelayMs;
-        }
+    // ============================================================================
+    // SECTION 10: TUNING LISTENER
+    // ============================================================================
 
-        const nowWall = Date.now() + serverOffset;
-        let firstNoteLogged = false;
-        let scheduledCount = 0;
+    function initTuningListener() {
+        db.ref('tuning/current').on('value', async snap => {
+            const schedule = snap.val();
 
-        scheduledTimeouts.forEach(({ timeoutId }) => clearTimeout(timeoutId));
-        scheduledTimeouts = [];
+            if (tuningStartTime && tuningStartTime !== schedule?.startTime) {
+                log(`⚠️ New tuning schedule received during active session - reloading`);
+                location.reload();
+                return;
+            }
 
-        assignedNotes.forEach(note => {
-            const absoluteTime = pieceStartTime + note.startMs;
-            const adjustedTime = absoluteTime - effectiveSpeakerDelay;
-            const delayMs = adjustedTime - nowWall;
+            if (tuningStartTime) {
+                log(`⚠️ Tuning already active, ignoring duplicate`);
+                return;
+            }
 
-            if (delayMs > 0) {
-                const timeoutId = setTimeout(() => playSingleNote(note), delayMs);
-                scheduledTimeouts.push({ noteIndex: note.noteIndex, timeoutId, adjustedTime });
-                scheduledCount++;
-
-                if (!firstNoteLogged) {
-                    log(`📅 First note (index ${note.noteIndex}) scheduled with speaker delay ${effectiveSpeakerDelay.toFixed(1)}ms`);
-                    firstNoteLogged = true;
+            if (schedule && schedule.status === 'ACTIVE') {
+                if (!schedule.startTime || schedule.startTime < Date.now() + serverOffset - 60000) {
+                    log(`❌ Invalid startTime - rejecting schedule`);
+                    return;
                 }
-            } else if (delayMs > -500) {
-                playSingleNote(note);
-                scheduledCount++;
+
+                calibrationMode = true;
+                currentTuningSchedule = schedule;
+                tuningStartTime = schedule.startTime;
+
+                if (schedule.schedule) {
+                    noteSchedule = schedule.schedule.map(note => ({
+                        ...note,
+                        startMs: parseFloat(note.startMs),
+                        durationMs: parseFloat(note.durationMs)
+                    }));
+
+                    assignedNotes = noteSchedule.filter(note => note.deviceId === mySeat.id);
+                    log(`🎯 This device assigned ${assignedNotes.length} notes for tuning`);
+                }
+
+                if (schedule.pillar_notes) {
+                    pillarNoteSchedule = schedule.pillar_notes;
+                }
+
+                if (schedule.metadata && schedule.metadata.pillar_cal_windows) {
+                    pillarWindows = schedule.metadata.pillar_cal_windows;
+                    phase1EndMs = pillarWindows[pillarWindows.length - 1].end_ms;
+                }
+
+                phase1Complete = false;
+                phase1WindowActive = true;
+                micDelaySamples = [];
+                myMicDelayMs = null;
+                currentPillarWindow = pillarWindows[0];
+
+                log(`🎤 Phase 1 window: listening for ${currentPillarWindow.pillar_id} from ${currentPillarWindow.start_ms}ms to ${currentPillarWindow.end_ms}ms`);
+
+                await enableMicrophone();
+
+                const phase1Duration = pillarWindows[pillarWindows.length - 1].end_ms;
+                setTimeout(() => {
+                    if (phase1WindowActive && !phase1Complete) {
+                        phase1WindowActive = false;
+                        phase1Complete = true;
+                        if (micDelaySamples.length === 0) {
+                            myMicDelayMs = 0;
+                            log(`⚠️ Phase 1 closed with no samples - using 0ms mic delay`);
+                        } else {
+                            myMicDelayMs = calculateMedian(micDelaySamples);
+                            log(`🎤 Phase 1 complete: mic delay = ${myMicDelayMs.toFixed(1)}ms from ${micDelaySamples.length} samples`);
+                        }
+
+                        startIterativeCalibration();
+                    }
+                }, phase1Duration);
+
+                log("🎧 Starting Phase 1 - listening for pillars...");
             }
         });
-
-        log(`📅 Scheduled ${scheduledCount}/${assignedNotes.length} notes`);
     }
 
-    function playSingleNote(note) {
-        if (!PICCOLO_URL || !bufferCache[PICCOLO_URL]) return;
-
-        const source = audioCtx.createBufferSource();
-        source.buffer = bufferCache[PICCOLO_URL];
-
-        const gainNode = audioCtx.createGain();
-        source.connect(gainNode).connect(audioCtx.destination);
-
-        const seekSeconds = note.startMs / 1000;
-        const durationSeconds = note.durationMs / 1000;
-
-        source.start(0, seekSeconds);
-        gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime);
-        gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + durationSeconds);
-        source.stop(audioCtx.currentTime + durationSeconds);
-
-        animateNoteBrightness(note.durationMs);
-    }
-
-    function animateNoteBrightness(durationMs) {
-        const canvas = document.getElementById('stage-canvas');
-        const ctx = canvas.getContext('2d');
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        setTimeout(() => { ctx.fillStyle = 'rgba(255, 255, 255, 0.5)'; ctx.fillRect(0, 0, canvas.width, canvas.height); }, durationMs / 2);
-        setTimeout(() => { ctx.fillStyle = 'rgba(255, 255, 255, 0.1)'; ctx.fillRect(0, 0, canvas.width, canvas.height); }, durationMs * 0.75);
-        setTimeout(() => { ctx.clearRect(0, 0, canvas.width, canvas.height); }, durationMs);
-    }
-
-    // SECTION 9: DETECTION LOOP
+    // ============================================================================
+    // SECTION 11: DETECTION LOOP
     // ============================================================================
 
     function detectNeighborNotes() {
@@ -1842,7 +1913,8 @@
         requestAnimationFrame(detectNeighborNotes);
     }
 
-    // SECTION 10: SHOW PLAYBACK
+    // ============================================================================
+    // SECTION 12: SHOW PLAYBACK
     // ============================================================================
 
     let wakeLock = null;
@@ -1867,7 +1939,6 @@
 
         const speakerDelayMs = calibratedSpeakerDelay !== null ? calibratedSpeakerDelay : 0;
         const micDelayMs = myMicDelayMs !== null ? myMicDelayMs : 0;
-        const totalDelayMs = speakerDelayMs + micDelayMs;
 
         log(`🎬 MOVEMENT START: "${cue.movement}"`);
         log(`   Speaker delay = ${speakerDelayMs.toFixed(1)}ms, Mic delay = ${micDelayMs.toFixed(1)}ms`);
@@ -1950,7 +2021,8 @@
         source.buffer = bufferCache[url];
         const gainNode = audioCtx.createGain();
         gainNode.gain.setValueAtTime(cue.gain || 1.0, audioCtx.currentTime);
-        source.connect(gainNode).connect(audioCtx.destination);
+        source.connect(gainNode);
+        gainNode.connect(masterGain || audioCtx.destination);
         source.start(0);
         activeAudioCues.push({ ...cue, source, gainNode, startTime: cue.startTime, localStartTime: Date.now() });
     }
@@ -2041,7 +2113,8 @@
                         source.buffer = audioBuf;
                         const gainNode = audioCtx.createGain();
                         gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime);
-                        source.connect(gainNode).connect(audioCtx.destination);
+                        source.connect(gainNode);
+                        gainNode.connect(masterGain || audioCtx.destination);
                         source.start(0);
                     }).catch(e => log(`Failed to play test pulse: ${e.message}`));
                 } else {
@@ -2049,7 +2122,8 @@
                     source.buffer = bufferCache[url];
                     const gainNode = audioCtx.createGain();
                     gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime);
-                    source.connect(gainNode).connect(audioCtx.destination);
+                    source.connect(gainNode);
+                    gainNode.connect(masterGain || audioCtx.destination);
                     source.start(0);
                 }
                 activeTimeouts = activeTimeouts.filter(id => id !== timeoutId);
@@ -2058,150 +2132,109 @@
         }
     }
 
-    // SECTION 11: TUNING LISTENER
+    // ============================================================================
+    // SECTION 13: START TUNING MOVEMENT
     // ============================================================================
 
-    function initTuningListener() {
-        db.ref('tuning/current').on('value', snap => {
-            const schedule = snap.val();
+    async function startTuningMovement() {
+        await db.ref('tuning/current').remove();
 
-            if (tuningStartTime) {
-                log(`⚠️ Tuning playback already started, skipping duplicate tuning/current trigger`);
-                return;
+        const tuningModeSnap = await db.ref('tuning_mode').once('value');
+        const tuningModeData = tuningModeSnap.val();
+
+        if (!tuningModeData || !tuningModeData.piano_notes) {
+            log("No tuning configuration found", 'error');
+            alert("No tuning configuration found");
+            return;
+        }
+
+        noteTimings = tuningModeData.piano_notes.map((note, index) => ({
+            index: index,
+            startMs: note.ms_offset,
+            durationMs: note.duration_ms || 500,
+            measure: note.measure,
+            pitch: note.pitch,
+            midi: note.midi
+        }));
+
+        if (tuningModeData.pillar_notes) {
+            pillarNoteSchedule = tuningModeData.pillar_notes.map(note => ({
+                pillar_id: note.pillar_id,
+                index: note.index,
+                ms_offset: note.ms_offset,
+                duration_ms: note.duration_ms,
+                pitch: note.pitch,
+                midi: note.midi
+            }));
+            log(`📡 Loaded ${pillarNoteSchedule.length} pillar notes`);
+        }
+
+        if (tuningModeData.metadata && tuningModeData.metadata.pillar_cal_windows) {
+            pillarWindows = tuningModeData.metadata.pillar_cal_windows;
+            phase1EndMs = pillarWindows[pillarWindows.length - 1].end_ms;
+            log(`📡 Loaded ${pillarWindows.length} calibration windows, Phase 1 ends at ${phase1EndMs}ms`);
+        }
+
+        if (tuningModeData.assets && tuningModeData.assets.piccolo) {
+            PICCOLO_URL = tuningModeData.assets.piccolo;
+        }
+
+        if (!PICCOLO_URL) {
+            log("No piccolo URL configured", 'error');
+            alert("No piccolo URL configured");
+            return;
+        }
+
+        await refreshActiveDevices();
+        if (activeDevices.length === 0) {
+            log("No active devices found!", 'error');
+            alert("No active devices found!");
+            return;
+        }
+
+        const deviceOrder = createSpiralPath(activeDevices);
+        if (deviceOrder.length === 0) {
+            log("No active patron devices found", 'error');
+            alert("No active patron devices found");
+            return;
+        }
+
+        const tuningSchedule = distributeNotes(deviceOrder);
+        const nowWall = Date.now() + serverOffset;
+        const tuningStartTimeAbs = nowWall + 5000;
+
+        log(`📡 Writing tuning/current with startTime: ${tuningStartTimeAbs}`);
+
+        const tuningCurrentObj = {
+            status: 'ACTIVE',
+            piccoloUrl: PICCOLO_URL,
+            schedule: tuningSchedule.notes,
+            deviceOrder: deviceOrder,
+            startTime: tuningStartTimeAbs,
+            totalNotes: tuningSchedule.totalNotes,
+            deviceCount: tuningSchedule.deviceCount,
+            generatedAt: Date.now() + serverOffset,
+            pillar_notes: pillarNoteSchedule,
+            metadata: {
+                pillar_cal_windows: pillarWindows,
+                total_duration_ms: tuningModeData.metadata?.total_duration_ms || 182571
             }
+        };
 
-            if (schedule && schedule.status === 'ACTIVE') {
-                if (!schedule.startTime || schedule.startTime < Date.now() + serverOffset - 60000 || schedule.startTime > Date.now() + serverOffset + 60000) {
-                    log(`❌ Invalid startTime in schedule - rejecting schedule`);
-                    return;
-                }
+        await db.ref('tuning/current').set(tuningCurrentObj);
 
-                calibrationMode = true;
-                currentTuningSchedule = schedule;
-                tuningStartTime = schedule.startTime;
-
-                if (mySeat.id.startsWith('PILLAR_')) {
-                    log(`🏛️ Pillar device detected - but pillars should use epillar.html`);
-                    return;
-                }
-
-                if (schedule.schedule) {
-                    noteSchedule = schedule.schedule.map(note => ({
-                        ...note,
-                        startMs: parseFloat(note.startMs),
-                        durationMs: parseFloat(note.durationMs)
-                    }));
-
-                    expectedNoteMap.clear();
-                    noteSchedule.forEach(note => {
-                        expectedNoteMap.set(note.noteIndex, note.deviceId);
-                    });
-
-                    assignedNotes = noteSchedule
-                        .filter(note => note.deviceId === mySeat.id)
-                        .map(note => ({
-                            ...note,
-                            startMs: parseFloat(note.startMs),
-                            durationMs: parseFloat(note.durationMs)
-                        }));
-
-                    log(`🎯 This device assigned ${assignedNotes.length} notes for tuning`);
-                    log(`   Listening for notes from ${allListeningTargets.length} neighbors`);
-
-                    document.getElementById('debug-listening-to').innerText = allListeningTargets.length;
-                    document.getElementById('debug-measurements').innerText = noteSchedule.length;
-                }
-
-                if (schedule.pillar_notes && Array.isArray(schedule.pillar_notes)) {
-                    pillarNoteSchedule = schedule.pillar_notes.map(note => ({
-                        ...note,
-                        ms_offset: parseFloat(note.ms_offset),
-                        duration_ms: parseFloat(note.duration_ms),
-                        pulse_ms: parseFloat(note.pulse_ms)
-                    }));
-                    log(`📡 Loaded ${pillarNoteSchedule.length} pillar notes from tuning schedule`);
-                }
-
-                if (schedule.metadata && schedule.metadata.pillar_cal_windows) {
-                    pillarWindows = schedule.metadata.pillar_cal_windows;
-                    log(`🎯 Loaded ${pillarWindows.length} pillar calibration windows from metadata`);
-                }
-
-                phase1Complete = false;
-                phase1WindowActive = true;
-                micDelaySamples = [];
-                myMicDelayMs = null;
-                currentPillarWindowIndex = 0;
-
-                if (myMicDelayMs === null && typeof estimatedDeviceDelayMs !== 'undefined') {
-                    myMicDelayMs = estimatedDeviceDelayMs;
-                    log(`📊 Using initial mic delay estimate: ${myMicDelayMs}ms`);
-                }
-
-                if (pillarWindows.length > 0 && pillarNoteSchedule.length > 0) {
-                    currentPillarWindow = pillarWindows[0];
-                    const windowStartAbs = tuningStartTime + currentPillarWindow.start_ms;
-                    const windowEndAbs = tuningStartTime + currentPillarWindow.end_ms;
-                    currentWindowEndTime = windowEndAbs;
-                    log(`🎤 Phase 1 window open: listening for ${currentPillarWindow.pillar_id} from ${(currentPillarWindow.start_ms/1000).toFixed(1)}s to ${(currentPillarWindow.end_ms/1000).toFixed(1)}s`);
-                } else {
-                    log(`⚠️ No pillar windows available - Phase 1 mic calibration will be skipped`);
-                    phase1Complete = true;
-                    myMicDelayMs = 0;
-                }
-
-                if (pillarWindows.length > 0) {
-                    const lastWindow = pillarWindows[pillarWindows.length - 1];
-                    const phase1Duration = lastWindow.end_ms;
-
-                    setTimeout(() => {
-                        if (phase1WindowActive && !phase1Complete) {
-                            phase1WindowActive = false;
-                            phase1Complete = true;
-                            if (micDelaySamples.length === 0) {
-                                myMicDelayMs = 0;
-                                log(`⚠️ Phase 1 window closed with no samples - using fallback mic delay: 0ms`);
-                            } else {
-                                myMicDelayMs = calculateMedian(micDelaySamples);
-                                log(`🎤 Phase 1 complete: mic delay = ${myMicDelayMs.toFixed(1)}ms from ${micDelaySamples.length} samples`);
-                            }
-
-                            db.ref(`devices/${mySeat.id}/calibration`).update({
-                                micDelayMs: Math.round(myMicDelayMs || 0),
-                                micDelaySamples: micDelaySamples.length,
-                                micDelayDerivedAt: Date.now() + serverOffset
-                            });
-
-                            document.getElementById('debug-mic-delay').innerText = myMicDelayMs ? `${myMicDelayMs.toFixed(1)}ms` : '0ms (fallback)';
-                            document.getElementById('debug-phase1-samples').innerText = micDelaySamples.length;
-                        }
-
-                        if (!phase2PlaybackStarted && assignedNotes.length > 0) {
-                            const currentSpeakerEstimate = calibratedSpeakerDelay !== null ? calibratedSpeakerDelay : 0;
-                            log(`🎵 Phase 1 complete. Scheduling ${assignedNotes.length} Phase 2 notes with speaker delay ${currentSpeakerEstimate}ms`);
-                            schedulePhase2Notes(tuningStartTime, currentSpeakerEstimate);
-                            phase2PlaybackStarted = true;
-                        }
-                    }, phase1Duration);
-                }
-
-                if (schedule.piccoloUrl) {
-                    PICCOLO_URL = schedule.piccoloUrl;
-                }
-
-                pillarRefBaseline = 0;
-                pillarRefBaselineSamples = [];
-
-                enableMicrophone();
-
-                log("🎧 Listening for neighbor reports to refine speaker delay");
-            }
+        await db.ref('show/currentCue').set({
+            type: "TUNING_MOVEMENT",
+            file: PICCOLO_URL,
+            startTime: tuningStartTimeAbs
         });
+
+        calibrationMode = true;
+        log(`🎯 Tuning started: ${deviceOrder.length} devices, ${noteTimings.length} notes, startTime=${new Date(tuningStartTimeAbs).toISOString().substr(11, 12)}`);
     }
 
-    let phase2PlaybackStarted = false;
-
-    // SECTION 12: UI BINDINGS AND INITIALIZATION
+    // ============================================================================
+    // SECTION 14: INITIALIZATION
     // ============================================================================
 
     const micButton = document.getElementById('request-mic-btn');
@@ -2217,7 +2250,12 @@
 
     document.getElementById('ready-btn').onclick = async () => {
         if (!micPermissionGranted) { log("⚠️ Please grant microphone permission first"); return; }
-        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (!audioCtx) {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            masterGain = audioCtx.createGain();
+            masterGain.gain.value = MASTER_PLAYBACK_GAIN;
+            masterGain.connect(audioCtx.destination);
+        }
         if (audioCtx.state === 'suspended') await audioCtx.resume();
         document.getElementById('setup-screen').style.display = 'none';
         document.getElementById('show-screen').style.display = 'block';
@@ -2237,7 +2275,7 @@
                     return;
                 }
                 calibrationMode = true;
-                playTuningMovement(cue);
+                startTuningMovement();
             }
             else if (cue.type === 'AUDIO' && cue.metadata?.purpose === 'seat_test') { if (cue.metadata.seatId === mySeat.id) handleSeatTest(cue); }
         });
@@ -2265,6 +2303,8 @@
         });
     }
 
+    let phase2PlaybackStarted = false;
+
     if (!document.getElementById('detection-flash')) {
         const flash = document.createElement('div');
         flash.id = 'detection-flash';
@@ -2277,6 +2317,9 @@
         await loadNeighborMap();
         await loadTuningConfig();
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        masterGain = audioCtx.createGain();
+        masterGain.gain.value = MASTER_PLAYBACK_GAIN;
+        masterGain.connect(audioCtx.destination);
         await preloadAssets();
         if (mySeat) initLogging();
         if (mySeat && myNeighbors && assetsPreloaded) {
