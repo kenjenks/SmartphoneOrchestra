@@ -301,12 +301,12 @@
     let processedMeasurements = new Set();
     let selfSamples = [];
     let isHappy = false;
-    let calibratedSpeakerDelay = null;
 
     // PHASE 1: MIC DELAY
     let estimatedDeviceDelayMs = 130;
     let estimatedDeviceMicDelayMs = 13;   // Default mic delay (ms) for uncalibrated devices
     let myMicDelayMs = estimatedDeviceMicDelayMs;
+    let currentSpeakerDelay = estimatedDeviceDelayMs;
     let micDelaySamples = [];
     let pillarNoteSchedule = [];
     let pillarWindows = [];
@@ -468,7 +468,7 @@
             type: type,
             phase1Complete: phase1Complete,
             isHappy: isHappy,
-            speakerDelay: calibratedSpeakerDelay,
+            speakerDelay: currentSpeakerDelay,
             micDelay: myMicDelayMs,
             neighborCount: myNeighbors ? myNeighbors.length : 0
         };
@@ -754,7 +754,7 @@
                 status: isHappy ? 'HAPPY' : (phase1Complete ? 'CALIBRATING' : 'ACTIVE'),
                 x: mySeat.x,
                 y: mySeat.y,
-                speakerDelay: calibratedSpeakerDelay,
+                speakerDelay: currentSpeakerDelay,
                 micDelay: myMicDelayMs,
                 neighborCount: myNeighbors.length,
                 estimatedDelay: Math.round(estimatedDeviceDelayMs),
@@ -1125,7 +1125,7 @@
             const timeShift = now - expectedTimeAbs;  // Positive = late, Negative = early
 
             if (Math.abs(timeShift) < 500) {
-                const currentDelay = calibratedSpeakerDelay !== null ? calibratedSpeakerDelay : estimatedDeviceDelayMs;
+                const currentDelay = currentSpeakerDelay !== null ? currentSpeakerDelay : estimatedDeviceDelayMs;
                 const correctedDelay = currentDelay - timeShift;
 
                 if (correctedDelay > 0 && correctedDelay < 500) {
@@ -1376,7 +1376,6 @@
         }
 
         currentSpeakerDelay = newSpeakerDelay;
-        calibratedSpeakerDelay = newSpeakerDelay;
     }
 
     function startContinuousPlayback(startTime, speakerDelay) {
@@ -1442,7 +1441,7 @@
     }
 
     function applyCorrection(timeShift) {
-        const currentDelay = calibratedSpeakerDelay !== null ? calibratedSpeakerDelay : estimatedDeviceDelayMs;
+        const currentDelay = currentSpeakerDelay !== null ? currentSpeakerDelay : estimatedDeviceDelayMs;
         const correctedDelay = currentDelay - timeShift;
         const correctionMagnitude = Math.abs(currentDelay - correctedDelay);
 
@@ -1460,10 +1459,10 @@
         log(`   Current speaker delay: ${currentDelay.toFixed(1)}ms`);
         log(`   New speaker delay: ${newDelay.toFixed(1)}ms`);
 
-        calibratedSpeakerDelay = Math.max(0, Math.min(500, newDelay));
-        iterationFinalDelays.push(calibratedSpeakerDelay);
+        currentSpeakerDelay = Math.max(0, Math.min(500, newDelay));
+        iterationFinalDelays.push(currentSpeakerDelay);
 
-        restartWithNewDelay(calibratedSpeakerDelay);
+        restartWithNewDelay(currentSpeakerDelay);
         selfSamples = [];
 
         const flash = document.getElementById('detection-flash');
@@ -1478,7 +1477,7 @@
 
         const medianShift = calculateMedian(selfSamples);
         const stdDev = calculateStdDev(selfSamples);
-        const currentDelay = calibratedSpeakerDelay !== null ? calibratedSpeakerDelay : estimatedDeviceDelayMs;
+        const currentDelay = currentSpeakerDelay !== null ? currentSpeakerDelay : estimatedDeviceDelayMs;
 
         log(`📊 Real-time: median shift=${medianShift > 0 ? '+' : ''}${medianShift.toFixed(1)}ms, σ=${stdDev.toFixed(1)}ms, samples=${selfSamples.length}, current delay=${currentDelay.toFixed(1)}ms`);
 
@@ -1499,18 +1498,18 @@
 
         isHappy = true;
         log(`✅✅✅ CALIBRATION COMPLETE ✅✅✅`);
-        log(`   Final speaker delay: ${calibratedSpeakerDelay?.toFixed(1) || estimatedDeviceDelayMs.toFixed(1)}ms`);
+        log(`   Final speaker delay: ${currentSpeakerDelay?.toFixed(1) || estimatedDeviceDelayMs.toFixed(1)}ms`);
         log(`   Mic delay: ${myMicDelayMs?.toFixed(1) || '0'}ms`);
 
         db.ref(`devices/${mySeat.id}`).update({
             status: 'HAPPY',
-            finalSpeakerDelay: Math.round(calibratedSpeakerDelay || estimatedDeviceDelayMs),
+            finalSpeakerDelay: Math.round(currentSpeakerDelay || estimatedDeviceDelayMs),
             finalMicDelay: Math.round(myMicDelayMs || 0),
             convergedAt: Date.now() + serverOffset
         });
 
         document.getElementById('debug-status').innerHTML = 'HAPPY ✓';
-        document.getElementById('debug-speaker-delay').innerText = (calibratedSpeakerDelay || estimatedDeviceDelayMs).toFixed(1) + 'ms';
+        document.getElementById('debug-speaker-delay').innerText = (currentSpeakerDelay || estimatedDeviceDelayMs).toFixed(1) + 'ms';
 
         const flash = document.getElementById('detection-flash');
         if (flash) {
@@ -1589,7 +1588,7 @@
             return;
         }
 
-        const speakerDelayMs = calibratedSpeakerDelay !== null ? calibratedSpeakerDelay : 0;
+        const speakerDelayMs = currentSpeakerDelay !== null ? currentSpeakerDelay : 0;
         const micDelayMs = myMicDelayMs !== null ? myMicDelayMs : 0;
 
         log(`🎬 MOVEMENT START: "${cue.movement}"`);
@@ -1626,7 +1625,7 @@
             if (cue.type !== 'MASTER_MEDIA_SYNC') return;
             const cueOffsetMs = (cue.time || 0) * 1000;
             const absoluteStartTime = movementStartTime + cueOffsetMs;
-            const startDelayMs = absoluteStartTime - now - (calibratedSpeakerDelay || 0) - (myMicDelayMs || 0);
+            const startDelayMs = absoluteStartTime - now - (currentSpeakerDelay || 0) - (myMicDelayMs || 0);
             (cue.assets || []).forEach(asset => {
                 if (asset.type === 'pillar') return;
                 scheduleCueWithWarmUp({
@@ -1692,7 +1691,7 @@
     function updatePerformanceOverlay() {
         const overlay = document.getElementById('performance-overlay');
         const fps = Math.round(1000 / (performance.now() - lastFrameTime));
-        const delay = calibratedSpeakerDelay ? `${calibratedSpeakerDelay.toFixed(0)}ms` : '--';
+        const delay = currentSpeakerDelay ? `${currentSpeakerDelay.toFixed(0)}ms` : '--';
         const micDelay = myMicDelayMs !== null ? `mic:${myMicDelayMs.toFixed(0)}ms` : 'mic:--';
         overlay.innerHTML = `FPS: ${fps} | Speaker: ${delay} | ${micDelay} | Neighbors: ${myNeighbors.length} | ${isHappy ? '✅' : (phase1Complete ? '🔄' : '🎤')}`;
     }
@@ -1755,7 +1754,7 @@
         if (!url) { log('No test pulse URL available'); return; }
         const pulseTime = cue.startTime;
         const nowWall = Date.now() + serverOffset;
-        const delayMs = pulseTime - nowWall - (calibratedSpeakerDelay || 0) - (myMicDelayMs || 0);
+        const delayMs = pulseTime - nowWall - (currentSpeakerDelay || 0) - (myMicDelayMs || 0);
         if (delayMs > 0) {
             const timeoutId = setTimeout(() => {
                 if (!bufferCache[url]) {
@@ -1917,7 +1916,7 @@
             }
 
             // ============ START CONTINUOUS PLAYBACK ============
-            const initialSpeakerDelay = calibratedSpeakerDelay !== null ? calibratedSpeakerDelay : estimatedDeviceDelayMs;
+            const initialSpeakerDelay = currentSpeakerDelay !== null ? currentSpeakerDelay : estimatedDeviceDelayMs;
             log(`🎵 Starting continuous playback with speaker delay: ${initialSpeakerDelay.toFixed(1)}ms`);
             log(`   Mode: ${isSingleDeviceMode ? 'Single Device (full volume)' : 'Normal (envelope mode)'}`);
             startContinuousPlayback(tuningStartTime, initialSpeakerDelay);
