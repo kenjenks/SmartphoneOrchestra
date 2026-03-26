@@ -1784,7 +1784,7 @@
     }
 
     // ============================================================================
-    // SECTION 12: TUNING LISTENER
+    // SECTION 10: TUNING LISTENER
     // ============================================================================
 
     function initTuningListener() {
@@ -1822,7 +1822,7 @@
 
             // ============ EXTRACT ACTIVE PILLARS FROM DEVICE ORDER ============
             const activePillars = (schedule.deviceOrder || []).filter(id => id.startsWith('PILLAR_'));
-            log(`📡 Active pillars: ${activePillars.length > 0 ? activePillars.join(', ') : 'none'}`);
+            log(`📡 Active pillars (${activePillars.length}): ${activePillars.length > 0 ? activePillars.join(', ') : 'none'}`);
 
             // ============ LOAD PATRON NOTE SCHEDULE ============
             if (schedule.schedule) {
@@ -1837,20 +1837,34 @@
             }
 
             // ============ LOAD PILLAR NOTES (FILTERED TO ACTIVE PILLARS) ============
-            if (schedule.pillar_notes) {
-                // Filter to only pillars that are actually playing
-                pillarNoteSchedule = schedule.pillar_notes.filter(note =>
+            // Priority 1: Use schedule.pillar_notes (authoritative, from conductor)
+            // Priority 2: Use allPillarNotes (fallback from tuning_mode)
+            let allNotes = [];
+            if (schedule.pillar_notes && schedule.pillar_notes.length > 0) {
+                allNotes = schedule.pillar_notes;
+                log(`📡 Using schedule.pillar_notes (${allNotes.length} total notes) from tuning/current`);
+            } else if (allPillarNotes && allPillarNotes.length > 0) {
+                allNotes = allPillarNotes;
+                log(`📡 Using allPillarNotes (${allNotes.length} total notes) as fallback from tuning_mode`);
+            } else {
+                log(`⚠️ No pillar notes available`);
+                pillarNoteSchedule = [];
+            }
+
+            if (allNotes.length > 0) {
+                // Filter to only active pillars
+                pillarNoteSchedule = allNotes.filter(note =>
                     activePillars.includes(note.pillar_id)
                 );
                 log(`📡 Loaded ${pillarNoteSchedule.length} pillar notes (filtered to active pillars: ${activePillars.join(', ')})`);
 
                 // Log first few notes for debugging
                 if (pillarNoteSchedule.length > 0) {
-                    log(`   First pillar note: ${pillarNoteSchedule[0].pillar_id} note ${pillarNoteSchedule[0].index} (${pillarNoteSchedule[0].pitch}) at ${pillarNoteSchedule[0].ms_offset}ms`);
+                    const firstFew = pillarNoteSchedule.slice(0, 3);
+                    firstFew.forEach(note => {
+                        log(`   Example: ${note.pillar_id} note ${note.index} (${note.pitch}) at ${note.ms_offset}ms`);
+                    });
                 }
-            } else {
-                log(`⚠️ No pillar_notes in schedule`);
-                pillarNoteSchedule = [];
             }
 
             // ============ LOAD CALIBRATION WINDOWS ============
@@ -1858,6 +1872,13 @@
                 pillarWindows = schedule.metadata.pillar_cal_windows;
                 phase1EndMs = pillarWindows[pillarWindows.length - 1].end_ms;
                 log(`📡 Loaded ${pillarWindows.length} calibration windows, Phase 1 ends at ${phase1EndMs}ms`);
+
+                // Log windows for debugging
+                pillarWindows.forEach(w => {
+                    log(`   ${w.pillar_id}: ${w.start_ms}ms → ${w.end_ms}ms (${w.note_count} notes)`);
+                });
+            } else {
+                log(`⚠️ No calibration windows found`);
             }
 
             // ============ DETECT SINGLE DEVICE MODE ============
@@ -1879,12 +1900,13 @@
             micDelaySamples = [];
             myMicDelayMs = null;
 
-            // Set the first calibration window
-            if (pillarWindows.length > 0) {
-                currentPillarWindow = pillarWindows[0];
+            // Set the first calibration window (only if we have windows)
+            if (pillarWindows.length > 0 && activePillars.length > 0) {
+                // Find the first window that matches an active pillar
+                currentPillarWindow = pillarWindows.find(w => activePillars.includes(w.pillar_id)) || pillarWindows[0];
                 log(`🎤 Phase 1 window: listening for ${currentPillarWindow.pillar_id} from ${currentPillarWindow.start_ms}ms to ${currentPillarWindow.end_ms}ms`);
             } else {
-                log(`⚠️ No calibration windows - Phase 1 will be skipped`);
+                log(`⚠️ No calibration windows or no active pillars - Phase 1 will be skipped`);
                 phase1Complete = true;
                 myMicDelayMs = 0;
             }
@@ -1900,7 +1922,7 @@
             log("🎧 Listening for pillars and neighbors...");
 
             // ============ SCHEDULE PHASE 1 TIMEOUT (FALLBACK) ============
-            if (pillarWindows.length > 0) {
+            if (pillarWindows.length > 0 && activePillars.length > 0) {
                 const phase1Duration = pillarWindows[pillarWindows.length - 1].end_ms;
                 setTimeout(() => {
                     // Only act if Phase 1 hasn't already completed from detection
@@ -1916,9 +1938,23 @@
                             log(`🎤 Phase 1 complete (timeout): mic delay = ${myMicDelayMs.toFixed(1)}ms from ${micDelaySamples.length} samples`);
                         }
                         // Note: No need to start iteration here - detection will handle it
+                    } else {
+                        log(`⏱️ Phase 1 timeout but already completed, skipping`);
                     }
                 }, phase1Duration);
-                log(`⏱️ Phase 1 timeout set for ${phase1Duration}ms`);
+                log(`⏱️ Phase 1 timeout set for ${phase1Duration}ms (will fire at ${new Date(Date.now() + serverOffset + phase1Duration).toISOString().substr(11, 12)})`);
+            } else {
+                log(`⚠️ No Phase 1 timeout set - missing calibration windows or active pillars`);
+                // Still need to start calibration even without Phase 1?
+                // For now, start iterative calibration with 0 mic delay
+                setTimeout(() => {
+                    if (!phase1Complete) {
+                        phase1Complete = true;
+                        myMicDelayMs = 0;
+                        log(`🎤 Phase 1 skipped - using 0ms mic delay`);
+                        startIterativeCalibration();
+                    }
+                }, 5000);
             }
         });
     }
