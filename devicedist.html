@@ -2356,6 +2356,89 @@ function handleSeatTest(cue) {
     }
 }
 
+function detectPillarReferencePhase2(now, frequencyData, sampleRate, fftSize) {
+    if (mySeat.id.startsWith('PILLAR_')) return;  // Only patrons
+    if (!phase1Complete) return;
+
+    const songPosition = now - tuningStartTime;
+
+    // Find pillar notes expected around this time
+    const expectedPillarNotes = pillarNoteSchedule.filter(note => {
+        // Look for notes within 500ms of current song position
+        const timeDiff = Math.abs(songPosition - note.ms_offset);
+        return timeDiff < 500;
+    });
+
+    if (expectedPillarNotes.length === 0) return;
+
+    // Find the closest pillar note
+    const closestNote = expectedPillarNotes.reduce((best, note) =>
+        Math.abs(songPosition - note.ms_offset) < Math.abs(songPosition - best.ms_offset) ? note : best
+    );
+
+    const noteKey = `pillar_phase2_${closestNote.pillar_id}_${closestNote.ms_offset}`;
+    if (processedMeasurements.has(noteKey)) return;
+
+    // Get the expected frequency for this note
+    const frequency = getFrequencyFromMidi(closestNote.midi);
+    const targetBin = getBinForFrequency(frequency, sampleRate, fftSize);
+
+    // Calculate energy at the expected frequency
+    let energy = 0;
+    let binsChecked = 0;
+    for (let i = Math.max(0, targetBin - PITCH_DETECTION_TOLERANCE_BINS);
+         i <= Math.min(fftSize/2 - 1, targetBin + PITCH_DETECTION_TOLERANCE_BINS);
+         i++) {
+        if (frequencyData && i < frequencyData.length) {
+            energy += frequencyData[i] / 255;
+            binsChecked++;
+        }
+    }
+    if (binsChecked > 0) energy = energy / binsChecked;
+
+    // Use adaptive threshold (like Phase 1)
+    let threshold = PITCH_DETECTION_MIN_ENERGY;
+    if (pillarRefBaseline > 0) {
+        threshold = pillarRefBaseline * PILLAR_ONSET_THRESHOLD;
+    }
+
+    if (energy > threshold) {
+        const expectedTimeAbs = tuningStartTime + closestNote.ms_offset;
+        const rawDelay = now - expectedTimeAbs;
+
+        const pillarSpeakerDelay = pillarConfig[closestNote.pillar_id]?.speakerDelayMs || 45;
+        const propagationMs = pillarDistanceMap.get(closestNote.pillar_id) || 0;
+
+        // This gives us a second estimate of speaker delay
+        const speakerDelay = rawDelay - propagationMs - (myMicDelayMs || 0);
+
+        if (Math.abs(speakerDelay) < 500) {
+            log(`📡 Phase 2 pillar reference: ${closestNote.pillar_id} note ${closestNote.index} (${closestNote.pitch}) detected`);
+            log(`   raw=${rawDelay.toFixed(1)}ms, prop=${propagationMs.toFixed(1)}ms, speakerDelay=${speakerDelay.toFixed(1)}ms`);
+
+            // Add to speaker delay samples
+            selfSamples.push(speakerDelay);
+            if (selfSamples.length > MAX_SELF_SAMPLES) selfSamples.shift();
+
+            processedMeasurements.add(noteKey);
+
+            // Update UI
+            document.getElementById('debug-speaker-delay').innerText =
+                (selfSamples.length > 0 ? calculateMedian(selfSamples).toFixed(1) : '--') + 'ms';
+        }
+    }
+
+    // Update baseline
+    if (pillarRefBaselineSamples.length < 50) {
+        pillarRefBaselineSamples.push(energy);
+    } else {
+        const sorted = [...pillarRefBaselineSamples].sort((a, b) => a - b);
+        pillarRefBaseline = sorted[Math.floor(sorted.length / 2)];
+        pillarRefBaselineSamples.shift();
+        pillarRefBaselineSamples.push(energy);
+    }
+}
+
 // --- ONSET DETECTION LOOP (main entry point with pitch-aware detection) ---
 function detectNeighborNotes() {
     if (!isMicActive || !analyser || !frequencyData || !calibrationMode) {
@@ -2395,15 +2478,26 @@ function detectNeighborNotes() {
     if (baselineValue) baselineValue.innerText = baselineEnergy.toFixed(4);
     let ratioToBaseline = baselineEnergy > 0 ? piccoloEnergy / baselineEnergy : 1.0;
 
-    // PHASE 1: Pillar detection using pitch-aware detection
+    // ==================== PHASE 1: Pillar detection for mic delay ====================
     if (phase1WindowActive && !phase1Complete && pillarWindows.length > 0 && currentPillarWindow) {
         detectPillarOnsets(now, frequencyData, sampleRate, FFT_SIZE);
     }
 
-    // PHASE 2: Neighbor and pillar reference detection (only after Phase 1 complete)
+    // ==================== PHASE 2: Detection after Phase 1 complete ====================
     if (phase1Complete && noteSchedule && noteSchedule.length > 0 && tuningStartTime) {
+
+        // 1. Neighbor detection (patrons listening to other patrons)
         processDetectionWindows(now, piccoloEnergy, dominantFreq, ratioToBaseline);
-        processPillarReferenceDetection(now, frequencyData, sampleRate, FFT_SIZE);
+
+        // 2. Pillar reference detection for patrons (NEW: patrons listening to pillars in Phase 2)
+        if (!mySeat.id.startsWith('PILLAR_')) {
+            detectPillarReferencePhase2(now, frequencyData, sampleRate, FFT_SIZE);
+        }
+
+        // 3. Pillars listening to patrons (for their own calibration)
+        if (mySeat.id.startsWith('PILLAR_')) {
+            processPillarReferenceDetection(now, frequencyData, sampleRate, FFT_SIZE);
+        }
     }
 
     requestAnimationFrame(detectNeighborNotes);
