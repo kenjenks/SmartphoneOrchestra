@@ -1125,17 +1125,14 @@
             const timeShift = now - expectedTimeAbs;  // Positive = late, Negative = early
 
             if (Math.abs(timeShift) < 500) {
-                const currentDelay = currentSpeakerDelay !== null ? currentSpeakerDelay : estimatedDeviceDelayMs;
-                const correctedDelay = currentDelay - timeShift;
+                // STORE RAW TIME SHIFT, NOT CORRECTED DELAY
+                rawTimeShifts.push(timeShift);
+                if (rawTimeShifts.length > 50) rawTimeShifts.shift();
 
-                if (correctedDelay > 0 && correctedDelay < 500) {
-                    selfSamples.push(correctedDelay);
-                    if (selfSamples.length > 50) selfSamples.shift();
-
-                    if (selfSamples.length <= 10 || selfSamples.length % 20 === 0) {
-                        log(`📡 Pillar sync: ${closestNote.pillar_id} note ${closestNote.index} (${closestNote.pitch})`);
-                        log(`   Time shift: ${timeShift > 0 ? '+' : ''}${timeShift.toFixed(1)}ms → corrected delay: ${correctedDelay.toFixed(1)}ms`);
-                    }
+                // Log the detection (raw time shift only)
+                if (rawTimeShifts.length <= 10 || rawTimeShifts.length % 20 === 0) {
+                    log(`📡 Pillar sync: ${closestNote.pillar_id} note ${closestNote.index} (${closestNote.pitch})`);
+                    log(`   Raw time shift: ${timeShift > 0 ? '+' : ''}${timeShift.toFixed(1)}ms`);
                 }
             }
 
@@ -1149,7 +1146,7 @@
             }
         }
 
-        // Update baseline
+        // Update baseline for adaptive threshold
         if (pillarRefBaselineSamples.length < 50) {
             pillarRefBaselineSamples.push(energy);
         } else {
@@ -1430,55 +1427,76 @@
         // Need enough samples
         if (sampleCount < MIN_SAMPLES_FOR_CORRECTION) return false;
 
-        // More lenient stdDev threshold for early iterations
-        // Allow up to 50ms stdDev, not just 25ms
+        // More lenient: allow up to 50ms stdDev for early iterations
         if (stdDev > 50 && sampleCount < 15) {
             log(`⚠️ Samples inconsistent (σ=${stdDev.toFixed(1)}ms), waiting for more data`);
             return false;
         }
 
-        // If error is clearly audible, correct even with high stdDev
+        // If error is clearly audible (>30ms), correct even with high stdDev
         if (absError > AUDIBLE_ERROR_MS) return true;
 
-        // If error is significant and samples are consistent enough, correct
-        if (absError > SIGNIFICANT_ERROR_MS && stdDev < 30) return true;
+        // If error is significant (>15ms) and samples are somewhat consistent, correct
+        if (absError > SIGNIFICANT_ERROR_MS && stdDev < 40) return true;
 
         // After many samples, correct even with moderate error
-        if (sampleCount >= 10 && absError > MIN_CORRECTION_MS && stdDev < 40) return true;
+        if (sampleCount >= 15 && absError > MIN_CORRECTION_MS && stdDev < 50) return true;
 
         return false;
     }
 
+    // ============================================================================
+    // SECTION 9: REAL-TIME EVALUATION AND CORRECTION
+    // ============================================================================
+
     function applyCorrection(rawTimeShift) {
+        // Get current speaker delay
         const currentDelay = currentSpeakerDelay;
 
-        // Simple: new delay = current delay + raw shift (positive = late, add delay; negative = early, subtract)
+        // Calculate raw correction: add the time shift to the current delay
+        // If timeShift is negative (early), we decrease delay
+        // If timeShift is positive (late), we increase delay
         const newDelayRaw = currentDelay + rawTimeShift;
 
-        // Apply damping (30%)
-        const newDelay = currentDelay + (newDelayRaw - currentDelay) * 0.3;
+        // Apply damping to avoid overshoot (30% of the correction)
+        const damping = 0.3;
+        const newDelay = currentDelay + (newDelayRaw - currentDelay) * damping;
 
-        // Clamp to reasonable range (20-500ms)
+        // Clamp to reasonable range (20-500ms, never zero)
+        // 20ms minimum prevents the delay from being set to 0
         const clampedDelay = Math.max(20, Math.min(500, newDelay));
 
-        if (Math.abs(clampedDelay - currentDelay) < MIN_CORRECTION_MS) {
-            log(`⏭️ Correction too small (${Math.abs(clampedDelay - currentDelay).toFixed(1)}ms), skipping`);
+        // Calculate how much we're actually changing
+        const correctionMagnitude = Math.abs(clampedDelay - currentDelay);
+
+        // Skip if correction is too small to be meaningful
+        if (correctionMagnitude < MIN_CORRECTION_MS) {
+            log(`⏭️ Correction too small (${correctionMagnitude.toFixed(1)}ms), skipping`);
             return;
         }
 
+        // Log the correction details
         log(`🔄 Applying correction:`);
         log(`   Raw time shift: ${rawTimeShift > 0 ? '+' : ''}${rawTimeShift.toFixed(1)}ms (${rawTimeShift > 0 ? 'late' : 'early'})`);
         log(`   Current speaker delay: ${currentDelay.toFixed(1)}ms`);
-        log(`   New speaker delay: ${clampedDelay.toFixed(1)}ms`);
+        log(`   Raw new delay: ${newDelayRaw.toFixed(1)}ms`);
+        log(`   Damped new delay: ${newDelay.toFixed(1)}ms (${damping * 100}% correction)`);
+        log(`   Clamped final delay: ${clampedDelay.toFixed(1)}ms`);
+        log(`   Correction magnitude: ${correctionMagnitude.toFixed(1)}ms`);
 
+        // Update the global speaker delay
         currentSpeakerDelay = clampedDelay;
+
+        // Store for calibration history
         iterationFinalDelays.push(currentSpeakerDelay);
 
+        // Restart playback with the new delay
         restartWithNewDelay(currentSpeakerDelay);
 
         // Clear raw time shifts after applying correction
         rawTimeShifts = [];
 
+        // Visual feedback flash
         const flash = document.getElementById('detection-flash');
         if (flash) {
             flash.style.background = '#ffaa44';
@@ -1487,6 +1505,7 @@
     }
 
     function evaluateInRealTime() {
+        // Use rawTimeShifts, not selfSamples
         if (rawTimeShifts.length < MIN_SAMPLES_FOR_CORRECTION) return;
 
         const medianShift = calculateMedian(rawTimeShifts);
