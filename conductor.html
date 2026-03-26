@@ -1340,12 +1340,6 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             conductorLog(`❌❌❌ CRITICAL: startTime mismatch! Expected ${tuningStartTime}, got ${writtenStartTime}`, 'error');
         }
 
-        await db.ref('show/currentCue').set({
-            type: "TUNING_MOVEMENT",
-            file: PICCOLO_URL,
-            startTime: tuningStartTime
-        });
-
         isTuningActive = true;
         document.getElementById('tuning-progress').style.display = 'block';
         conductorLog(`🎯 Tuning started: ${deviceOrder.length} devices, ${noteTimings.length} notes, startTime=${new Date(tuningStartTime).toISOString().substr(11, 12)}`, 'match');
