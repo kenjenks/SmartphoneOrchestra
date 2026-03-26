@@ -533,22 +533,42 @@
 
     async function resolveIdentity() {
         try {
+            log("🔍 resolveIdentity: Starting");
+
             const urlParams = new URLSearchParams(window.location.search);
             const seatId = urlParams.get('seat');
+
+            log(`🔍 resolveIdentity: seatId from URL = "${seatId}"`);
 
             if (!seatId) {
                 log("No seat ID in URL, using default for testing");
                 mySeat = { id: 'G12', x: 7.75, y: 12.5, section: 'Orchestra' };
-                document.getElementById('id-ind').className = 'indicator syncing';
+                document.getElementById('seat-label').innerText = `Seat ${mySeat.id}`;
+                document.getElementById('id-ind').className = 'indicator active';
+                log(`✅ Using default seat: ${mySeat.id}`);
                 return true;
             }
 
             document.getElementById('seat-label').innerText = `Seat ${seatId} (loading...)`;
 
-            const seatsSnap = await db.ref('seat_config/seats').once('value');
+            log(`🔍 resolveIdentity: Fetching seat_config/seats from Firebase...`);
+
+            // Add a timeout to detect if Firebase hangs
+            const fetchPromise = db.ref('seat_config/seats').once('value');
+            const timeoutPromise = new Promise((_, reject) => {
+                setTimeout(() => reject(new Error('Firebase timeout after 10 seconds')), 10000);
+            });
+
+            const seatsSnap = await Promise.race([fetchPromise, timeoutPromise]);
+
+            log(`🔍 resolveIdentity: Got seatsSnap, exists=${seatsSnap.exists()}`);
+
             const seatsData = seatsSnap.val();
 
+            log(`🔍 resolveIdentity: seatsData type = ${typeof seatsData}, isArray=${Array.isArray(seatsData)}`);
+
             if (seatsData && seatsData[seatId]) {
+                log(`🔍 resolveIdentity: Found seat ${seatId} in object format`);
                 mySeat = {
                     id: seatId,
                     x: seatsData[seatId].x,
@@ -560,6 +580,7 @@
                 log(`✅ Resolved seat ${seatId} at (${mySeat.x}, ${mySeat.y}) in ${mySeat.section}`);
                 return true;
             } else if (Array.isArray(seatsData)) {
+                log(`🔍 resolveIdentity: Searching array for seat ${seatId}`);
                 const config = seatsData.find(s => s.id === seatId);
                 if (config) {
                     mySeat = {
@@ -575,13 +596,16 @@
                 }
             }
 
-            log(`❌ Seat ${seatId} not found`);
+            log(`❌ Seat ${seatId} not found in seat_config`);
             document.getElementById('id-ind').className = 'indicator error';
+            document.getElementById('seat-label').innerText = `Seat ${seatId} NOT FOUND`;
             return false;
 
         } catch (e) {
             log(`❌ Identity Resolution Error: ${e.message}`);
+            console.error(e);
             document.getElementById('id-ind').className = 'indicator error';
+            document.getElementById('seat-label').innerText = `Error: ${e.message}`;
             return false;
         }
     }
