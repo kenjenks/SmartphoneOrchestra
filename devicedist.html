@@ -1084,9 +1084,6 @@
         }
     }
 
-    let pillarRefBaseline = 0;
-    let pillarRefBaselineSamples = [];
-
     function detectPillarReferencePhase2(now, frequencyData, sampleRate, fftSize) {
         // Only run after Phase 1 is complete
         if (!phase1Complete) return;
@@ -2028,10 +2025,6 @@
             log("🎧 Starting Phase 1 - listening for pillars...");
         });
     }
-
-    // ============================================================================
-    // SECTION 11: DETECTION LOOP
-    // ============================================================================
 
     // ============================================================================
     // SECTION 11: DETECTION LOOP
