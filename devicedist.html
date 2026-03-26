@@ -1788,6 +1788,8 @@
     // SECTION 10: TUNING LISTENER
     // ============================================================================
 
+    let isProcessingTuning = false;
+
     function initTuningListener() {
         db.ref('tuning/current').on('value', async snap => {
             const schedule = snap.val();
@@ -1798,7 +1800,8 @@
             }
 
             // Already processing this schedule
-            if (tuningStartTime === schedule.startTime) {
+            if (isProcessingTuning || (tuningStartTime === schedule.startTime)) {
+                log(`⚠️ Already processing tuning schedule, skipping duplicate`);
                 return;
             }
 
@@ -1818,6 +1821,7 @@
 
             log(`🎵 Tuning schedule received! startTime=${new Date(schedule.startTime).toISOString().substr(11, 12)}`);
 
+            isProcessingTuning = true;
             currentTuningSchedule = schedule;
             tuningStartTime = schedule.startTime;
 
