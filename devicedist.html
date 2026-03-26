@@ -332,6 +332,7 @@
     let incomingTimingErrors = [];
     let processedTimingReports = new Set();
     let reportListenerActive = false;
+    let rawTimeShifts = [];  // Store raw time shifts for median calculation
 
     // Real-time evaluation
     let lastEvaluationTime = 0;
@@ -1426,43 +1427,57 @@
     function shouldIterate(medianShift, stdDev, sampleCount) {
         const absError = Math.abs(medianShift);
 
+        // Need enough samples
         if (sampleCount < MIN_SAMPLES_FOR_CORRECTION) return false;
-        if (stdDev > 25) {
+
+        // More lenient stdDev threshold for early iterations
+        // Allow up to 50ms stdDev, not just 25ms
+        if (stdDev > 50 && sampleCount < 15) {
             log(`⚠️ Samples inconsistent (σ=${stdDev.toFixed(1)}ms), waiting for more data`);
             return false;
         }
 
+        // If error is clearly audible, correct even with high stdDev
         if (absError > AUDIBLE_ERROR_MS) return true;
-        if (absError > SIGNIFICANT_ERROR_MS && stdDev < 15) return true;
-        if (sampleCount >= 10 && absError > MIN_CORRECTION_MS && stdDev < 10) return true;
+
+        // If error is significant and samples are consistent enough, correct
+        if (absError > SIGNIFICANT_ERROR_MS && stdDev < 30) return true;
+
+        // After many samples, correct even with moderate error
+        if (sampleCount >= 10 && absError > MIN_CORRECTION_MS && stdDev < 40) return true;
 
         return false;
     }
 
-    function applyCorrection(timeShift) {
-        const currentDelay = currentSpeakerDelay !== null ? currentSpeakerDelay : estimatedDeviceDelayMs;
-        const correctedDelay = currentDelay - timeShift;
-        const correctionMagnitude = Math.abs(currentDelay - correctedDelay);
+    function applyCorrection(rawTimeShift) {
+        const currentDelay = currentSpeakerDelay;
 
-        if (correctionMagnitude < MIN_CORRECTION_MS) {
-            log(`⏭️ Correction too small (${correctionMagnitude.toFixed(1)}ms), skipping`);
+        // Simple: new delay = current delay + raw shift (positive = late, add delay; negative = early, subtract)
+        const newDelayRaw = currentDelay + rawTimeShift;
+
+        // Apply damping (30%)
+        const newDelay = currentDelay + (newDelayRaw - currentDelay) * 0.3;
+
+        // Clamp to reasonable range (20-500ms)
+        const clampedDelay = Math.max(20, Math.min(500, newDelay));
+
+        if (Math.abs(clampedDelay - currentDelay) < MIN_CORRECTION_MS) {
+            log(`⏭️ Correction too small (${Math.abs(clampedDelay - currentDelay).toFixed(1)}ms), skipping`);
             return;
         }
 
-        const damping = 0.3;
-        const dampedCorrection = correctionMagnitude * damping;
-        const newDelay = currentDelay + (timeShift > 0 ? -dampedCorrection : +dampedCorrection);
-
         log(`🔄 Applying correction:`);
-        log(`   Time shift: ${timeShift > 0 ? '+' : ''}${timeShift.toFixed(1)}ms (${timeShift > 0 ? 'late' : 'early'})`);
+        log(`   Raw time shift: ${rawTimeShift > 0 ? '+' : ''}${rawTimeShift.toFixed(1)}ms (${rawTimeShift > 0 ? 'late' : 'early'})`);
         log(`   Current speaker delay: ${currentDelay.toFixed(1)}ms`);
-        log(`   New speaker delay: ${newDelay.toFixed(1)}ms`);
+        log(`   New speaker delay: ${clampedDelay.toFixed(1)}ms`);
 
-        currentSpeakerDelay = Math.max(0, Math.min(500, newDelay));
+        currentSpeakerDelay = clampedDelay;
         iterationFinalDelays.push(currentSpeakerDelay);
 
         restartWithNewDelay(currentSpeakerDelay);
-        selfSamples = [];
+
+        // Clear raw time shifts after applying correction
+        rawTimeShifts = [];
 
         const flash = document.getElementById('detection-flash');
         if (flash) {
@@ -1472,15 +1487,15 @@
     }
 
     function evaluateInRealTime() {
-        if (selfSamples.length < MIN_SAMPLES_FOR_CORRECTION) return;
+        if (rawTimeShifts.length < MIN_SAMPLES_FOR_CORRECTION) return;
 
-        const medianShift = calculateMedian(selfSamples);
-        const stdDev = calculateStdDev(selfSamples);
-        const currentDelay = currentSpeakerDelay !== null ? currentSpeakerDelay : estimatedDeviceDelayMs;
+        const medianShift = calculateMedian(rawTimeShifts);
+        const stdDev = calculateStdDev(rawTimeShifts);
+        const currentDelay = currentSpeakerDelay;
 
-        log(`📊 Real-time: median shift=${medianShift > 0 ? '+' : ''}${medianShift.toFixed(1)}ms, σ=${stdDev.toFixed(1)}ms, samples=${selfSamples.length}, current delay=${currentDelay.toFixed(1)}ms`);
+        log(`📊 Real-time: median shift=${medianShift > 0 ? '+' : ''}${medianShift.toFixed(1)}ms, σ=${stdDev.toFixed(1)}ms, samples=${rawTimeShifts.length}, current delay=${currentDelay.toFixed(1)}ms`);
 
-        if (shouldIterate(medianShift, stdDev, selfSamples.length)) {
+        if (shouldIterate(medianShift, stdDev, rawTimeShifts.length)) {
             if (Math.abs(medianShift) <= MIN_CORRECTION_MS) {
                 log(`✅ In sync: error ${Math.abs(medianShift).toFixed(1)}ms ≤ ${MIN_CORRECTION_MS}ms`);
                 if (!isHappy && stdDev < convergenceStdDevMs) {
