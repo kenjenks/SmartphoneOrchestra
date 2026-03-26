@@ -2156,51 +2156,94 @@
     }
 
     document.getElementById('ready-btn').onclick = async () => {
-        if (!micPermissionGranted) { log("⚠️ Please grant microphone permission first"); return; }
-        if (!audioCtx) {
-            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            masterGain = audioCtx.createGain();
-            masterGain.gain.value = MASTER_PLAYBACK_GAIN;
-            masterGain.connect(audioCtx.destination);
-        }
-        if (audioCtx.state === 'suspended') await audioCtx.resume();
+        try {
+            log("🎯 ENTER THE ISLE button pressed");
+            log("🎯 Step 1: Button clicked");
 
-        document.getElementById('setup-screen').style.display = 'none';
-        document.getElementById('show-screen').style.display = 'block';
-
-        const canvas = document.getElementById('stage-canvas');
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
-        await requestWakeLock();
-        requestAnimationFrame(frame);
-
-        // Listen for show movements only
-        db.ref('show/currentCue').on('value', snap => {
-            const cue = snap.val();
-            if (!cue) return;
-            if (cue.action === 'KILL') { log("💀 KILL signal received - reloading"); location.reload(); }
-            else if (cue.action === 'GO') handleMovementStart(cue);
-            else if (cue.type === 'AUDIO' && cue.metadata?.purpose === 'seat_test') {
-                if (cue.metadata.seatId === mySeat.id) handleSeatTest(cue);
+            if (!micPermissionGranted) {
+                log("⚠️ Step 2: Mic not granted - returning");
+                return;
             }
-        });
+            log("✅ Step 2: Mic granted");
 
-        // Start listening for tuning schedules
-        initTuningListener();
-        initSelfCalibrationListener();
+            if (!audioCtx) {
+                log("🎛️ Step 3: Creating audio context");
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                masterGain = audioCtx.createGain();
+                masterGain.gain.value = MASTER_PLAYBACK_GAIN;
+                masterGain.connect(audioCtx.destination);
+            }
+            log("✅ Step 3: Audio context ready");
 
-        if (mySeat) {
-            await db.ref(`devices/${mySeat.id}`).update({
-                lastSeen: Date.now() + serverOffset,
-                status: 'ACTIVE',
-                x: mySeat.x,
-                y: mySeat.y,
-                neighborCount: myNeighbors.length,
-                micDelay: myMicDelayMs || 0,
-                phase1Complete: phase1Complete,
-                micPermission: micPermissionGranted
+            if (audioCtx.state === 'suspended') {
+                log("🎛️ Step 4: Resuming audio context");
+                await audioCtx.resume();
+                log("✅ Step 4: Audio context resumed");
+            }
+
+            log("🎬 Step 5: Hiding setup screen");
+            document.getElementById('setup-screen').style.display = 'none';
+            log("🎬 Step 6: Showing show screen");
+            document.getElementById('show-screen').style.display = 'block';
+            log("🎬 Step 7: Screens swapped");
+
+            const canvas = document.getElementById('stage-canvas');
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            log("🎬 Step 8: Canvas sized");
+
+            log("🎬 Step 9: Requesting wake lock");
+            await requestWakeLock();
+            log("🎬 Step 10: Wake lock acquired");
+
+            log("🎬 Step 11: Starting animation frame");
+            requestAnimationFrame(frame);
+
+            log("🎬 Step 12: Setting up Firebase show/currentCue listener");
+            // Listen for show movements only
+            db.ref('show/currentCue').on('value', snap => {
+                const cue = snap.val();
+                if (!cue) return;
+                if (cue.action === 'KILL') { log("💀 KILL signal received - reloading"); location.reload(); }
+                else if (cue.action === 'GO') handleMovementStart(cue);
+                else if (cue.type === 'AUDIO' && cue.metadata?.purpose === 'seat_test') {
+                    if (cue.metadata.seatId === mySeat.id) handleSeatTest(cue);
+                }
             });
-            startHeartbeat();
+            log("✅ Step 12: Firebase listener set");
+
+            log("🎬 Step 13: Initializing tuning listener");
+            initTuningListener();
+            initSelfCalibrationListener();
+            log("✅ Step 13: Tuning listeners initialized");
+
+            if (mySeat) {
+                log("🎬 Step 14: Updating device status in Firebase");
+                await db.ref(`devices/${mySeat.id}`).update({
+                    lastSeen: Date.now() + serverOffset,
+                    status: 'ACTIVE',
+                    x: mySeat.x,
+                    y: mySeat.y,
+                    neighborCount: myNeighbors.length,
+                    micDelay: myMicDelayMs || 0,
+                    phase1Complete: phase1Complete,
+                    micPermission: micPermissionGranted
+                });
+                log("🎬 Step 15: Starting heartbeat");
+                startHeartbeat();
+                log("✅ Step 15: Heartbeat started");
+            }
+
+            log("✅ Step 16: Device fully activated, waiting for tuning schedule...");
+
+            // Disable the button after click to prevent re-entry
+            document.getElementById('ready-btn').disabled = true;
+
+        } catch (error) {
+            log(`❌ Error during activation: ${error.message}`);
+            console.error(error);
+            // Re-enable the button on error
+            document.getElementById('ready-btn').disabled = false;
         }
     };
 
