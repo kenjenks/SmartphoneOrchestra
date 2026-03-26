@@ -384,6 +384,8 @@ devicedist.html: Feature List
     let binIndices = { start: 0, end: 0 };
     let currentAvgEnergy = 0;
     let currentDominantFreq = 0;
+    const MIN_DETECTION_ENERGY = 0.05;           // Minimum energy floor for detection
+    const HARMONIC_WEIGHT = 0.5;                 // Weight for 2nd harmonic (50%)
 
     // --- BASELINE ADAPTATION (for piccolo band only) ---
     let baselineEnergy = 0;
@@ -481,9 +483,9 @@ devicedist.html: Feature List
     // --- ONSET DETECTION PARAMETERS ---
     const PICCOLO_MIN_FREQ = 500;            // Hz - piccolo fundamental range
     const PICCOLO_MAX_FREQ = 2100;           // Hz - includes overtones
-    const FFT_SIZE = 2048;                   // Same as zynth_device
+    const FFT_SIZE = 4096;
     const BASELINE_SAMPLES_MS = 200;         // 200ms baseline sampling
-    const BASELINE_THRESHOLD_MULTIPLIER = 1.5; // 1.5x baseline = detection
+    const BASELINE_THRESHOLD_MULTIPLIER = 1.2; // 1.2x baseline = detection
     const LOOKBACK_MS = 500;                 // 500ms lookback for missed detections
     const DETECTION_WINDOW_MS = 1500;        // ±1500ms around expected note
     const ENERGY_CHECK_INTERVAL_MS = 50;     // Check every 50ms
@@ -495,7 +497,7 @@ devicedist.html: Feature List
     const MIC_DELAY_SANITY_MIN = 0;           // ms
     const MIC_DELAY_SANITY_MAX = 150;         // ms
     const MIN_MIC_SAMPLES = 4;                // need at least 4 samples
-    const PITCH_DETECTION_TOLERANCE_BINS = 2;  // Look at neighboring bins
+    const PITCH_DETECTION_TOLERANCE_BINS = 4;  // Look at neighboring bins
     const PITCH_DETECTION_MIN_ENERGY = 0.05;   // Minimum energy to consider a detection
 
     // --- NEIGHBOR DETECTION PARAMETERS ---
@@ -563,6 +565,7 @@ function initLogging() {
     log(`🚀 Device ${mySeat.id} started at ${new Date(serverTimestamp).toISOString()}`);
     log(`   Platform: ${navigator.platform}, User Agent: ${navigator.userAgent.substring(0, 100)}`);
     log(`   Location: (${mySeat.x}, ${mySeat.y}) in ${mySeat.section}`);
+    log(`Reminder: We only log successful neighbor note detections (not all, to avoid spam)`);
 
     setTimeout(() => flushLogs(), 100);
 }
@@ -1923,6 +1926,8 @@ function processDetectionWindows(now, avgEnergy, dominantFreq, ratioToBaseline) 
             const targetBin = getBinForFrequency(windowData.expectedFreq, sampleRate, FFT_SIZE);
             let noteEnergy = 0;
             let binsChecked = 0;
+
+            // Look at fundamental frequency bins
             for (let i = Math.max(0, targetBin - PITCH_DETECTION_TOLERANCE_BINS);
                  i <= Math.min(FFT_SIZE/2 - 1, targetBin + PITCH_DETECTION_TOLERANCE_BINS);
                  i++) {
@@ -1931,57 +1936,98 @@ function processDetectionWindows(now, avgEnergy, dominantFreq, ratioToBaseline) 
                     binsChecked++;
                 }
             }
+
+            // ALSO check 2nd harmonic (1 octave up) - piccolo has strong overtones
+            const harmonicFreq = windowData.expectedFreq * 2;
+            const harmonicBin = getBinForFrequency(harmonicFreq, sampleRate, FFT_SIZE);
+            let harmonicEnergy = 0;
+            let harmonicBinsChecked = 0;
+
+            for (let i = Math.max(0, harmonicBin - PITCH_DETECTION_TOLERANCE_BINS);
+                 i <= Math.min(FFT_SIZE/2 - 1, harmonicBin + PITCH_DETECTION_TOLERANCE_BINS);
+                 i++) {
+                if (frequencyData && i < frequencyData.length) {
+                    harmonicEnergy += frequencyData[i] / 255;
+                    harmonicBinsChecked++;
+                }
+            }
+
+            // Combine fundamental and harmonic energy (weighted)
             if (binsChecked > 0) noteEnergy = noteEnergy / binsChecked;
+            if (harmonicBinsChecked > 0) harmonicEnergy = harmonicEnergy / harmonicBinsChecked;
+
+            // Combined energy: fundamental 100%, harmonic 50%
+            const combinedEnergy = (noteEnergy + harmonicEnergy * 0.5) / 1.5;
 
             if (!windowData.baselineComplete) {
                 if (now - windowData.baselineStart < BASELINE_SAMPLES_MS) {
-                    windowData.baselineSamples.push(noteEnergy);
+                    windowData.baselineSamples.push(combinedEnergy);
                 } else {
                     if (windowData.baselineSamples.length > 0) {
                         const sorted = [...windowData.baselineSamples].sort((a, b) => a - b);
                         windowData.baselineEnergy = sorted[Math.floor(sorted.length / 2)];
                         windowData.baselineComplete = true;
+                        // Optional: log baseline for debugging
+                        if (note.noteIndex < 5) {
+                            log(`   Baseline for note ${note.noteIndex}: ${windowData.baselineEnergy.toFixed(4)} from ${windowData.baselineSamples.length} samples`);
+                        }
                     }
                 }
             }
 
-            if (windowData.baselineComplete && noteEnergy > windowData.baselineEnergy * BASELINE_THRESHOLD_MULTIPLIER) {
-                const rawDelay = songPosition - note.startMs;
-                const playingSeatId = note.deviceId;
-                let playingX, playingY;
+            // DETECTION LOGIC with improved thresholds
+            if (windowData.baselineComplete) {
+                const dynamicThreshold = Math.max(
+                    windowData.baselineEnergy * BASELINE_THRESHOLD_MULTIPLIER,
+                    MIN_DETECTION_ENERGY  // Minimum energy floor
+                );
 
-                if (playingSeatId.startsWith('PILLAR_')) {
-                    const pos = pillarConfig[playingSeatId];
-                    if (!pos) return;
-                    playingX = pos.x; playingY = pos.y;
-                } else {
-                    playingX = note.originX; playingY = note.originY;
+                if (combinedEnergy > dynamicThreshold) {
+                    const rawDelay = songPosition - note.startMs;
+                    const playingSeatId = note.deviceId;
+                    let playingX, playingY;
+
+                    if (playingSeatId.startsWith('PILLAR_')) {
+                        const pos = pillarConfig[playingSeatId];
+                        if (!pos) return;
+                        playingX = pos.x; playingY = pos.y;
+                    } else {
+                        playingX = note.originX; playingY = note.originY;
+                    }
+
+                    const dx = mySeat.x - playingX, dy = mySeat.y - playingY;
+                    const distance = Math.sqrt(dx*dx + dy*dy);
+                    const propagationMs = (distance / SPEED_OF_SOUND) * 1000;
+                    const speakerDelay = rawDelay - propagationMs - (myMicDelayMs || 0);
+
+                    // Get the player's speaker delay if known (for logging)
+                    let playerSpeakerDelay = 'unknown';
+                    if (playingSeatId.startsWith('PILLAR_')) {
+                        playerSpeakerDelay = pillarConfig[playingSeatId]?.speakerDelayMs || 45;
+                    } else if (deviceDelays[playingSeatId]) {
+                        playerSpeakerDelay = deviceDelays[playingSeatId];
+                    } else {
+                        playerSpeakerDelay = estimatedDeviceDelayMs;
+                    }
+
+                    // Only log successful detections (not all, to avoid spam)
+                    if (detectionCount < 10) {
+                        log(`📈 DETECTION: note ${note.noteIndex} from ${playingSeatId} (${expectedNote.pitch} @ ${windowData.expectedFreq.toFixed(0)}Hz)`);
+                        log(`   raw=${rawDelay.toFixed(1)}ms, combinedEnergy=${combinedEnergy.toFixed(4)}, threshold=${dynamicThreshold.toFixed(4)}`);
+                        log(`   prop=${propagationMs.toFixed(1)}ms, speaker=${speakerDelay.toFixed(1)}ms, playerDelay=${playerSpeakerDelay}ms`);
+                    }
+
+                    reportMeasurement(note.noteIndex, playingSeatId, speakerDelay, rawDelay, propagationMs, now);
+                    processedMeasurements.add(noteKey);
+                    detectionWindows.delete(noteKey);
+                    updateEstimatedDelay(rawDelay);
+
+                    // Increment detection counter
+                    detectionCount++;
                 }
-
-                const dx = mySeat.x - playingX, dy = mySeat.y - playingY;
-                const distance = Math.sqrt(dx*dx + dy*dy);
-                const propagationMs = (distance / SPEED_OF_SOUND) * 1000;
-                const speakerDelay = rawDelay - propagationMs - (myMicDelayMs || 0);
-
-                // Get the player's speaker delay if known (for logging)
-                let playerSpeakerDelay = 'unknown';
-                if (playingSeatId.startsWith('PILLAR_')) {
-                    playerSpeakerDelay = pillarConfig[playingSeatId]?.speakerDelayMs || 45;
-                } else if (deviceDelays[playingSeatId]) {
-                    playerSpeakerDelay = deviceDelays[playingSeatId];
-                } else {
-                    playerSpeakerDelay = estimatedDeviceDelayMs;
-                }
-
-                log(`📈 Detection: note ${note.noteIndex} from ${playingSeatId} (${expectedNote.pitch} @ ${windowData.expectedFreq.toFixed(0)}Hz)`);
-                log(`   raw=${rawDelay.toFixed(1)}ms, prop=${propagationMs.toFixed(1)}ms, speaker=${speakerDelay.toFixed(1)}ms, playerDelay=${playerSpeakerDelay}ms`);
-
-                reportMeasurement(note.noteIndex, playingSeatId, speakerDelay, rawDelay, propagationMs, now);
-                processedMeasurements.add(noteKey);
-                detectionWindows.delete(noteKey);
-                updateEstimatedDelay(rawDelay);
             }
         } else if (detectionWindows.has(noteKey)) {
+            // Window closed without detection
             detectionWindows.delete(noteKey);
             consecutiveMisses++;
             if (consecutiveMisses >= 2 && adaptiveWindowMs < MAX_ADAPTIVE_WINDOW_MS) {
