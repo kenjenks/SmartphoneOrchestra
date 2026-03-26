@@ -304,7 +304,9 @@
     let calibratedSpeakerDelay = null;
 
     // PHASE 1: MIC DELAY
-    let myMicDelayMs = null;
+    let estimatedDeviceDelayMs = 130;
+    let estimatedDeviceMicDelayMs = 13;   // Default mic delay (ms) for uncalibrated devices
+    let myMicDelayMs = estimatedDeviceMicDelayMs;
     let micDelaySamples = [];
     let pillarNoteSchedule = [];
     let pillarWindows = [];
@@ -385,7 +387,6 @@
     const WARMUP_TO_PLAYBACK_GAP_MS = 50;
 
     // ADAPTIVE DELAY LEARNING
-    let estimatedDeviceDelayMs = 261;
     let delayMeasurements = [];
     let adaptiveWindowMs = 1000;
     let consecutiveMisses = 0;
@@ -1898,7 +1899,7 @@
             phase1Complete = false;
             phase1WindowActive = true;
             micDelaySamples = [];
-            myMicDelayMs = null;
+            myMicDelayMs = estimatedDeviceMicDelayMs;
 
             // Set the first calibration window (only if we have windows)
             if (pillarWindows.length > 0 && activePillars.length > 0) {
@@ -1931,8 +1932,8 @@
                         phase1WindowActive = false;
                         phase1Complete = true;
                         if (micDelaySamples.length === 0) {
-                            myMicDelayMs = 0;
-                            log(`⚠️ Phase 1 closed with no samples - using 0ms mic delay`);
+                            myMicDelayMs = estimatedDeviceMicDelayMs;
+                            log(`⚠️ Phase 1 closed with no samples - using default mic delay`);
                         } else {
                             myMicDelayMs = calculateMedian(micDelaySamples);
                             log(`🎤 Phase 1 complete (timeout): mic delay = ${myMicDelayMs.toFixed(1)}ms from ${micDelaySamples.length} samples`);
