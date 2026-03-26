@@ -1070,10 +1070,15 @@
 
                     document.getElementById('debug-mic-delay').innerText = `${myMicDelayMs.toFixed(1)}ms`;
                     document.getElementById('debug-status').innerHTML = `Phase 1 complete (σ=${stdDev.toFixed(0)}ms)`;
+
+                    // FIX: Start iterative calibration immediately when Phase 1 completes from detection
+                    log(`🚀 Starting iterative calibration from Phase 1 completion`);
+                    startIterativeCalibration();
                 }
             }
         }
 
+        // Update baseline for adaptive threshold
         if (pillarRefBaselineSamples.length < 50) {
             pillarRefBaselineSamples.push(energy);
         } else {
@@ -1777,7 +1782,11 @@
     function evaluateIteration() {
         log(`📊 Evaluating iteration ${calibrationIteration}...`);
 
-        let neighborDelayEstimate = null;
+        // Collect speaker delay estimates from BOTH sources:
+        // 1. Neighbor detections
+        // 2. Pillar detections (already in selfSamples via detectPillarForAll)
+
+        let speakerDelayEstimate = null;
         let stdDev = 999;
 
         if (selfSamples.length >= minSelfSamples) {
@@ -1786,34 +1795,25 @@
             const mean = selfSamples.reduce((a,b) => a+b, 0) / selfSamples.length;
             const variance = selfSamples.reduce((a,b) => a + Math.pow(b - mean, 2), 0) / selfSamples.length;
             stdDev = Math.sqrt(variance);
-            neighborDelayEstimate = medianDelay;
+            speakerDelayEstimate = medianDelay;
 
-            log(`📊 Neighbor estimate: ${neighborDelayEstimate.toFixed(1)}ms from ${selfSamples.length} samples, σ=${stdDev.toFixed(1)}ms`);
-            iterationNeighborEstimates.push(neighborDelayEstimate);
+            log(`📊 Speaker delay estimate: ${speakerDelayEstimate.toFixed(1)}ms from ${selfSamples.length} samples (neighbors + pillars), σ=${stdDev.toFixed(1)}ms`);
+            iterationNeighborEstimates.push(speakerDelayEstimate);
         } else {
-            log(`⚠️ Insufficient neighbor samples (${selfSamples.length}/${minSelfSamples})`);
+            log(`⚠️ Insufficient samples (${selfSamples.length}/${minSelfSamples})`);
             iterationNeighborEstimates.push(null);
         }
 
-        const timingError = getLastTimingError();
+        // Update speaker delay with damping
         let newDelay = null;
-
-        if (neighborDelayEstimate !== null) {
+        if (speakerDelayEstimate !== null) {
             if (calibratedSpeakerDelay === null) {
-                newDelay = neighborDelayEstimate;
+                newDelay = speakerDelayEstimate;
             } else {
-                const error = neighborDelayEstimate - calibratedSpeakerDelay;
+                const error = speakerDelayEstimate - calibratedSpeakerDelay;
                 const correction = error * 0.3;
                 newDelay = calibratedSpeakerDelay + correction;
                 log(`   Correction: ${error > 0 ? '+' : ''}${error.toFixed(1)}ms → ${correction > 0 ? '+' : ''}${correction.toFixed(1)}ms → new delay: ${newDelay.toFixed(1)}ms`);
-            }
-        } else if (timingError !== null && Math.abs(timingError) < 100) {
-            if (calibratedSpeakerDelay === null) {
-                newDelay = Math.max(0, -timingError);
-            } else {
-                const correction = -timingError * 0.3;
-                newDelay = calibratedSpeakerDelay + correction;
-                log(`   Timing error correction: ${timingError > 0 ? '+' : ''}${timingError.toFixed(1)}ms → new delay: ${newDelay.toFixed(1)}ms`);
             }
         } else if (calibrationIteration === 1) {
             newDelay = estimatedDeviceDelayMs;
@@ -2039,7 +2039,7 @@
         const now = Date.now() + serverOffset;
         analyser.getByteFrequencyData(frequencyData);
 
-        // Calculate piccolo band energy (for display and baseline)
+        // Calculate piccolo band energy (for display)
         let piccoloEnergy = 0;
         for (let i = binIndices.start; i <= binIndices.end && i < frequencyData.length; i++) {
             piccoloEnergy += frequencyData[i] / 255;
@@ -2053,22 +2053,117 @@
         if (energyFill) energyFill.style.width = (piccoloEnergy * 100) + '%';
         if (energyValue) energyValue.innerText = piccoloEnergy.toFixed(4);
 
-        // ==================== PHASE 1: Pillar detection for mic delay ====================
-        if (phase1WindowActive && !phase1Complete && pillarWindows.length > 0 && currentPillarWindow) {
-            detectPillarOnsets(now, frequencyData, sampleRate, FFT_SIZE);
-        }
+        // ==================== ALWAYS LISTEN FOR PILLARS ====================
+        // Purpose 1: Derive mic delay (once, for neighbor reporting)
+        // Purpose 2: Refine speaker delay (continuous, for sync with music)
+        detectPillarForAll(now, frequencyData, sampleRate, FFT_SIZE);
 
-        // ==================== PHASE 2: Detection after Phase 1 complete ====================
-        if (phase1Complete && noteSchedule && noteSchedule.length > 0 && tuningStartTime) {
-
-            // 1. Neighbor detection (patrons listening to other patrons)
+        // ==================== ALWAYS LISTEN FOR NEIGHBORS ====================
+        // Purpose: Refine speaker delay (continuous, for playback timing)
+        if (noteSchedule && noteSchedule.length > 0 && tuningStartTime) {
             processDetectionWindows(now, piccoloEnergy, 0, 0);
-
-            // 2. Phase 2 pillar reference for patrons (patrons listening to pillars for sync)
-            detectPillarReferencePhase2(now, frequencyData, sampleRate, FFT_SIZE);
         }
 
         requestAnimationFrame(detectNeighborNotes);
+    }
+
+    function detectPillarForAll(now, frequencyData, sampleRate, fftSize) {
+        if (!pillarNoteSchedule || pillarNoteSchedule.length === 0) return;
+        if (!tuningStartTime) return;
+
+        const songPosition = now - tuningStartTime;
+
+        // Find expected pillar notes around this time
+        const expectedPillarNotes = pillarNoteSchedule.filter(note => {
+            const timeDiff = Math.abs(songPosition - note.ms_offset);
+            return timeDiff < 500;
+        });
+
+        if (expectedPillarNotes.length === 0) return;
+
+        // Find the closest pillar note by time
+        const closestNote = expectedPillarNotes.reduce((best, note) =>
+            Math.abs(songPosition - note.ms_offset) < Math.abs(songPosition - best.ms_offset) ? note : best
+        );
+
+        const noteKey = `pillar_${closestNote.pillar_id}_${closestNote.ms_offset}`;
+        if (processedMeasurements.has(noteKey)) return;
+
+        const frequency = getFrequencyFromMidi(closestNote.midi);
+        const energy = calculateEnergyAtFrequency(frequency, sampleRate, fftSize);
+
+        let threshold = MIN_DETECTION_ENERGY;
+        if (pillarRefBaseline > 0) {
+            threshold = pillarRefBaseline * PILLAR_ONSET_THRESHOLD;
+        }
+
+        if (energy > threshold) {
+            const expectedTimeAbs = tuningStartTime + closestNote.ms_offset;
+            const rawDelay = now - expectedTimeAbs;
+
+            // Calculate distance to pillar (need proper pillar positions)
+            const pillarSpeakerDelay = 45;
+            const dx = mySeat.x - 0;  // Pillar FL at (0,0) - make configurable
+            const dy = mySeat.y - 0;
+            const distance = Math.sqrt(dx*dx + dy*dy);
+            const propagationMs = (distance / SPEED_OF_SOUND) * 1000;
+
+            const totalDelay = rawDelay - pillarSpeakerDelay - propagationMs;
+
+            // PURPOSE 1: Derive mic delay (only once, for neighbor reporting)
+            if (myMicDelayMs === null && totalDelay >= 0 && totalDelay <= 150) {
+                micDelaySamples.push(totalDelay);
+                document.getElementById('debug-phase1-samples').innerText = micDelaySamples.length;
+
+                if (micDelaySamples.length >= MIN_MIC_SAMPLES) {
+                    myMicDelayMs = calculateMedian(micDelaySamples);
+                    log(`🎤 Mic delay derived: ${myMicDelayMs.toFixed(1)}ms from ${micDelaySamples.length} pillar detections`);
+                    document.getElementById('debug-mic-delay').innerText = `${myMicDelayMs.toFixed(1)}ms`;
+                    document.getElementById('debug-status').innerHTML = `Mic: ${myMicDelayMs.toFixed(0)}ms`;
+                }
+            }
+
+            // PURPOSE 2: Refine speaker delay (continuous, for sync with music)
+            if (myMicDelayMs !== null) {
+                const speakerDelay = totalDelay - myMicDelayMs;
+                if (speakerDelay >= -50 && speakerDelay <= 500) {
+                    // Add to speaker delay samples (same pool as neighbor detections)
+                    selfSamples.push(speakerDelay);
+                    if (selfSamples.length > MAX_SELF_SAMPLES) selfSamples.shift();
+
+                    // Update display
+                    if (selfSamples.length >= minSelfSamples) {
+                        const medianDelay = calculateMedian(selfSamples);
+                        document.getElementById('debug-speaker-delay').innerText = medianDelay.toFixed(1) + 'ms';
+                        document.getElementById('debug-samples').innerText = selfSamples.length;
+                    }
+
+                    // Log occasionally
+                    if (selfSamples.length % 20 === 1) {
+                        log(`📡 Pillar sync: ${closestNote.pillar_id} note ${closestNote.index} → speaker delay ${speakerDelay.toFixed(1)}ms`);
+                    }
+                }
+            }
+
+            processedMeasurements.add(noteKey);
+
+            // Visual feedback
+            const flash = document.getElementById('detection-flash');
+            if (flash) {
+                flash.style.background = myMicDelayMs === null ? '#44ffaa' : '#ffaa44';
+                setTimeout(() => { flash.style.background = '#333'; }, 100);
+            }
+        }
+
+        // Update baseline
+        if (pillarRefBaselineSamples.length < 50) {
+            pillarRefBaselineSamples.push(energy);
+        } else {
+            const sorted = [...pillarRefBaselineSamples].sort((a, b) => a - b);
+            pillarRefBaseline = sorted[Math.floor(sorted.length / 2)];
+            pillarRefBaselineSamples.shift();
+            pillarRefBaselineSamples.push(energy);
+        }
     }
 
     // ============================================================================
