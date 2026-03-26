@@ -298,7 +298,7 @@
     let noteSchedule = [];
     let detectionWindows = new Map();
     let processedMeasurements = new Set();
-    let selfSamples = [];
+    let rawTimeShifts = [];           // Store raw time shifts for median calculation
     let isHappy = false;
 
     // PHASE 1: MIC DELAY
@@ -332,7 +332,6 @@
     let incomingTimingErrors = [];
     let processedTimingReports = new Set();
     let reportListenerActive = false;
-    let rawTimeShifts = [];  // Store raw time shifts for median calculation
 
     // Real-time evaluation
     let lastEvaluationTime = 0;
@@ -655,7 +654,6 @@
 
             // ============ LOAD ALL PILLAR NOTES (will be filtered at runtime) ============
             if (tuningData.pillar_notes) {
-                // Store all pillar notes - will be filtered in initTuningListener based on active pillars
                 allPillarNotes = tuningData.pillar_notes.map(note => ({
                     pillar_id: note.pillar_id,
                     index: note.index,
@@ -666,7 +664,6 @@
                 }));
                 log(`📡 Loaded ${allPillarNotes.length} pillar notes from config (will filter at runtime)`);
 
-                // Log breakdown by pillar
                 const pillarCounts = {};
                 allPillarNotes.forEach(note => {
                     pillarCounts[note.pillar_id] = (pillarCounts[note.pillar_id] || 0) + 1;
@@ -686,7 +683,6 @@
                 pillarWindows = tuningData.metadata.pillar_cal_windows;
                 log(`📡 Loaded ${pillarWindows.length} calibration windows, Phase 1 ends at ${phase1EndMs}ms`);
 
-                // Log windows for debugging
                 pillarWindows.forEach(w => {
                     log(`   ${w.pillar_id}: measures ${w.start_measure}-${w.end_measure} → ${w.start_ms}ms-${w.end_ms}ms (${w.note_count} notes)`);
                 });
@@ -705,7 +701,6 @@
                     log(`🔊 Test pulse URL: ${TEST_PULSE_URL.split('/').pop()}`);
                 }
                 if (tuningData.assets.pillars) {
-                    // Store pillar URLs for potential future use
                     pillarUrls = tuningData.assets.pillars;
                     log(`🏛️ Pillar URLs loaded: ${Object.keys(pillarUrls).join(', ')}`);
                 }
@@ -1016,11 +1011,10 @@
     function detectPillarOnsets(now, frequencyData, sampleRate, fftSize) {
         if (!pillarNoteSchedule || pillarNoteSchedule.length === 0) return;
         if (!tuningStartTime) return;
-        if (myMicDelayMs !== null) return; // Only need mic delay once
+        if (myMicDelayMs !== null) return;
 
         const songPosition = now - tuningStartTime;
 
-        // Find the closest pillar note
         let closestNote = null;
         let minDelta = Infinity;
 
@@ -1049,7 +1043,6 @@
             const expectedTimeAbs = tuningStartTime + closestNote.ms_offset;
             const rawDelay = now - expectedTimeAbs;
 
-            // Calculate distance to pillar (assume PILLAR_FL at 0,0)
             const pillarSpeakerDelay = 45;
             const dx = mySeat.x - 0;
             const dy = mySeat.y - 0;
@@ -1085,17 +1078,16 @@
     }
 
     // ============================================================================
-    // SECTION 6: PILLAR SYNC FOR REAL-TIME CORRECTION
+    // SECTION 6: PILLAR SYNC FOR REAL-TIME CORRECTION (NO CLAMPING)
     // ============================================================================
 
     function detectPillarForSync(now, frequencyData, sampleRate, fftSize) {
         if (!pillarNoteSchedule || pillarNoteSchedule.length === 0) return;
         if (!tuningStartTime) return;
-        if (myMicDelayMs === null) return; // Need mic delay first
+        if (myMicDelayMs === null) return;
 
         const songPosition = now - tuningStartTime;
 
-        // Find the closest pillar note
         let closestNote = null;
         let minDelta = Infinity;
 
@@ -1122,17 +1114,17 @@
 
         if (energy > threshold) {
             const expectedTimeAbs = tuningStartTime + closestNote.ms_offset;
-            const timeShift = now - expectedTimeAbs;  // Positive = late, Negative = early
+            const timeShift = now - expectedTimeAbs;  // Positive = early, Negative = late
 
             if (Math.abs(timeShift) < 500) {
-                // STORE RAW TIME SHIFT, NOT CORRECTED DELAY
+                // Store raw time shift
                 rawTimeShifts.push(timeShift);
                 if (rawTimeShifts.length > 50) rawTimeShifts.shift();
 
-                // Log the detection (raw time shift only)
+                // Log periodically
                 if (rawTimeShifts.length <= 10 || rawTimeShifts.length % 20 === 0) {
                     log(`📡 Pillar sync: ${closestNote.pillar_id} note ${closestNote.index} (${closestNote.pitch})`);
-                    log(`   Raw time shift: ${timeShift > 0 ? '+' : ''}${timeShift.toFixed(1)}ms`);
+                    log(`   Raw time shift: ${timeShift > 0 ? '+' : ''}${timeShift.toFixed(1)}ms (${timeShift > 0 ? 'early' : 'late'})`);
                 }
             }
 
@@ -1146,7 +1138,7 @@
             }
         }
 
-        // Update baseline for adaptive threshold
+        // Update baseline
         if (pillarRefBaselineSamples.length < 50) {
             pillarRefBaselineSamples.push(energy);
         } else {
@@ -1165,8 +1157,6 @@
         if (!phase1Complete) return;
         if (!noteSchedule || noteSchedule.length === 0) return;
         if (!tuningStartTime) return;
-
-        // In single device mode, no neighbors to detect
         if (isSingleDeviceMode) return;
 
         const songPosition = now - tuningStartTime;
@@ -1239,9 +1229,9 @@
                         const speakerDelay = rawDelay - propagationMs - (myMicDelayMs || 0);
 
                         if (speakerDelay >= -50 && speakerDelay <= 500) {
-                            const correctedDelay = speakerDelay;
-                            selfSamples.push(correctedDelay);
-                            if (selfSamples.length > 50) selfSamples.shift();
+                            // For neighbor detection, we also store raw time shifts
+                            rawTimeShifts.push(speakerDelay);
+                            if (rawTimeShifts.length > 50) rawTimeShifts.shift();
 
                             reportMeasurement(note.noteIndex, playingSeatId, speakerDelay, rawDelay, propagationMs, now);
                             processedMeasurements.add(noteKey);
@@ -1302,14 +1292,12 @@
         envelopeTimeouts = [];
 
         if (isSingleDeviceMode) {
-            // Single device: full volume continuously, no envelopes needed
             if (continuousGain) {
                 continuousGain.gain.setValueAtTime(MASTER_PLAYBACK_GAIN, audioCtx.currentTime);
             }
             return;
         }
 
-        // Normal mode: schedule volume envelopes for each note
         assignedNotes.forEach(note => {
             const noteStartWall = pieceStartTime + note.startMs;
             const nowWall = Date.now() + serverOffset;
@@ -1331,7 +1319,6 @@
                     continuousGain.gain.linearRampToValueAtTime(0, now + (durationMs - rampDownMs)/1000);
                     continuousGain.gain.setValueAtTime(0, now + durationMs/1000);
 
-                    // Visual feedback
                     const canvas = document.getElementById('stage-canvas');
                     const ctx = canvas.getContext('2d');
                     ctx.fillStyle = '#ffffff';
@@ -1351,15 +1338,11 @@
 
         log(`🔄 Restarting with new delay: ${newSpeakerDelay.toFixed(1)}ms`);
         log(`   Current song position: ${currentSongPosition.toFixed(0)}ms`);
-        log(`   Mode: ${isSingleDeviceMode ? 'Single Device' : 'Normal'}`);
 
-        // Calculate new start time that aligns with current position
         const newStartTime = nowWall - currentSongPosition + newSpeakerDelay;
 
-        // Start new playback
         startContinuousPlayback(newStartTime, newSpeakerDelay);
 
-        // Fade out old playback
         if (continuousGain) {
             const now = audioCtx.currentTime;
             continuousGain.gain.linearRampToValueAtTime(0, now + 0.1);
@@ -1384,12 +1367,10 @@
 
         if (delayMs > 0) {
             setTimeout(() => {
-                // Stop old playback if exists
                 if (continuousSource) {
                     fadeOutAndStop();
                 }
 
-                // Create new continuous source
                 continuousSource = audioCtx.createBufferSource();
                 continuousSource.buffer = bufferCache[PICCOLO_URL];
                 continuousSource.loop = false;
@@ -1418,16 +1399,15 @@
     }
 
     // ============================================================================
-    // SECTION 9: REAL-TIME EVALUATION AND CORRECTION
+    // SECTION 9: REAL-TIME EVALUATION AND CORRECTION (NO CLAMPING)
     // ============================================================================
 
     function shouldIterate(medianShift, stdDev, sampleCount) {
         const absError = Math.abs(medianShift);
 
-        // Need enough samples
         if (sampleCount < MIN_SAMPLES_FOR_CORRECTION) return false;
 
-        // More lenient: allow up to 50ms stdDev for early iterations
+        // Allow higher stdDev for early iterations
         if (stdDev > 50 && sampleCount < 15) {
             log(`⚠️ Samples inconsistent (σ=${stdDev.toFixed(1)}ms), waiting for more data`);
             return false;
@@ -1445,58 +1425,54 @@
         return false;
     }
 
-    // ============================================================================
-    // SECTION 9: REAL-TIME EVALUATION AND CORRECTION
-    // ============================================================================
-
-    function applyCorrection(rawTimeShift) {
-        // Get current speaker delay
+    function applyCorrection(medianShift) {
         const currentDelay = currentSpeakerDelay;
 
-        // Calculate raw correction: add the time shift to the current delay
-        // If timeShift is negative (early), we decrease delay
-        // If timeShift is positive (late), we increase delay
-        const newDelayRaw = currentDelay + rawTimeShift;
+        // Full correction: new delay = current delay - median shift
+        // If medianShift is negative (late), newDelay = current + |shift|
+        // If medianShift is positive (early), newDelay = current - shift
+        const newDelay = currentDelay - medianShift;
 
-        // Apply damping to avoid overshoot (30% of the correction)
-        const damping = 0.3;
-        const newDelay = currentDelay + (newDelayRaw - currentDelay) * damping;
+        // NO CLAMPING - let the math work unfettered
+        // Only log if the new delay is extreme
+        if (Math.abs(newDelay) > 1000) {
+            log(`⚠️ Extreme delay calculated: ${newDelay.toFixed(1)}ms, but trusting the data`);
+        }
 
-        // Clamp to reasonable range (20-500ms, never zero)
-        // 20ms minimum prevents the delay from being set to 0
-        const clampedDelay = Math.max(20, Math.min(500, newDelay));
+        const correctionMagnitude = Math.abs(newDelay - currentDelay);
 
-        // Calculate how much we're actually changing
-        const correctionMagnitude = Math.abs(clampedDelay - currentDelay);
-
-        // Skip if correction is too small to be meaningful
         if (correctionMagnitude < MIN_CORRECTION_MS) {
             log(`⏭️ Correction too small (${correctionMagnitude.toFixed(1)}ms), skipping`);
             return;
         }
 
-        // Log the correction details
         log(`🔄 Applying correction:`);
-        log(`   Raw time shift: ${rawTimeShift > 0 ? '+' : ''}${rawTimeShift.toFixed(1)}ms (${rawTimeShift > 0 ? 'late' : 'early'})`);
+        log(`   Median shift: ${medianShift > 0 ? '+' : ''}${medianShift.toFixed(1)}ms (${medianShift > 0 ? 'early' : 'late'})`);
         log(`   Current speaker delay: ${currentDelay.toFixed(1)}ms`);
-        log(`   Raw new delay: ${newDelayRaw.toFixed(1)}ms`);
-        log(`   Damped new delay: ${newDelay.toFixed(1)}ms (${damping * 100}% correction)`);
-        log(`   Clamped final delay: ${clampedDelay.toFixed(1)}ms`);
+        log(`   New speaker delay: ${newDelay.toFixed(1)}ms`);
         log(`   Correction magnitude: ${correctionMagnitude.toFixed(1)}ms`);
 
-        // Update the global speaker delay
-        currentSpeakerDelay = clampedDelay;
-
-        // Store for calibration history
+        currentSpeakerDelay = newDelay;
         iterationFinalDelays.push(currentSpeakerDelay);
 
-        // Restart playback with the new delay
-        restartWithNewDelay(currentSpeakerDelay);
+        // Only restart if the correction is significant enough to warrant it
+        // This prevents constant restarts for tiny corrections
+        const RESTART_THRESHOLD = 20;  // Only restart if correction > 20ms
 
-        // Clear raw time shifts after applying correction
-        rawTimeShifts = [];
+        if (correctionMagnitude >= RESTART_THRESHOLD) {
+            restartWithNewDelay(currentSpeakerDelay);
+        } else {
+            log(`   ⏸️ Small correction (${correctionMagnitude.toFixed(1)}ms), updating delay without restart`);
+            // Update envelopes to use new delay for future notes
+            if (tuningStartTime && continuousGain && !isSingleDeviceMode) {
+                // Reschedule remaining envelopes without restarting
+                setTimeout(() => {
+                    startEnvelopeScheduler(tuningStartTime);
+                }, 10);
+            }
+        }
 
-        // Visual feedback flash
+        // Visual feedback
         const flash = document.getElementById('detection-flash');
         if (flash) {
             flash.style.background = '#ffaa44';
@@ -1505,7 +1481,6 @@
     }
 
     function evaluateInRealTime() {
-        // Use rawTimeShifts, not selfSamples
         if (rawTimeShifts.length < MIN_SAMPLES_FOR_CORRECTION) return;
 
         const medianShift = calculateMedian(rawTimeShifts);
@@ -1817,7 +1792,7 @@
     }
 
     // ============================================================================
-    // SECTION 10: TUNING LISTENER
+    // SECTION 12: TUNING LISTENER
     // ============================================================================
 
     let isProcessingTuning = false;
@@ -1826,25 +1801,21 @@
         db.ref('tuning/current').on('value', async snap => {
             const schedule = snap.val();
 
-            // No schedule or not active
             if (!schedule || schedule.status !== 'ACTIVE') {
                 return;
             }
 
-            // Already processing this schedule
             if (isProcessingTuning || (tuningStartTime === schedule.startTime)) {
                 log(`⚠️ Already processing tuning schedule, skipping duplicate`);
                 return;
             }
 
-            // New schedule while active - reload
             if (tuningStartTime && tuningStartTime !== schedule.startTime) {
                 log(`⚠️ New tuning schedule received while active - reloading`);
                 location.reload();
                 return;
             }
 
-            // Validate start time
             const now = Date.now() + serverOffset;
             if (schedule.startTime < now - 60000) {
                 log(`❌ Schedule startTime is in the past - rejecting`);
@@ -1857,11 +1828,9 @@
             currentTuningSchedule = schedule;
             tuningStartTime = schedule.startTime;
 
-            // ============ EXTRACT ACTIVE PILLARS FROM DEVICE ORDER ============
             const activePillars = (schedule.deviceOrder || []).filter(id => id.startsWith('PILLAR_'));
             log(`📡 Active pillars (${activePillars.length}): ${activePillars.length > 0 ? activePillars.join(', ') : 'none'}`);
 
-            // ============ LOAD PATRON NOTE SCHEDULE ============
             if (schedule.schedule) {
                 noteSchedule = schedule.schedule.map(note => ({
                     ...note,
@@ -1871,11 +1840,12 @@
 
                 assignedNotes = noteSchedule.filter(note => note.deviceId === mySeat.id);
                 log(`🎯 This device assigned ${assignedNotes.length} notes`);
+                if (assignedNotes.length === 0) {
+                    log(`⚠️ No notes assigned to this device!`);
+                }
             }
 
-            // ============ LOAD PILLAR NOTES (FILTERED TO ACTIVE PILLARS) ============
-            // Priority 1: Use schedule.pillar_notes (authoritative, from conductor)
-            // Priority 2: Use allPillarNotes (fallback from tuning_mode)
+            // Load pillar notes filtered to active pillars
             let allNotes = [];
             if (schedule.pillar_notes && schedule.pillar_notes.length > 0) {
                 allNotes = schedule.pillar_notes;
@@ -1889,57 +1859,30 @@
             }
 
             if (allNotes.length > 0) {
-                // Filter to only active pillars
-                pillarNoteSchedule = allNotes.filter(note =>
-                    activePillars.includes(note.pillar_id)
-                );
+                pillarNoteSchedule = allNotes.filter(note => activePillars.includes(note.pillar_id));
                 log(`📡 Loaded ${pillarNoteSchedule.length} pillar notes (filtered to active pillars: ${activePillars.join(', ')})`);
-
-                // Log first few notes for debugging
-                if (pillarNoteSchedule.length > 0) {
-                    const firstFew = pillarNoteSchedule.slice(0, 3);
-                    firstFew.forEach(note => {
-                        log(`   Example: ${note.pillar_id} note ${note.index} (${note.pitch}) at ${note.ms_offset}ms`);
-                    });
-                }
             }
 
-            // ============ LOAD CALIBRATION WINDOWS ============
             if (schedule.metadata && schedule.metadata.pillar_cal_windows) {
                 pillarWindows = schedule.metadata.pillar_cal_windows;
                 phase1EndMs = pillarWindows[pillarWindows.length - 1].end_ms;
                 log(`📡 Loaded ${pillarWindows.length} calibration windows, Phase 1 ends at ${phase1EndMs}ms`);
-
-                // Log windows for debugging
-                pillarWindows.forEach(w => {
-                    log(`   ${w.pillar_id}: ${w.start_ms}ms → ${w.end_ms}ms (${w.note_count} notes)`);
-                });
-            } else {
-                log(`⚠️ No calibration windows found`);
             }
 
-            // ============ DETECT SINGLE DEVICE MODE ============
             if (schedule.deviceOrder) {
                 const patronDeviceOrder = schedule.deviceOrder.filter(id => !id.startsWith('PILLAR_'));
                 isSingleDeviceMode = (patronDeviceOrder.length === 1);
-
-                if (isSingleDeviceMode) {
-                    log(`🎯 Single device mode - I'm the only patron device (${patronDeviceOrder[0]})`);
-                } else {
-                    log(`🎯 Multi-device mode - ${patronDeviceOrder.length} patron devices`);
-                }
+                log(`🎯 ${isSingleDeviceMode ? 'Single device mode' : `Multi-device mode - ${patronDeviceOrder.length} patron devices`}`);
             }
 
-            // ============ SET UP PHASE 1 MIC DELAY ============
             // Reset mic delay state
             phase1Complete = false;
             phase1WindowActive = true;
             micDelaySamples = [];
             myMicDelayMs = estimatedDeviceMicDelayMs;
+            rawTimeShifts = [];  // Clear raw time shifts for new tuning session
 
-            // Set the first calibration window (only if we have windows)
             if (pillarWindows.length > 0 && activePillars.length > 0) {
-                // Find the first window that matches an active pillar
                 currentPillarWindow = pillarWindows.find(w => activePillars.includes(w.pillar_id)) || pillarWindows[0];
                 log(`🎤 Phase 1 window: listening for ${currentPillarWindow.pillar_id} from ${currentPillarWindow.start_ms}ms to ${currentPillarWindow.end_ms}ms`);
             } else {
@@ -1948,21 +1891,17 @@
                 myMicDelayMs = 0;
             }
 
-            // ============ START CONTINUOUS PLAYBACK ============
             const initialSpeakerDelay = currentSpeakerDelay !== null ? currentSpeakerDelay : estimatedDeviceDelayMs;
             log(`🎵 Starting continuous playback with speaker delay: ${initialSpeakerDelay.toFixed(1)}ms`);
-            log(`   Mode: ${isSingleDeviceMode ? 'Single Device (full volume)' : 'Normal (envelope mode)'}`);
             startContinuousPlayback(tuningStartTime, initialSpeakerDelay);
 
-            // ============ ENABLE MICROPHONE FOR DETECTION ============
             await enableMicrophone();
             log("🎧 Listening for pillars and neighbors...");
 
-            // ============ SCHEDULE PHASE 1 TIMEOUT (FALLBACK) ============
+            // Phase 1 timeout fallback
             if (pillarWindows.length > 0 && activePillars.length > 0) {
                 const phase1Duration = pillarWindows[pillarWindows.length - 1].end_ms;
                 setTimeout(() => {
-                    // Only act if Phase 1 hasn't already completed from detection
                     if (phase1WindowActive && !phase1Complete) {
                         log(`⏱️ Phase 1 timeout: no detections, using fallback`);
                         phase1WindowActive = false;
@@ -1974,22 +1913,16 @@
                             myMicDelayMs = calculateMedian(micDelaySamples);
                             log(`🎤 Phase 1 complete (timeout): mic delay = ${myMicDelayMs.toFixed(1)}ms from ${micDelaySamples.length} samples`);
                         }
-                        // Note: No need to start iteration here - detection will handle it
-                    } else {
-                        log(`⏱️ Phase 1 timeout but already completed, skipping`);
                     }
                 }, phase1Duration);
-                log(`⏱️ Phase 1 timeout set for ${phase1Duration}ms (will fire at ${new Date(Date.now() + serverOffset + phase1Duration).toISOString().substr(11, 12)})`);
+                log(`⏱️ Phase 1 timeout set for ${phase1Duration}ms`);
             } else {
-                log(`⚠️ No Phase 1 timeout set - missing calibration windows or active pillars`);
-                // Still need to start calibration even without Phase 1?
-                // For now, start iterative calibration with 0 mic delay
+                log(`⚠️ No Phase 1 timeout set`);
                 setTimeout(() => {
                     if (!phase1Complete) {
                         phase1Complete = true;
                         myMicDelayMs = 0;
                         log(`🎤 Phase 1 skipped - using 0ms mic delay`);
-                        startIterativeCalibration();
                     }
                 }, 5000);
             }
@@ -2042,7 +1975,6 @@
             await requestWakeLock();
             requestAnimationFrame(frame);
 
-            // Listen for show movements
             db.ref('show/currentCue').on('value', snap => {
                 const cue = snap.val();
                 if (!cue) return;
@@ -2074,7 +2006,6 @@
             }
 
             log("✅ Device fully activated, waiting for tuning schedule...");
-
             document.getElementById('ready-btn').disabled = true;
 
         } catch (error) {
