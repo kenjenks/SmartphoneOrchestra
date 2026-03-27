@@ -1095,21 +1095,27 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
                     y: data.y || 0,
                     status: data.status || 'unknown',
                     lastSeen: data.lastSeen,
-                    isPillar: id.startsWith('PILLAR_')
+                    isPillar: id.startsWith('PILLAR_'),
+                    calibrated: data.calibrated === true,  // <-- ADD THIS
+                    speakerDelay: data.speakerDelay,
+                    micDelay: data.micDelay
                 });
             }
         });
 
-        // Separate counts for logging
         const activePatrons = activeDevices.filter(d => !d.isPillar);
         const activePillarsList = activeDevices.filter(d => d.isPillar);
+        const calibratedCount = activePatrons.filter(d => d.calibrated).length;
+        const uncalibratedCount = activePatrons.length - calibratedCount;
 
         conductorLog(`🔄 Refreshed devices: ${activeDevices.length} active (${activePatrons.length} patrons, ${activePillarsList.length} pillars)`);
+        conductorLog(`   Calibrated: ${calibratedCount}, Uncalibrated: ${uncalibratedCount}`);
 
         return activeDevices;
     }
 
     function createSpiralPath(devices) {
+        // Filter out pillars (already handled by caller, but safe guard)
         const patronDevices = devices.filter(d => !d.id.startsWith('PILLAR_'));
 
         if (patronDevices.length === 0) return [];
@@ -1217,7 +1223,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         }));
         conductorLog(`📋 Loaded ${noteTimings.length} piccolo notes`);
 
-        // Load all pillar notes for later filtering
+        // Load pillar notes
         if (tuningModeData.pillar_notes) {
             allPillarNotes = tuningModeData.pillar_notes.map(note => ({
                 pillar_id: note.pillar_id,
@@ -1227,16 +1233,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
                 pitch: note.pitch,
                 midi: note.midi
             }));
-            conductorLog(`📡 Loaded ${allPillarNotes.length} pillar notes (will filter at runtime)`);
-
-            // Log breakdown by pillar
-            const pillarCounts = {};
-            allPillarNotes.forEach(note => {
-                pillarCounts[note.pillar_id] = (pillarCounts[note.pillar_id] || 0) + 1;
-            });
-            Object.entries(pillarCounts).forEach(([pillarId, count]) => {
-                conductorLog(`   ${pillarId}: ${count} notes`);
-            });
+            conductorLog(`📡 Loaded ${allPillarNotes.length} pillar notes`);
         }
 
         // Load calibration windows
@@ -1244,14 +1241,9 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             pillarWindows = tuningModeData.metadata.pillar_cal_windows;
             phase1EndMs = pillarWindows[pillarWindows.length - 1].end_ms;
             conductorLog(`📡 Loaded ${pillarWindows.length} calibration windows, Phase 1 ends at ${phase1EndMs}ms`);
-
-            // Log windows for debugging
-            pillarWindows.forEach(w => {
-                conductorLog(`   ${w.pillar_id}: measures ${w.start_measure}-${w.end_measure} → ${w.start_ms}ms-${w.end_ms}ms (${w.note_count} notes)`);
-            });
         }
 
-        // Get piccolo URL
+        // Get audio URLs
         if (tuningModeData.assets && tuningModeData.assets.piccolo) {
             PICCOLO_URL = tuningModeData.assets.piccolo;
             conductorLog(`🎵 Piccolo URL: ${PICCOLO_URL.split('/').pop()}`);
@@ -1261,19 +1253,17 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             return;
         }
 
-        // Get test pulse URL
         if (tuningModeData.assets && tuningModeData.assets.test_pulse) {
             TEST_PULSE_URL = tuningModeData.assets.test_pulse;
             conductorLog(`🔊 Test pulse URL: ${TEST_PULSE_URL.split('/').pop()}`);
         }
 
-        // Get pillar URLs
         if (tuningModeData.assets && tuningModeData.assets.pillars) {
             pillarUrls = tuningModeData.assets.pillars;
             conductorLog(`🏛️ Pillar URLs loaded: ${Object.keys(pillarUrls).join(', ')}`);
         }
 
-        // Get active devices (both patrons AND pillars from heartbeats)
+        // Get active devices
         await refreshActiveDevices();
         if (activeDevices.length === 0) {
             conductorLog("No active devices found!", 'error');
@@ -1285,33 +1275,57 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         const activePatrons = activeDevices.filter(d => !d.isPillar);
         const activePillarsList = activeDevices.filter(d => d.isPillar);
 
-        conductorLog(`👥 Active patrons (${activePatrons.length}): ${activePatrons.map(d => d.id).join(', ')}`);
-        conductorLog(`🏛️ Active pillars (${activePillarsList.length}): ${activePillarsList.map(d => d.id).join(', ')}`);
+        // Split patrons into calibrated and uncalibrated
+        const calibratedPatrons = activePatrons.filter(d => d.calibrated === true);
+        const uncalibratedPatrons = activePatrons.filter(d => d.calibrated !== true);
 
-        if (activePatrons.length === 0) {
-            conductorLog("No active patron devices found!", 'error');
-            alert("No active patron devices found!");
+        conductorLog(`👥 Active patrons: ${activePatrons.length} total`);
+        conductorLog(`   ✅ Calibrated: ${calibratedPatrons.length} (will listen only)`);
+        conductorLog(`   🔄 Uncalibrated: ${uncalibratedPatrons.length} (will play notes)`);
+        conductorLog(`🏛️ Active pillars: ${activePillarsList.length}`);
+
+        // If no uncalibrated devices, skip tuning entirely
+        if (uncalibratedPatrons.length === 0) {
+            conductorLog("✅ All patrons already calibrated! Skipping tuning movement.");
+
+            // Send GO signal for the show immediately if a movement is selected
+            if (currentMovement) {
+                const bufferMs = (currentMovement.buffer_s || 1.0) * 1000;
+                const startTime = Date.now() + serverOffset + bufferMs;
+                const startTimeStr = new Date(startTime).toISOString().substr(11, 12);
+
+                await db.ref('show/currentCue').set({
+                    action: 'GO',
+                    movement: currentMovement.movement_name,
+                    startTime: startTime,
+                    bufferMs: bufferMs,
+                    cues: currentMovement.cues
+                });
+
+                conductorLog(`🚀 Skipped tuning, sending GO for "${currentMovement.movement_name}" at ${startTimeStr}`);
+            } else {
+                conductorLog("⚠️ No movement selected, cannot start show");
+            }
             return;
         }
 
-        // Create spiral order for patron devices only
-        const patronDeviceOrder = createSpiralPath(activePatrons);
+        // Create spiral order for UNcalibrated patrons only
+        const patronDeviceOrder = createSpiralPath(uncalibratedPatrons);
         if (patronDeviceOrder.length === 0) {
-            conductorLog("No active patron devices found for spiral path", 'error');
-            alert("No active patron devices found");
+            conductorLog("No uncalibrated patrons available for spiral path", 'error');
             return;
         }
-        conductorLog(`🌀 Spiral order (patrons): ${patronDeviceOrder.join(', ')}`);
+        conductorLog(`🌀 Spiral order (uncalibrated patrons): ${patronDeviceOrder.join(', ')}`);
 
-        // Get active pillar IDs from heartbeats
+        // Get active pillar IDs
         const activePillarIds = activePillarsList.map(p => p.id);
-        conductorLog(`🏛️ Active pillars from heartbeats: ${activePillarIds.length > 0 ? activePillarIds.join(', ') : 'none'}`);
+        conductorLog(`🏛️ Active pillars: ${activePillarIds.length > 0 ? activePillarIds.join(', ') : 'none'}`);
 
-        // Combine full device order (pillars first, then patrons)
-        const fullDeviceOrder = [...activePillarIds, ...patronDeviceOrder];
+        // Build full device order (all devices for neighbor detection)
+        const fullDeviceOrder = [...activePillarIds, ...uncalibratedPatrons.map(d => d.id), ...calibratedPatrons.map(d => d.id)];
         conductorLog(`📋 Full device order (${fullDeviceOrder.length} devices): ${fullDeviceOrder.join(', ')}`);
 
-        // Distribute notes to patron devices only (pillars don't play piccolo)
+        // Distribute notes to uncalibrated patrons only
         const tuningSchedule = distributeNotes(patronDeviceOrder);
         if (!tuningSchedule) {
             conductorLog("Failed to distribute notes", 'error');
@@ -1329,16 +1343,18 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             piccoloUrl: PICCOLO_URL,
             pillars: pillarUrls,
             schedule: tuningSchedule.notes,
-            deviceOrder: fullDeviceOrder,                    // Includes active pillars from heartbeats!
+            deviceOrder: fullDeviceOrder,
             startTime: tuningStartTimeAbs,
             totalNotes: tuningSchedule.totalNotes,
             deviceCount: tuningSchedule.deviceCount,
             patronCount: activePatrons.length,
+            uncalibratedCount: uncalibratedPatrons.length,
+            calibratedCount: calibratedPatrons.length,
             pillarCount: activePillarsList.length,
             generatedAt: Date.now() + serverOffset,
-            activeDevices: activeDevices.map(d => ({ id: d.id, x: d.x, y: d.y, isPillar: d.isPillar })),
+            activeDevices: activeDevices.map(d => ({ id: d.id, x: d.x, y: d.y, isPillar: d.isPillar, calibrated: d.calibrated })),
             activePillars: activePillarIds,
-            // Include all pillar notes (will be filtered at runtime by active pillars)
+            calibratedPatronIds: calibratedPatrons.map(d => d.id),  // For listen-only mode
             pillar_notes: allPillarNotes,
             metadata: {
                 pillar_cal_windows: pillarWindows,
@@ -1353,7 +1369,6 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             await db.ref('tuning/current').set(tuningCurrentObj);
             conductorLog(`✅ Tuning schedule written to Firebase`);
 
-            // Verify it was written
             const verify = await db.ref('tuning/current/startTime').once('value');
             conductorLog(`✅ Verified startTime in Firebase: ${verify.val()}`);
         } catch (e) {
@@ -1362,8 +1377,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             return;
         }
 
-        // Note: We do NOT write to show/currentCue anymore - devices listen directly to tuning/current
-        conductorLog(`🎯 Tuning started: ${activePatrons.length} patron devices, ${activePillarsList.length} pillars, ${noteTimings.length} notes`);
+        conductorLog(`🎯 Tuning started: ${uncalibratedPatrons.length} uncalibrated patrons, ${calibratedPatrons.length} listening-only patrons, ${activePillarsList.length} pillars, ${tuningSchedule.totalNotes} notes`);
         conductorLog(`   Start time: ${new Date(tuningStartTimeAbs).toISOString().substr(11, 12)}`);
     }
 
