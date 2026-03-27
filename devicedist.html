@@ -274,6 +274,8 @@
     let currentPlaybackStartTime = 0;
     let envelopeTimeouts = [];
     let isSingleDeviceMode = false;
+    let lastMedianShift = 0;
+    let sameShiftCount = 0;
 
     // MICROPHONE STATE
     let micStream = null;
@@ -1252,6 +1254,9 @@
 
         const songPosition = now - tuningStartTime;
 
+        // Skip if we're too far into the song (after Phase 2 begins, we use neighbors)
+        if (songPosition > phase1EndMs + 5000) return;
+
         let closestNote = null;
         let minDelta = Infinity;
 
@@ -1281,7 +1286,15 @@
             const timeShift = now - expectedTimeAbs;  // Positive = early, Negative = late
 
             if (Math.abs(timeShift) < 500) {
-                // Store raw time shift
+                // Sanity check: time shift shouldn't change drastically from previous
+                if (rawTimeShifts.length > 0) {
+                    const lastShift = rawTimeShifts[rawTimeShifts.length - 1];
+                    if (Math.abs(timeShift - lastShift) > 200 && rawTimeShifts.length > 5) {
+                        log(`⚠️ Large time shift jump: ${lastShift.toFixed(1)}ms → ${timeShift.toFixed(1)}ms, possible detection error`);
+                        // Still store it, but flag in log
+                    }
+                }
+
                 rawTimeShifts.push(timeShift);
                 if (rawTimeShifts.length > 50) rawTimeShifts.shift();
 
@@ -1294,7 +1307,6 @@
 
             processedMeasurements.add(noteKey);
 
-            // Visual feedback
             const flash = document.getElementById('detection-flash');
             if (flash) {
                 flash.style.background = '#ffaa44';
@@ -1505,8 +1517,23 @@
     function restartWithNewDelay(newSpeakerDelay) {
         if (!audioCtx || audioCtx.state !== 'running') return;
 
+        // Validate the new delay is within reasonable range
+        const MIN_DELAY = -50;
+        const MAX_DELAY = 500;
+        if (newSpeakerDelay < MIN_DELAY || newSpeakerDelay > MAX_DELAY) {
+            log(`⚠️ Refusing to restart with invalid delay: ${newSpeakerDelay.toFixed(1)}ms (outside ${MIN_DELAY}-${MAX_DELAY}ms)`);
+            return;
+        }
+
         const nowWall = Date.now() + serverOffset;
         const currentSongPosition = nowWall - tuningStartTime;
+
+        // Don't restart if we're near the end of the song
+        const totalDuration = 182571; // ~3 minutes
+        if (currentSongPosition > totalDuration - 2000) {
+            log(`⏸️ Near end of tuning (${currentSongPosition.toFixed(0)}ms), skipping restart`);
+            return;
+        }
 
         log(`🔄 Restarting with new delay: ${newSpeakerDelay.toFixed(1)}ms`);
         log(`   Current song position: ${currentSongPosition.toFixed(0)}ms`);
@@ -1608,49 +1635,74 @@
     function applyCorrection(medianShift) {
         const currentDelay = currentSpeakerDelay;
 
-        // Full correction: new delay = current delay - median shift
-        // If medianShift is negative (late), newDelay = current + |shift|
-        // If medianShift is positive (early), newDelay = current - shift
-        const newDelay = currentDelay - medianShift;
-
-        // NO CLAMPING - let the math work unfettered
-        // Only log if the new delay is extreme
-        if (Math.abs(newDelay) > 1000) {
-            log(`⚠️ Extreme delay calculated: ${newDelay.toFixed(1)}ms, but trusting the data`);
+        // Check if median shift is stuck (not changing)
+        if (Math.abs(medianShift - lastMedianShift) < 5 && Math.abs(medianShift) > 10) {
+            sameShiftCount++;
+            if (sameShiftCount >= 3) {
+                log(`⚠️ Median shift stuck at ${medianShift.toFixed(1)}ms for ${sameShiftCount} evaluations - pausing corrections`);
+                log(`   Current delay: ${currentDelay.toFixed(1)}ms`);
+                log(`   This may indicate the device's actual latency is much higher than estimated`);
+                // Don't apply correction this time, but don't clear rawTimeShifts either
+                lastMedianShift = medianShift;
+                return;
+            }
+        } else {
+            sameShiftCount = 0;
+            lastMedianShift = medianShift;
         }
 
-        const correctionMagnitude = Math.abs(newDelay - currentDelay);
+        // Full correction: new delay = current delay - median shift
+        const newDelay = currentDelay - medianShift;
 
+        // SANE CLAMPING - prevent runaway delays
+        // Realistic range for phones/tablets: -50ms to 500ms
+        // Negative means play after conductor start (for early devices)
+        // Positive means play before conductor start (for late devices)
+        const MIN_DELAY = -50;
+        const MAX_DELAY = 500;
+        const clampedDelay = Math.max(MIN_DELAY, Math.min(MAX_DELAY, newDelay));
+
+        const correctionMagnitude = Math.abs(clampedDelay - currentDelay);
+
+        // Skip if correction is too small
         if (correctionMagnitude < MIN_CORRECTION_MS) {
             log(`⏭️ Correction too small (${correctionMagnitude.toFixed(1)}ms), skipping`);
             return;
         }
 
+        // Warn if we're hitting the clamp limits
+        if (clampedDelay === MIN_DELAY && newDelay < MIN_DELAY) {
+            log(`⚠️ Correction would go below ${MIN_DELAY}ms (to ${newDelay.toFixed(1)}ms), clamping`);
+        }
+        if (clampedDelay === MAX_DELAY && newDelay > MAX_DELAY) {
+            log(`⚠️ Correction would exceed ${MAX_DELAY}ms (to ${newDelay.toFixed(1)}ms), clamping`);
+        }
+
         log(`🔄 Applying correction:`);
         log(`   Median shift: ${medianShift > 0 ? '+' : ''}${medianShift.toFixed(1)}ms (${medianShift > 0 ? 'early' : 'late'})`);
         log(`   Current speaker delay: ${currentDelay.toFixed(1)}ms`);
-        log(`   New speaker delay: ${newDelay.toFixed(1)}ms`);
+        log(`   New speaker delay: ${clampedDelay.toFixed(1)}ms (was ${newDelay.toFixed(1)}ms before clamp)`);
         log(`   Correction magnitude: ${correctionMagnitude.toFixed(1)}ms`);
 
-        currentSpeakerDelay = newDelay;
+        currentSpeakerDelay = clampedDelay;
         iterationFinalDelays.push(currentSpeakerDelay);
 
-        // Only restart if the correction is significant enough to warrant it
-        // This prevents constant restarts for tiny corrections
-        const RESTART_THRESHOLD = 20;  // Only restart if correction > 20ms
-
+        // Only restart if correction is significant (avoid micro-restarts)
+        const RESTART_THRESHOLD = 20;
         if (correctionMagnitude >= RESTART_THRESHOLD) {
             restartWithNewDelay(currentSpeakerDelay);
         } else {
             log(`   ⏸️ Small correction (${correctionMagnitude.toFixed(1)}ms), updating delay without restart`);
             // Update envelopes to use new delay for future notes
-            if (tuningStartTime && continuousGain && !isSingleDeviceMode) {
-                // Reschedule remaining envelopes without restarting
+            if (tuningStartTime && continuousGain && !isSingleDeviceMode && !isListenOnlyMode) {
                 setTimeout(() => {
                     startEnvelopeScheduler(tuningStartTime);
                 }, 10);
             }
         }
+
+        // Clear raw time shifts after applying correction
+        rawTimeShifts = [];
 
         // Visual feedback
         const flash = document.getElementById('detection-flash');
@@ -1668,6 +1720,29 @@
         const currentDelay = currentSpeakerDelay;
 
         log(`📊 Real-time: median shift=${medianShift > 0 ? '+' : ''}${medianShift.toFixed(1)}ms, σ=${stdDev.toFixed(1)}ms, samples=${rawTimeShifts.length}, current delay=${currentDelay.toFixed(1)}ms`);
+
+        // Check if we're already converged
+        if (Math.abs(medianShift) <= convergenceStdDevMs && stdDev <= convergenceStdDevMs) {
+            if (!isHappy) {
+                log(`✅ Converged! Error ${Math.abs(medianShift).toFixed(1)}ms ≤ ${convergenceStdDevMs}ms, σ=${stdDev.toFixed(1)}ms`);
+                completeCalibration();
+            }
+            return;
+        }
+
+        // Check if delay is hitting limits
+        const MIN_DELAY = -50;
+        const MAX_DELAY = 500;
+        if (currentDelay <= MIN_DELAY && medianShift > 0) {
+            log(`⚠️ At minimum delay (${currentDelay.toFixed(1)}ms) but still ${medianShift > 0 ? 'early' : 'late'} by ${Math.abs(medianShift).toFixed(1)}ms`);
+            log(`   Device may have unusually low latency (${currentDelay - medianShift}ms theoretical)`);
+            return;
+        }
+        if (currentDelay >= MAX_DELAY && medianShift < 0) {
+            log(`⚠️ At maximum delay (${currentDelay.toFixed(1)}ms) but still late by ${Math.abs(medianShift).toFixed(1)}ms`);
+            log(`   Device may have unusually high latency (${currentDelay - medianShift}ms theoretical)`);
+            return;
+        }
 
         if (shouldIterate(medianShift, stdDev, rawTimeShifts.length)) {
             if (Math.abs(medianShift) <= MIN_CORRECTION_MS) {
@@ -1738,25 +1813,31 @@
         let piccoloEnergy = 0;
         let maxEnergy = 0;
         let dominantFreq = 0;
+        let peakBin = binIndices.start;
 
         for (let i = binIndices.start; i <= binIndices.end && i < frequencyData.length; i++) {
             const energy = frequencyData[i] / 255;
             piccoloEnergy += energy;
             if (energy > maxEnergy) {
                 maxEnergy = energy;
-                const nyquist = sampleRate / 2;
-                dominantFreq = (i / (FFT_SIZE / 2)) * nyquist;
+                peakBin = i;
             }
         }
         piccoloEnergy = piccoloEnergy / (binIndices.end - binIndices.start + 1);
         currentAvgEnergy = piccoloEnergy;
+
+        // Calculate dominant frequency from peak bin
+        if (maxEnergy > 0.05) {
+            const nyquist = sampleRate / 2;
+            dominantFreq = (peakBin / (FFT_SIZE / 2)) * nyquist;
+        }
 
         const energyFill = document.getElementById('energy-fill');
         const energyValue = document.getElementById('energy-value');
         if (energyFill) energyFill.style.width = (piccoloEnergy * 100) + '%';
         if (energyValue) energyValue.innerText = piccoloEnergy.toFixed(4);
 
-        // Calculate baseline ratio
+        // Update baseline
         let ratioToBaseline = 1.0;
         if (baselineComplete && baselineEnergy > 0) {
             ratioToBaseline = piccoloEnergy / baselineEnergy;
@@ -1776,10 +1857,10 @@
             detectPillarOnsets(now, frequencyData, sampleRate, FFT_SIZE);
         }
 
-        // Phase 2: Sync and correction (skip entirely for listen-only)
+        // Phase 2: Sync and correction (skip for listen-only)
         if (!isListenOnlyMode && myMicDelayMs !== null && tuningStartTime) {
             detectPillarForSync(now, frequencyData, sampleRate, FFT_SIZE);
-            processDetectionWindows(now, piccoloEnergy, dominantFreq, ratioToBaseline);  // Pass real values
+            processDetectionWindows(now, piccoloEnergy, dominantFreq, ratioToBaseline);
 
             // Periodic evaluation
             if (now - lastEvaluationTime > EVALUATION_INTERVAL_MS) {
@@ -1788,9 +1869,9 @@
             }
         }
 
-        // For listen-only mode: still need to detect neighbors with proper frequency
+        // Listen-only mode: only process neighbor detection
         if (isListenOnlyMode && tuningStartTime) {
-            processDetectionWindows(now, piccoloEnergy, dominantFreq, ratioToBaseline);  // Pass real values
+            processDetectionWindows(now, piccoloEnergy, dominantFreq, ratioToBaseline);
         }
 
         requestAnimationFrame(detectNeighborNotes);
