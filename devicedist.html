@@ -1526,8 +1526,8 @@
         if (!audioCtx || audioCtx.state !== 'running') return;
 
         // Validate the new delay is within reasonable range
-        const MIN_DELAY = -50;
-        const MAX_DELAY = 500;
+        const MIN_DELAY = -500;
+        const MAX_DELAY = 2000;
         if (newSpeakerDelay < MIN_DELAY || newSpeakerDelay > MAX_DELAY) {
             log(`⚠️ Refusing to restart with invalid delay: ${newSpeakerDelay.toFixed(1)}ms (outside ${MIN_DELAY}-${MAX_DELAY}ms)`);
             return;
@@ -1649,8 +1649,7 @@
             if (sameShiftCount >= 3) {
                 log(`⚠️ Median shift stuck at ${medianShift.toFixed(1)}ms for ${sameShiftCount} evaluations - pausing corrections`);
                 log(`   Current delay: ${currentDelay.toFixed(1)}ms`);
-                log(`   This may indicate the device's actual latency is much higher than estimated`);
-                // Don't apply correction this time, but don't clear rawTimeShifts either
+                log(`   Theoretical needed delay: ${currentDelay - medianShift}ms`);
                 lastMedianShift = medianShift;
                 return;
             }
@@ -1662,57 +1661,41 @@
         // Full correction: new delay = current delay - median shift
         const newDelay = currentDelay - medianShift;
 
-        // SANE CLAMPING - prevent runaway delays
-        // Realistic range for phones/tablets: -50ms to 500ms
-        // Negative means play after conductor start (for early devices)
-        // Positive means play before conductor start (for late devices)
-        const MIN_DELAY = -50;
-        const MAX_DELAY = 500;
+        // High upper bound (2000ms) to allow for high-latency devices
+        // Lower bound allows negative for early devices
+        const MIN_DELAY = -500;
+        const MAX_DELAY = 2000;
         const clampedDelay = Math.max(MIN_DELAY, Math.min(MAX_DELAY, newDelay));
 
         const correctionMagnitude = Math.abs(clampedDelay - currentDelay);
 
-        // Skip if correction is too small
         if (correctionMagnitude < MIN_CORRECTION_MS) {
             log(`⏭️ Correction too small (${correctionMagnitude.toFixed(1)}ms), skipping`);
             return;
         }
 
-        // Warn if we're hitting the clamp limits
-        if (clampedDelay === MIN_DELAY && newDelay < MIN_DELAY) {
-            log(`⚠️ Correction would go below ${MIN_DELAY}ms (to ${newDelay.toFixed(1)}ms), clamping`);
-        }
-        if (clampedDelay === MAX_DELAY && newDelay > MAX_DELAY) {
-            log(`⚠️ Correction would exceed ${MAX_DELAY}ms (to ${newDelay.toFixed(1)}ms), clamping`);
-        }
-
         log(`🔄 Applying correction:`);
         log(`   Median shift: ${medianShift > 0 ? '+' : ''}${medianShift.toFixed(1)}ms (${medianShift > 0 ? 'early' : 'late'})`);
         log(`   Current speaker delay: ${currentDelay.toFixed(1)}ms`);
-        log(`   New speaker delay: ${clampedDelay.toFixed(1)}ms (was ${newDelay.toFixed(1)}ms before clamp)`);
+        log(`   New speaker delay: ${clampedDelay.toFixed(1)}ms`);
         log(`   Correction magnitude: ${correctionMagnitude.toFixed(1)}ms`);
 
         currentSpeakerDelay = clampedDelay;
         iterationFinalDelays.push(currentSpeakerDelay);
 
-        // Only restart if correction is significant (avoid micro-restarts)
+        // Only restart if correction is significant
         const RESTART_THRESHOLD = 20;
         if (correctionMagnitude >= RESTART_THRESHOLD) {
             restartWithNewDelay(currentSpeakerDelay);
         } else {
-            log(`   ⏸️ Small correction (${correctionMagnitude.toFixed(1)}ms), updating delay without restart`);
-            // Update envelopes to use new delay for future notes
+            log(`   ⏸️ Small correction, updating delay without restart`);
             if (tuningStartTime && continuousGain && !isSingleDeviceMode && !isListenOnlyMode) {
-                setTimeout(() => {
-                    startEnvelopeScheduler(tuningStartTime);
-                }, 10);
+                setTimeout(() => startEnvelopeScheduler(tuningStartTime), 10);
             }
         }
 
-        // Clear raw time shifts after applying correction
         rawTimeShifts = [];
 
-        // Visual feedback
         const flash = document.getElementById('detection-flash');
         if (flash) {
             flash.style.background = '#ffaa44';
