@@ -258,6 +258,7 @@
     // ============================================================================
 
     // Playback state
+    let isListenOnlyMode = false;  // For already-calibrated devices
     let audioCtx = null;
     let masterGain = null;
     let mySeat = null;
@@ -571,6 +572,10 @@
                 document.getElementById('seat-label').innerText = `Seat ${mySeat.id}`;
                 document.getElementById('id-ind').className = 'indicator active';
                 log(`✅ Resolved seat ${seatId} at (${mySeat.x}, ${mySeat.y})`);
+
+                // Load stored calibration after identity is resolved
+                loadStoredCalibration();
+
                 return true;
             } else if (Array.isArray(seatsData)) {
                 const config = seatsData.find(s => s.id === seatId);
@@ -584,6 +589,10 @@
                     document.getElementById('seat-label').innerText = `Seat ${mySeat.id}`;
                     document.getElementById('id-ind').className = 'indicator active';
                     log(`✅ Resolved seat ${seatId} from array`);
+
+                    // Load stored calibration after identity is resolved
+                    loadStoredCalibration();
+
                     return true;
                 }
             }
@@ -627,6 +636,46 @@
         } catch (e) {
             log(`❌ Failed to load neighbor map: ${e.message}`);
             document.getElementById('neighbor-ind').className = 'indicator error';
+            return false;
+        }
+    }
+
+    function loadStoredCalibration() {
+        if (!mySeat) return false;
+
+        try {
+            const stored = localStorage.getItem(`calibration_${mySeat.id}`);
+            if (!stored) return false;
+
+            const cal = JSON.parse(stored);
+
+            // Expire calibrations older than 30 days
+            const maxAge = 30 * 24 * 60 * 60 * 1000; // 30 days
+            if (Date.now() - cal.timestamp > maxAge) {
+                log(`📆 Stored calibration expired (${Math.round((Date.now() - cal.timestamp) / (24*60*60*1000))} days old)`);
+                localStorage.removeItem(`calibration_${mySeat.id}`);
+                return false;
+            }
+
+            // Sanity check values
+            if (cal.speakerDelay >= -500 && cal.speakerDelay <= 1000 &&
+                cal.micDelay >= 0 && cal.micDelay <= 200) {
+
+                currentSpeakerDelay = cal.speakerDelay;
+                myMicDelayMs = cal.micDelay;
+                phase1Complete = true;      // Skip Phase 1 mic calibration
+                isHappy = true;              // Mark as already calibrated
+
+                log(`✅ Loaded stored calibration: speaker=${currentSpeakerDelay.toFixed(1)}ms, mic=${myMicDelayMs.toFixed(1)}ms`);
+                log(`   Calibration from ${new Date(cal.timestamp).toLocaleString()}`);
+
+                return true;
+            } else {
+                log(`⚠️ Stored calibration values out of range, ignoring`);
+                return false;
+            }
+        } catch (e) {
+            log(`⚠️ Failed to load stored calibration: ${e.message}`);
             return false;
         }
     }
@@ -747,6 +796,7 @@
             await db.ref(`devices/${mySeat.id}`).update({
                 lastSeen: now,
                 status: isHappy ? 'HAPPY' : (phase1Complete ? 'CALIBRATING' : 'ACTIVE'),
+                calibrated: isHappy,  // <-- ADD THIS
                 x: mySeat.x,
                 y: mySeat.y,
                 speakerDelay: currentSpeakerDelay,
@@ -1291,13 +1341,20 @@
         envelopeTimeouts.forEach(t => clearTimeout(t));
         envelopeTimeouts = [];
 
+        // Listen-only devices don't schedule envelopes
+        if (isListenOnlyMode) {
+            return;
+        }
+
         if (isSingleDeviceMode) {
+            // Single device: full volume continuously, no envelopes needed
             if (continuousGain) {
                 continuousGain.gain.setValueAtTime(MASTER_PLAYBACK_GAIN, audioCtx.currentTime);
             }
             return;
         }
 
+        // Normal mode: schedule volume envelopes for each note
         assignedNotes.forEach(note => {
             const noteStartWall = pieceStartTime + note.startMs;
             const nowWall = Date.now() + serverOffset;
@@ -1319,6 +1376,7 @@
                     continuousGain.gain.linearRampToValueAtTime(0, now + (durationMs - rampDownMs)/1000);
                     continuousGain.gain.setValueAtTime(0, now + durationMs/1000);
 
+                    // Visual feedback
                     const canvas = document.getElementById('stage-canvas');
                     const ctx = canvas.getContext('2d');
                     ctx.fillStyle = '#ffffff';
@@ -1359,6 +1417,12 @@
     }
 
     function startContinuousPlayback(startTime, speakerDelay) {
+        // Listen-only devices don't play anything
+        if (isListenOnlyMode) {
+            log(`🔇 Listen-only mode - no playback, listening for neighbors only`);
+            return;
+        }
+
         if (!PICCOLO_URL || !bufferCache[PICCOLO_URL]) return;
 
         const nowWall = Date.now() + serverOffset;
@@ -1367,10 +1431,12 @@
 
         if (delayMs > 0) {
             setTimeout(() => {
+                // Stop old playback if exists
                 if (continuousSource) {
                     fadeOutAndStop();
                 }
 
+                // Create new continuous source
                 continuousSource = audioCtx.createBufferSource();
                 continuousSource.buffer = bufferCache[PICCOLO_URL];
                 continuousSource.loop = false;
@@ -1509,8 +1575,23 @@
         log(`   Final speaker delay: ${currentSpeakerDelay?.toFixed(1) || estimatedDeviceDelayMs.toFixed(1)}ms`);
         log(`   Mic delay: ${myMicDelayMs?.toFixed(1) || '0'}ms`);
 
+        // Save calibration to localStorage for future sessions
+        try {
+            const calibrationData = {
+                speakerDelay: currentSpeakerDelay,
+                micDelay: myMicDelayMs,
+                timestamp: Date.now(),
+                version: 1
+            };
+            localStorage.setItem(`calibration_${mySeat.id}`, JSON.stringify(calibrationData));
+            log(`💾 Calibration saved to localStorage`);
+        } catch (e) {
+            log(`⚠️ Could not save calibration: ${e.message}`);
+        }
+
         db.ref(`devices/${mySeat.id}`).update({
             status: 'HAPPY',
+            calibrated: true,
             finalSpeakerDelay: Math.round(currentSpeakerDelay || estimatedDeviceDelayMs),
             finalMicDelay: Math.round(myMicDelayMs || 0),
             convergedAt: Date.now() + serverOffset
@@ -1552,13 +1633,13 @@
         if (energyFill) energyFill.style.width = (piccoloEnergy * 100) + '%';
         if (energyValue) energyValue.innerText = piccoloEnergy.toFixed(4);
 
-        // Phase 1: Get mic delay (only once)
-        if (myMicDelayMs === null && tuningStartTime) {
+        // Phase 1: Get mic delay (skip if listen-only or already have mic delay)
+        if (!isListenOnlyMode && myMicDelayMs === null && tuningStartTime) {
             detectPillarOnsets(now, frequencyData, sampleRate, FFT_SIZE);
         }
 
-        // Phase 2: Sync and correction
-        if (myMicDelayMs !== null && tuningStartTime) {
+        // Phase 2: Sync and correction (skip entirely for listen-only)
+        if (!isListenOnlyMode && myMicDelayMs !== null && tuningStartTime) {
             detectPillarForSync(now, frequencyData, sampleRate, FFT_SIZE);
             processDetectionWindows(now, piccoloEnergy, 0, 0);
 
@@ -1567,6 +1648,11 @@
                 lastEvaluationTime = now;
                 evaluateInRealTime();
             }
+        }
+
+        // For listen-only mode: only process neighbor detection (no pillar sync, no corrections)
+        if (isListenOnlyMode && tuningStartTime) {
+            processDetectionWindows(now, piccoloEnergy, 0, 0);
         }
 
         requestAnimationFrame(detectNeighborNotes);
@@ -1831,75 +1917,107 @@
             const activePillars = (schedule.deviceOrder || []).filter(id => id.startsWith('PILLAR_'));
             log(`📡 Active pillars (${activePillars.length}): ${activePillars.length > 0 ? activePillars.join(', ') : 'none'}`);
 
-            if (schedule.schedule) {
-                noteSchedule = schedule.schedule.map(note => ({
-                    ...note,
-                    startMs: parseFloat(note.startMs),
-                    durationMs: parseFloat(note.durationMs)
-                }));
+            // ============ CHECK IF THIS DEVICE IS ALREADY CALIBRATED ============
+            const calibratedPatronIds = schedule.calibratedPatronIds || [];
+            const isCalibrated = calibratedPatronIds.includes(mySeat.id);
 
-                assignedNotes = noteSchedule.filter(note => note.deviceId === mySeat.id);
-                log(`🎯 This device assigned ${assignedNotes.length} notes`);
-                if (assignedNotes.length === 0) {
-                    log(`⚠️ No notes assigned to this device!`);
+            if (isCalibrated) {
+                // Listen-only mode: no playback, no pillar detection
+                isListenOnlyMode = true;
+                assignedNotes = [];
+                phase1Complete = true;      // Skip Phase 1 entirely
+                // Keep existing mic delay and speaker delay from storage
+                log(`🎯 Device already calibrated - listen-only mode (no playback, no pillar detection)`);
+            } else {
+                // Normal mode for uncalibrated devices
+                isListenOnlyMode = false;
+
+                // Load patron note schedule
+                if (schedule.schedule) {
+                    noteSchedule = schedule.schedule.map(note => ({
+                        ...note,
+                        startMs: parseFloat(note.startMs),
+                        durationMs: parseFloat(note.durationMs)
+                    }));
+
+                    assignedNotes = noteSchedule.filter(note => note.deviceId === mySeat.id);
+                    log(`🎯 This device assigned ${assignedNotes.length} notes`);
+                    if (assignedNotes.length === 0) {
+                        log(`⚠️ No notes assigned to this device!`);
+                    }
                 }
             }
 
-            // Load pillar notes filtered to active pillars
+            // Load pillar notes (skip if listen-only)
             let allNotes = [];
-            if (schedule.pillar_notes && schedule.pillar_notes.length > 0) {
-                allNotes = schedule.pillar_notes;
-                log(`📡 Using schedule.pillar_notes (${allNotes.length} total notes) from tuning/current`);
-            } else if (allPillarNotes && allPillarNotes.length > 0) {
-                allNotes = allPillarNotes;
-                log(`📡 Using allPillarNotes (${allNotes.length} total notes) as fallback from tuning_mode`);
-            } else {
-                log(`⚠️ No pillar notes available`);
-                pillarNoteSchedule = [];
+            if (!isListenOnlyMode) {
+                if (schedule.pillar_notes && schedule.pillar_notes.length > 0) {
+                    allNotes = schedule.pillar_notes;
+                    log(`📡 Using schedule.pillar_notes (${allNotes.length} total notes) from tuning/current`);
+                } else if (allPillarNotes && allPillarNotes.length > 0) {
+                    allNotes = allPillarNotes;
+                    log(`📡 Using allPillarNotes (${allNotes.length} total notes) as fallback from tuning_mode`);
+                }
             }
 
-            if (allNotes.length > 0) {
+            if (allNotes.length > 0 && !isListenOnlyMode) {
                 pillarNoteSchedule = allNotes.filter(note => activePillars.includes(note.pillar_id));
                 log(`📡 Loaded ${pillarNoteSchedule.length} pillar notes (filtered to active pillars: ${activePillars.join(', ')})`);
+            } else if (isListenOnlyMode) {
+                pillarNoteSchedule = [];  // No pillar detection needed
+                log(`📡 Listen-only mode: skipping pillar note loading`);
             }
 
+            // Load calibration windows
             if (schedule.metadata && schedule.metadata.pillar_cal_windows) {
                 pillarWindows = schedule.metadata.pillar_cal_windows;
                 phase1EndMs = pillarWindows[pillarWindows.length - 1].end_ms;
                 log(`📡 Loaded ${pillarWindows.length} calibration windows, Phase 1 ends at ${phase1EndMs}ms`);
             }
 
-            if (schedule.deviceOrder) {
+            // Detect single device mode
+            if (schedule.deviceOrder && !isListenOnlyMode) {
                 const patronDeviceOrder = schedule.deviceOrder.filter(id => !id.startsWith('PILLAR_'));
                 isSingleDeviceMode = (patronDeviceOrder.length === 1);
                 log(`🎯 ${isSingleDeviceMode ? 'Single device mode' : `Multi-device mode - ${patronDeviceOrder.length} patron devices`}`);
             }
 
-            // Reset mic delay state
-            phase1Complete = false;
-            phase1WindowActive = true;
-            micDelaySamples = [];
-            myMicDelayMs = estimatedDeviceMicDelayMs;
-            rawTimeShifts = [];  // Clear raw time shifts for new tuning session
+            // Set up Phase 1 mic delay (skip if listen-only)
+            if (!isListenOnlyMode) {
+                phase1Complete = false;
+                phase1WindowActive = true;
+                micDelaySamples = [];
+                myMicDelayMs = estimatedDeviceMicDelayMs;
+                rawTimeShifts = [];
 
-            if (pillarWindows.length > 0 && activePillars.length > 0) {
-                currentPillarWindow = pillarWindows.find(w => activePillars.includes(w.pillar_id)) || pillarWindows[0];
-                log(`🎤 Phase 1 window: listening for ${currentPillarWindow.pillar_id} from ${currentPillarWindow.start_ms}ms to ${currentPillarWindow.end_ms}ms`);
+                if (pillarWindows.length > 0 && activePillars.length > 0) {
+                    currentPillarWindow = pillarWindows.find(w => activePillars.includes(w.pillar_id)) || pillarWindows[0];
+                    log(`🎤 Phase 1 window: listening for ${currentPillarWindow.pillar_id} from ${currentPillarWindow.start_ms}ms to ${currentPillarWindow.end_ms}ms`);
+                } else {
+                    log(`⚠️ No calibration windows or no active pillars - Phase 1 will be skipped`);
+                    phase1Complete = true;
+                    myMicDelayMs = 0;
+                }
             } else {
-                log(`⚠️ No calibration windows or no active pillars - Phase 1 will be skipped`);
-                phase1Complete = true;
-                myMicDelayMs = 0;
+                // Listen-only: already phase1Complete = true
+                log(`🎤 Listen-only mode: Phase 1 skipped`);
             }
 
-            const initialSpeakerDelay = currentSpeakerDelay !== null ? currentSpeakerDelay : estimatedDeviceDelayMs;
-            log(`🎵 Starting continuous playback with speaker delay: ${initialSpeakerDelay.toFixed(1)}ms`);
-            startContinuousPlayback(tuningStartTime, initialSpeakerDelay);
+            // Start continuous playback (skip if listen-only)
+            if (!isListenOnlyMode) {
+                const initialSpeakerDelay = currentSpeakerDelay !== null ? currentSpeakerDelay : estimatedDeviceDelayMs;
+                log(`🎵 Starting continuous playback with speaker delay: ${initialSpeakerDelay.toFixed(1)}ms`);
+                startContinuousPlayback(tuningStartTime, initialSpeakerDelay);
+            } else {
+                log(`🔇 Listen-only mode: skipping playback`);
+            }
 
+            // Enable microphone for detection (always needed)
             await enableMicrophone();
-            log("🎧 Listening for pillars and neighbors...");
+            log("🎧 Listening for neighbors...");
 
-            // Phase 1 timeout fallback
-            if (pillarWindows.length > 0 && activePillars.length > 0) {
+            // Schedule Phase 1 timeout (skip if listen-only)
+            if (!isListenOnlyMode && pillarWindows.length > 0 && activePillars.length > 0) {
                 const phase1Duration = pillarWindows[pillarWindows.length - 1].end_ms;
                 setTimeout(() => {
                     if (phase1WindowActive && !phase1Complete) {
@@ -1916,15 +2034,6 @@
                     }
                 }, phase1Duration);
                 log(`⏱️ Phase 1 timeout set for ${phase1Duration}ms`);
-            } else {
-                log(`⚠️ No Phase 1 timeout set`);
-                setTimeout(() => {
-                    if (!phase1Complete) {
-                        phase1Complete = true;
-                        myMicDelayMs = 0;
-                        log(`🎤 Phase 1 skipped - using 0ms mic delay`);
-                    }
-                }, 5000);
             }
         });
     }
