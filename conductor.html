@@ -1284,31 +1284,15 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         conductorLog(`   🔄 Uncalibrated: ${uncalibratedPatrons.length} (will play notes)`);
         conductorLog(`🏛️ Active pillars: ${activePillarsList.length}`);
 
-        // If no uncalibrated devices, skip tuning entirely
+        // If no uncalibrated devices, show dialog and exit
         if (uncalibratedPatrons.length === 0) {
-            conductorLog("✅ All patrons already calibrated! Skipping tuning movement.");
-
-            // Send GO signal for the show immediately if a movement is selected
-            if (currentMovement) {
-                const bufferMs = (currentMovement.buffer_s || 1.0) * 1000;
-                const startTime = Date.now() + serverOffset + bufferMs;
-                const startTimeStr = new Date(startTime).toISOString().substr(11, 12);
-
-                await db.ref('show/currentCue').set({
-                    action: 'GO',
-                    movement: currentMovement.movement_name,
-                    startTime: startTime,
-                    bufferMs: bufferMs,
-                    cues: currentMovement.cues
-                });
-
-                conductorLog(`🚀 Skipped tuning, sending GO for "${currentMovement.movement_name}" at ${startTimeStr}`);
-            } else {
-                conductorLog("⚠️ No movement selected, cannot start show");
-            }
+            const msg = `All ${activePatrons.length} patron devices are already calibrated.\n\nNo tuning needed. You can start the show when ready.`;
+            conductorLog("✅ All patrons already calibrated! No tuning needed.");
+            alert(msg);
             return;
         }
 
+        // Continue with normal tuning for uncalibrated devices...
         // Create spiral order for UNcalibrated patrons only
         const patronDeviceOrder = createSpiralPath(uncalibratedPatrons);
         if (patronDeviceOrder.length === 0) {
