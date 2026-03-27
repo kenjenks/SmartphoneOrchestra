@@ -573,8 +573,26 @@
                 document.getElementById('id-ind').className = 'indicator active';
                 log(`✅ Resolved seat ${seatId} at (${mySeat.x}, ${mySeat.y})`);
 
-                // Load stored calibration after identity is resolved
-                loadStoredCalibration();
+                // ============ CHECK FOR FORCE RETUNE URL PARAMETER ============
+                const forceRetune = urlParams.get('forget') === 'true';
+
+                if (forceRetune) {
+                    log(`🔧 Force retune mode - ignoring stored calibration`);
+                    // Clear stored calibration for this seat
+                    localStorage.removeItem(`calibration_${mySeat.id}`);
+                    // Reset in-memory state
+                    isHappy = false;
+                    phase1Complete = false;
+                    currentSpeakerDelay = estimatedDeviceDelayMs;
+                    myMicDelayMs = estimatedDeviceMicDelayMs;
+                    isListenOnlyMode = false;
+                    // Also clear any raw time shifts
+                    rawTimeShifts = [];
+                } else {
+                    // Normal flow: load stored calibration
+                    loadStoredCalibration();
+                }
+                // ===============================================================
 
                 return true;
             } else if (Array.isArray(seatsData)) {
@@ -590,8 +608,22 @@
                     document.getElementById('id-ind').className = 'indicator active';
                     log(`✅ Resolved seat ${seatId} from array`);
 
-                    // Load stored calibration after identity is resolved
-                    loadStoredCalibration();
+                    // ============ CHECK FOR FORCE RETUNE URL PARAMETER ============
+                    const forceRetune = urlParams.get('forget') === 'true';
+
+                    if (forceRetune) {
+                        log(`🔧 Force retune mode - ignoring stored calibration`);
+                        localStorage.removeItem(`calibration_${mySeat.id}`);
+                        isHappy = false;
+                        phase1Complete = false;
+                        currentSpeakerDelay = estimatedDeviceDelayMs;
+                        myMicDelayMs = estimatedDeviceMicDelayMs;
+                        isListenOnlyMode = false;
+                        rawTimeShifts = [];
+                    } else {
+                        loadStoredCalibration();
+                    }
+                    // ===============================================================
 
                     return true;
                 }
