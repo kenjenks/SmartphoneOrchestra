@@ -672,40 +672,122 @@
         }
     }
 
-    function loadStoredCalibration() {
+    async function loadStoredCalibration() {
         if (!mySeat) return false;
 
         try {
-            const stored = localStorage.getItem(`calibration_${mySeat.id}`);
-            if (!stored) return false;
+            // First check if Firebase says this device is calibrated and recent
+            const deviceSnap = await db.ref(`devices/${mySeat.id}`).once('value');
+            const deviceData = deviceSnap.val();
 
-            const cal = JSON.parse(stored);
-
-            // Expire calibrations older than 30 days
             const maxAge = 30 * 24 * 60 * 60 * 1000; // 30 days
-            if (Date.now() - cal.timestamp > maxAge) {
-                log(`📆 Stored calibration expired (${Math.round((Date.now() - cal.timestamp) / (24*60*60*1000))} days old)`);
-                localStorage.removeItem(`calibration_${mySeat.id}`);
-                return false;
+            const now = Date.now();
+
+            // Check Firebase calibration
+            let firebaseCalibrated = false;
+            let firebaseDelay = null;
+            let firebaseMicDelay = null;
+
+            if (deviceData && deviceData.calibrated === true && deviceData.convergedAt) {
+                const age = now - deviceData.convergedAt;
+                if (age < maxAge) {
+                    firebaseCalibrated = true;
+                    firebaseDelay = deviceData.finalSpeakerDelay || deviceData.speakerDelay;
+                    firebaseMicDelay = deviceData.finalMicDelay || deviceData.micDelay;
+                    log(`📡 Firebase shows calibration from ${new Date(deviceData.convergedAt).toLocaleString()}`);
+                } else {
+                    log(`📡 Firebase calibration expired (${Math.round(age / (24*60*60*1000))} days old)`);
+                    // Clear stale Firebase flag
+                    await db.ref(`devices/${mySeat.id}`).update({
+                        calibrated: false,
+                        convergedAt: null
+                    });
+                }
             }
 
-            // Sanity check values
-            if (cal.speakerDelay >= -500 && cal.speakerDelay <= 1000 &&
-                cal.micDelay >= 0 && cal.micDelay <= 200) {
+            // Check localStorage
+            const stored = localStorage.getItem(`calibration_${mySeat.id}`);
+            let localValid = false;
+            let localDelay = null;
+            let localMicDelay = null;
 
-                currentSpeakerDelay = cal.speakerDelay;
-                myMicDelayMs = cal.micDelay;
-                phase1Complete = true;      // Skip Phase 1 mic calibration
-                isHappy = true;              // Mark as already calibrated
-
-                log(`✅ Loaded stored calibration: speaker=${currentSpeakerDelay.toFixed(1)}ms, mic=${myMicDelayMs.toFixed(1)}ms`);
-                log(`   Calibration from ${new Date(cal.timestamp).toLocaleString()}`);
-
-                return true;
-            } else {
-                log(`⚠️ Stored calibration values out of range, ignoring`);
-                return false;
+            if (stored) {
+                const cal = JSON.parse(stored);
+                const age = now - cal.timestamp;
+                if (age < maxAge) {
+                    localValid = true;
+                    localDelay = cal.speakerDelay;
+                    localMicDelay = cal.micDelay;
+                    log(`💾 Local storage shows calibration from ${new Date(cal.timestamp).toLocaleString()}`);
+                } else {
+                    log(`💾 Local calibration expired, clearing`);
+                    localStorage.removeItem(`calibration_${mySeat.id}`);
+                }
             }
+
+            // Use the most recent valid calibration (prefer Firebase if both exist)
+            let useCalibration = false;
+            let speakerDelay = null;
+            let micDelay = null;
+
+            if (firebaseCalibrated && localValid) {
+                // Both exist, use the one with newer timestamp
+                const firebaseAge = now - deviceData.convergedAt;
+                const localAge = now - (JSON.parse(stored).timestamp);
+                if (firebaseAge < localAge) {
+                    speakerDelay = firebaseDelay;
+                    micDelay = firebaseMicDelay;
+                    log(`📡 Using Firebase calibration (newer)`);
+                } else {
+                    speakerDelay = localDelay;
+                    micDelay = localMicDelay;
+                    log(`💾 Using localStorage calibration (newer)`);
+                }
+                useCalibration = true;
+            } else if (firebaseCalibrated) {
+                speakerDelay = firebaseDelay;
+                micDelay = firebaseMicDelay;
+                useCalibration = true;
+                log(`📡 Using Firebase calibration`);
+            } else if (localValid) {
+                speakerDelay = localDelay;
+                micDelay = localMicDelay;
+                useCalibration = true;
+                log(`💾 Using localStorage calibration`);
+            }
+
+            if (useCalibration && speakerDelay !== null && micDelay !== null) {
+                // Sanity check values
+                if (speakerDelay >= -500 && speakerDelay <= 1000 &&
+                    micDelay >= 0 && micDelay <= 200) {
+
+                    currentSpeakerDelay = speakerDelay;
+                    myMicDelayMs = micDelay;
+                    phase1Complete = true;
+                    isHappy = true;
+
+                    log(`✅ Loaded calibration: speaker=${currentSpeakerDelay.toFixed(1)}ms, mic=${myMicDelayMs.toFixed(1)}ms`);
+
+                    // Update Firebase if localStorage was used and Firebase doesn't have it
+                    if (localValid && !firebaseCalibrated) {
+                        await db.ref(`devices/${mySeat.id}`).update({
+                            calibrated: true,
+                            finalSpeakerDelay: Math.round(speakerDelay),
+                            finalMicDelay: Math.round(micDelay),
+                            convergedAt: Date.now()
+                        });
+                        log(`📡 Synced calibration to Firebase`);
+                    }
+
+                    return true;
+                } else {
+                    log(`⚠️ Calibration values out of range, ignoring`);
+                    return false;
+                }
+            }
+
+            return false;
+
         } catch (e) {
             log(`⚠️ Failed to load stored calibration: ${e.message}`);
             return false;
@@ -1652,10 +1734,19 @@
         const now = Date.now() + serverOffset;
         analyser.getByteFrequencyData(frequencyData);
 
-        // Calculate piccolo band energy
+        // Calculate piccolo band energy and find dominant frequency
         let piccoloEnergy = 0;
+        let maxEnergy = 0;
+        let dominantFreq = 0;
+
         for (let i = binIndices.start; i <= binIndices.end && i < frequencyData.length; i++) {
-            piccoloEnergy += frequencyData[i] / 255;
+            const energy = frequencyData[i] / 255;
+            piccoloEnergy += energy;
+            if (energy > maxEnergy) {
+                maxEnergy = energy;
+                const nyquist = sampleRate / 2;
+                dominantFreq = (i / (FFT_SIZE / 2)) * nyquist;
+            }
         }
         piccoloEnergy = piccoloEnergy / (binIndices.end - binIndices.start + 1);
         currentAvgEnergy = piccoloEnergy;
@@ -1665,6 +1756,21 @@
         if (energyFill) energyFill.style.width = (piccoloEnergy * 100) + '%';
         if (energyValue) energyValue.innerText = piccoloEnergy.toFixed(4);
 
+        // Calculate baseline ratio
+        let ratioToBaseline = 1.0;
+        if (baselineComplete && baselineEnergy > 0) {
+            ratioToBaseline = piccoloEnergy / baselineEnergy;
+        } else if (!baselineComplete && tuningStartTime) {
+            if (now - baselineStartTime < BASELINE_SAMPLES_MS) {
+                baselineSamples.push(piccoloEnergy);
+            } else if (baselineSamples.length > 0) {
+                const sorted = [...baselineSamples].sort((a, b) => a - b);
+                baselineEnergy = sorted[Math.floor(sorted.length / 2)];
+                baselineComplete = true;
+                log(`📊 Baseline established: ${baselineEnergy.toFixed(4)}`);
+            }
+        }
+
         // Phase 1: Get mic delay (skip if listen-only or already have mic delay)
         if (!isListenOnlyMode && myMicDelayMs === null && tuningStartTime) {
             detectPillarOnsets(now, frequencyData, sampleRate, FFT_SIZE);
@@ -1673,7 +1779,7 @@
         // Phase 2: Sync and correction (skip entirely for listen-only)
         if (!isListenOnlyMode && myMicDelayMs !== null && tuningStartTime) {
             detectPillarForSync(now, frequencyData, sampleRate, FFT_SIZE);
-            processDetectionWindows(now, piccoloEnergy, 0, 0);
+            processDetectionWindows(now, piccoloEnergy, dominantFreq, ratioToBaseline);  // Pass real values
 
             // Periodic evaluation
             if (now - lastEvaluationTime > EVALUATION_INTERVAL_MS) {
@@ -1682,9 +1788,9 @@
             }
         }
 
-        // For listen-only mode: only process neighbor detection (no pillar sync, no corrections)
+        // For listen-only mode: still need to detect neighbors with proper frequency
         if (isListenOnlyMode && tuningStartTime) {
-            processDetectionWindows(now, piccoloEnergy, 0, 0);
+            processDetectionWindows(now, piccoloEnergy, dominantFreq, ratioToBaseline);  // Pass real values
         }
 
         requestAnimationFrame(detectNeighborNotes);
@@ -2165,7 +2271,7 @@
 
     window.onload = async () => {
         log(`🚀 onLoad`);
-        await resolveIdentity();
+        await resolveIdentity();  // This now also loads stored calibration internally
         await loadNeighborMap();
         await loadTuningConfig();
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
