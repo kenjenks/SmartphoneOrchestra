@@ -267,6 +267,8 @@
     let activeAudioCues = [];
     let activeLightCues = [];
     let activeTimeouts = [];
+    let lastMicCheck = 0;
+
 
     // Continuous playback state
     let continuousSource = null;
@@ -1339,7 +1341,13 @@
         let currentWindowMs = 500;
 
         const candidateNotes = noteSchedule.filter(note => {
+            // Skip our own notes
+            if (note.deviceId === mySeat.id) return false;
+
+            // Only listen to neighbors
             if (!allListeningTargets.includes(note.deviceId)) return false;
+
+            // Skip already processed notes
             const noteKey = `${note.noteIndex}_${note.deviceId}`;
             if (processedMeasurements.has(noteKey)) return false;
 
@@ -1405,7 +1413,7 @@
                         const speakerDelay = rawDelay - propagationMs - (myMicDelayMs || 0);
 
                         if (speakerDelay >= -50 && speakerDelay <= 500) {
-                            // For neighbor detection, we also store raw time shifts
+                            // Store raw time shift for neighbor detection
                             rawTimeShifts.push(speakerDelay);
                             if (rawTimeShifts.length > 50) rawTimeShifts.shift();
 
@@ -1850,6 +1858,20 @@
                 baselineComplete = true;
                 log(`📊 Baseline established: ${baselineEnergy.toFixed(4)}`);
             }
+        }
+
+        // Logging only - Mic energy check
+        if (performance.now() - lastMicCheck > 5000 && tuningStartTime) {
+            const maxBin = 0;
+            let maxEnergy = 0;
+            for (let i = 0; i < frequencyData.length; i++) {
+                const energy = frequencyData[i] / 255;
+                if (energy > maxEnergy) {
+                    maxEnergy = energy;
+                }
+            }
+            log(`🎧 Mic energy check: max=${maxEnergy.toFixed(3)}, piccoloBand=${piccoloEnergy.toFixed(3)}`);
+            lastMicCheck = performance.now();
         }
 
         // Phase 1: Get mic delay (skip if listen-only or already have mic delay)
