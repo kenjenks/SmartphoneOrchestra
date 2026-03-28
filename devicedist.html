@@ -77,7 +77,6 @@
         #ready-btn:disabled { background: #333; color: #666; cursor: not-allowed; }
         #ready-btn:active { transform: scale(0.95); }
 
-        /* Calibration Display Box */
         #calibration-display {
             background: rgba(0,0,0,0.8);
             border: 1px solid #00ffcc;
@@ -114,12 +113,8 @@
             font-size: 0.7rem;
             color: #00ffcc;
         }
-        .calibration-status.happy {
-            color: #00ffcc;
-        }
-        .calibration-status.uncalibrated {
-            color: #ffaa66;
-        }
+        .calibration-status.happy { color: #00ffcc; }
+        .calibration-status.uncalibrated { color: #ffaa66; }
 
         #show-screen { display: none; height: 100vh; width: 100vw; }
         canvas { width: 100%; height: 100%; display: block; }
@@ -159,7 +154,6 @@
             border-radius: 2px;
             display: none;
         }
-
         #asset-progress-fill {
             height: 100%;
             background: #00ffcc;
@@ -168,7 +162,6 @@
             transition: width 0.3s;
         }
 
-        /* Calibration Debug Panel */
         #calibration-debug {
             position: absolute;
             bottom: 10px;
@@ -187,7 +180,6 @@
         }
         .debug-label { color: #888; }
 
-        /* Energy Meter */
         .energy-meter {
             position: absolute;
             bottom: 10px;
@@ -224,42 +216,22 @@
         <h1 id="seat-label">Identifying Seat...</h1>
 
         <div id="status-registry">
-            <div class="status-item">
-                <span>Identity Resolve</span>
-                <span id="id-ind" class="indicator"></span>
-            </div>
-            <div class="status-item">
-                <span>Clock Synchronization</span>
-                <span id="sync-ind" class="indicator"></span>
-            </div>
-            <div class="status-item">
-                <span>Neighbor Map</span>
-                <span id="neighbor-ind" class="indicator"></span>
-            </div>
-            <div class="status-item">
-                <span>Asset Manifest</span>
-                <span id="asset-ind" class="indicator"></span>
-            </div>
+            <div class="status-item"><span>Identity Resolve</span><span id="id-ind" class="indicator"></span></div>
+            <div class="status-item"><span>Clock Synchronization</span><span id="sync-ind" class="indicator"></span></div>
+            <div class="status-item"><span>Neighbor Map</span><span id="neighbor-ind" class="indicator"></span></div>
+            <div class="status-item"><span>Asset Manifest</span><span id="asset-ind" class="indicator"></span></div>
         </div>
 
-        <!-- MIC PERMISSION SECTION -->
         <div id="mic-permission-section" style="margin: 20px 0;">
             <button id="request-mic-btn" style="background: #00ffcc; color: #000; width: auto; padding: 12px 24px;">🎤 Request Mic Permission</button>
             <p id="mic-status-msg" style="font-size: 0.7rem; color: #888; margin-top: 8px;">Mic not requested. Required for neighbor calibration.</p>
         </div>
 
-        <!-- CALIBRATION DISPLAY - Shows stored values if available -->
         <div id="calibration-display" style="display: none;">
             <div class="calibration-title">📊 CALIBRATION STATUS</div>
             <div class="calibration-values">
-                <div>
-                    <span class="calibration-label">Speaker Delay</span><br>
-                    <span class="calibration-value" id="display-speaker-delay">--</span>
-                </div>
-                <div>
-                    <span class="calibration-label">Mic Delay</span><br>
-                    <span class="calibration-value" id="display-mic-delay">--</span>
-                </div>
+                <div><span class="calibration-label">Speaker Delay</span><br><span class="calibration-value" id="display-speaker-delay">--</span></div>
+                <div><span class="calibration-label">Mic Delay</span><br><span class="calibration-value" id="display-mic-delay">--</span></div>
             </div>
             <div class="calibration-status" id="calibration-status-text">Not Calibrated</div>
         </div>
@@ -273,7 +245,6 @@
         <div id="movement-indicator">Standby</div>
         <div id="asset-progress"><div id="asset-progress-fill"></div></div>
 
-        <!-- Calibration Debug Panel -->
         <div id="calibration-debug">
             <div style="font-weight: bold; margin-bottom: 5px;">🔧 Neighbor-Cal Debug</div>
             <div><span class="debug-label">My neighbors:</span> <span id="debug-neighbors"></span></div>
@@ -284,19 +255,10 @@
             <div><span class="debug-label">Status:</span> <span id="debug-status"></span></div>
         </div>
 
-        <!-- Energy Meter for Debug -->
         <div class="energy-meter" id="energy-meter">
-            <div style="display: flex; justify-content: space-between;">
-                <span>Energy (Piccolo)</span>
-                <span id="energy-value">0.00</span>
-            </div>
-            <div class="meter-bar">
-                <div class="meter-fill" id="energy-fill"></div>
-            </div>
-            <div style="display: flex; justify-content: space-between; margin-top: 2px;">
-                <span>Baseline:</span>
-                <span id="baseline-value">0.00</span>
-            </div>
+            <div style="display: flex; justify-content: space-between;"><span>Energy (Piccolo)</span><span id="energy-value">0.00</span></div>
+            <div class="meter-bar"><div class="meter-fill" id="energy-fill"></div></div>
+            <div style="display: flex; justify-content: space-between; margin-top: 2px;"><span>Baseline:</span><span id="baseline-value">0.00</span></div>
         </div>
 
         <canvas id="stage-canvas"></canvas>
@@ -304,10 +266,39 @@
 
     <script>
     // ============================================================================
-    // SECTION 1: GLOBAL STATE VARIABLES AND CONSTANTS
+    // CONSTANTS
     // ============================================================================
+    const SILENT_WARMUP_MS = 1000;
+    const HEARTBEAT_BASE_INTERVAL_MS = 10000;
+    const HEARTBEAT_JITTER_MS = 2000;
+    const SPEED_OF_SOUND = 343;
+    const MASTER_PLAYBACK_GAIN = 1.5;
+    const PICCOLO_MIN_FREQ = 500;
+    const PICCOLO_MAX_FREQ = 2100;
+    const FFT_SIZE = 2048;
+    const BASELINE_SAMPLES_MS = 200;
+    const BASELINE_THRESHOLD_MULTIPLIER = 1.1;
+    const MIN_DETECTION_ENERGY = 0.03;
+    const PILLAR_ONSET_THRESHOLD = 2.0;
+    const PHASE1_SCHEDULE_WINDOW_MS = 200;
+    const MIC_DELAY_SANITY_MIN = 0;
+    const MIC_DELAY_SANITY_MAX = 150;
+    const MIN_MIC_SAMPLES = 4;
+    const NOTE_BAND_RATIO = Math.pow(2, 1/48);
+    const PHASE3_ANALYZE_MS = 5000;
+    const COCKTAIL_MIN_INTERVAL_MS = 20;
+    const COCKTAIL_MAX_INTERVAL_MS = 100;
+    const RECORDING_WINDOW_MS = 200;
+    const EVALUATION_INTERVAL_MS = 2000;
+    const AUDIBLE_ERROR_MS = 30;
+    const SIGNIFICANT_ERROR_MS = 15;
+    const MIN_CORRECTION_MS = 5;
+    const MIN_SAMPLES_FOR_CORRECTION = 3;
+    const HEARTBEAT_TIMEOUT_MS = 12100;
 
-    // Playback state
+    // ============================================================================
+    // GLOBAL STATE
+    // ============================================================================
     let isListenOnlyMode = false;
     let audioCtx = null;
     let masterGain = null;
@@ -318,8 +309,6 @@
     let activeLightCues = [];
     let activeTimeouts = [];
     let lastMicCheck = 0;
-
-    // Continuous playback state
     let continuousSource = null;
     let continuousGain = null;
     let currentPlaybackStartTime = 0;
@@ -327,8 +316,6 @@
     let isSingleDeviceMode = false;
     let lastMedianShift = 0;
     let sameShiftCount = 0;
-
-    // MICROPHONE STATE
     let micStream = null;
     let analyser = null;
     let isMicActive = false;
@@ -336,15 +323,11 @@
     let sampleRate = 48000;
     let micPermissionGranted = false;
     let micPermissionRequested = false;
-
-    // FFT ANALYSIS
     let currentAvgEnergy = 0;
     let baselineEnergy = 0;
     let baselineSamples = [];
     let baselineComplete = false;
     let baselineStartTime = 0;
-
-    // NEIGHBOR DETECTION
     let myNeighbors = [];
     let allListeningTargets = [];
     let noteTimings = [];
@@ -353,8 +336,6 @@
     let processedMeasurements = new Set();
     let rawTimeShifts = [];
     let isHappy = false;
-
-    // PHASE 1: MIC DELAY
     let estimatedDeviceDelayMs = 130;
     let estimatedDeviceMicDelayMs = 13;
     let myMicDelayMs = null;
@@ -365,88 +346,41 @@
     let phase1Complete = false;
     let phase1EndMs = 20571.4;
     let phase1WindowActive = true;
-
-    // TUNING STATE
     let currentTuningSchedule = null;
     let tuningStartTime = 0;
     let PICCOLO_URL = "";
     let TEST_PULSE_URL = "";
     let assignedNotes = [];
-
-    // PHASE 3: RECORDING AND REFINEMENT
-    let localRecordings = new Map(); // neighborId -> array of { noteIndex, realTimeEstimate, recordingWindow }
-    let refinedDataToSend = [];      // Queue for cocktail party
-    let receivedRefinements = [];    // Refinements received about me
+    let localRecordings = new Map();
+    let refinedDataToSend = [];
+    let receivedRefinements = [];
     let phase3StartTime = 0;
     let cocktailPartyInterval = null;
-
-    // Real-time evaluation
     let lastEvaluationTime = 0;
-    const EVALUATION_INTERVAL_MS = 2000;
-
-    // Iteration thresholds
-    const AUDIBLE_ERROR_MS = 30;
-    const SIGNIFICANT_ERROR_MS = 15;
-    const MIN_CORRECTION_MS = 5;
-    const MIN_SAMPLES_FOR_CORRECTION = 3;
-
-    // MOVEMENT STATE
     let currentMovement = null;
     let movementStartTime = 0;
     let movementBuffer = 1.0;
-
-    // PERFORMANCE WATCHDOG
     let lastFrameTime = 0;
     const FPS_TARGET = 30;
     const FRAME_DURATION = 1000 / FPS_TARGET;
-
-    // HEARTBEAT TRACKING
     let heartbeatInterval = null;
-
-    // CONSTANTS
-    const SILENT_WARMUP_MS = 1000;
-    const HEARTBEAT_BASE_INTERVAL_MS = 10000;
-    const HEARTBEAT_JITTER_MS = 2000;
-    const SPEED_OF_SOUND = 343;
-    const MASTER_PLAYBACK_GAIN = 1.5;
-
-    // ONSET DETECTION PARAMETERS
-    const PICCOLO_MIN_FREQ = 500;
-    const PICCOLO_MAX_FREQ = 2100;
-    const FFT_SIZE = 2048;
-    const BASELINE_SAMPLES_MS = 200;
-    const BASELINE_THRESHOLD_MULTIPLIER = 1.1;
-    const PITCH_DETECTION_TOLERANCE_BINS = 6;
-    const MIN_DETECTION_ENERGY = 0.03;
-
-    // PHASE 1 DETECTION CONSTANTS
-    const PILLAR_ONSET_THRESHOLD = 2.0;
-    const PHASE1_SCHEDULE_WINDOW_MS = 200;
-    const MIC_DELAY_SANITY_MIN = 0;
-    const MIC_DELAY_SANITY_MAX = 150;
-    const MIN_MIC_SAMPLES = 4;
-
-    // FREQUENCY BAND FOR NOTE DETECTION (±1/4 semitone = ~1.5%)
-    const NOTE_BAND_RATIO = Math.pow(2, 1/48);
-
-    // PHASE 3 CONSTANTS
-    const PHASE3_ANALYZE_MS = 5000;
-    const COCKTAIL_MIN_INTERVAL_MS = 20;
-    const COCKTAIL_MAX_INTERVAL_MS = 100;
-    const PHASE3_MAX_DURATION_MS = 30000;
-    const RECORDING_WINDOW_MS = 200; // ±100ms
+    let pillarRefBaseline = 0;
+    let pillarRefBaselineSamples = [];
+    let allPillarNotes = [];
+    let pillarUrls = {};
+    let pillarData = {};
+    let seatData = {};
+    let refinementTimer = null;
+    let scheduledRecordings = new Set();
 
     // ============================================================================
-    // SECTION 2: UTILITIES
+    // UTILITIES
     // ============================================================================
-
     function calculateMedian(values) {
         if (values.length === 0) return 0;
         const sorted = [...values].sort((a, b) => a - b);
         const mid = Math.floor(sorted.length / 2);
-        if (sorted.length % 2 === 0) {
-            return (sorted[mid - 1] + sorted[mid]) / 2;
-        }
+        if (sorted.length % 2 === 0) return (sorted[mid - 1] + sorted[mid]) / 2;
         return sorted[mid];
     }
 
@@ -476,26 +410,20 @@
 
     function calculateEnergyForNote(midiNote, sampleRate, fftSize) {
         if (!frequencyData) return 0;
-
         const band = getNoteFrequencyBand(midiNote);
         const lowerBin = getBinForFrequency(band.lowerFreq, sampleRate, fftSize);
         const upperBin = getBinForFrequency(band.upperFreq, sampleRate, fftSize);
-
-        let energy = 0;
-        let binsChecked = 0;
-
+        let energy = 0, binsChecked = 0;
         for (let i = lowerBin; i <= upperBin && i < frequencyData.length; i++) {
             energy += frequencyData[i] / 255;
             binsChecked++;
         }
-
         return binsChecked > 0 ? energy / binsChecked : 0;
     }
 
     // ============================================================================
-    // SECTION 3: LOGGING
+    // LOGGING
     // ============================================================================
-
     let logQueue = [];
     let logFlushTimer = null;
     let pendingFlush = false;
@@ -506,67 +434,42 @@
     function initLogging() {
         if (!mySeat) return;
         logRef = db.ref(`device_logs/${mySeat.id}`);
-
         if (logFlushTimer) clearInterval(logFlushTimer);
         logFlushTimer = setInterval(flushLogs, LOG_FLUSH_INTERVAL_MS);
-
         const serverTimestamp = Date.now() + (serverOffset || 0);
-        log(`🚀 Device ${mySeat.id} started at ${new Date(serverTimestamp).toISOString()}`);
-        log(`   Platform: ${navigator.platform}`);
-        log(`   Location: (${mySeat.x}, ${mySeat.y}) in ${mySeat.section}`);
-
+        log(`🚀 Device ${mySeat.id} started`);
         setTimeout(() => flushLogs(), 100);
     }
 
     function flushLogs() {
         if (logQueue.length === 0 || !logRef || pendingFlush) return;
         pendingFlush = true;
-
         const logsToSend = [...logQueue];
         logQueue = [];
-
         const batch = {};
         logsToSend.forEach((logEntry, index) => {
             const ts = Date.now() + (serverOffset || 0);
             batch[`${ts}_${index}_${Math.random().toString(36).substr(2, 6)}`] = logEntry;
         });
-
-        logRef.update(batch)
-            .catch(e => {
-                console.error("Failed to send logs:", e);
-                logQueue = [...logsToSend, ...logQueue];
-                if (logQueue.length > MAX_LOG_QUEUE_SIZE) {
-                    logQueue = logQueue.slice(-MAX_LOG_QUEUE_SIZE);
-                }
-            })
-            .finally(() => { pendingFlush = false; });
+        logRef.update(batch).catch(e => {
+            console.error("Failed to send logs:", e);
+            logQueue = [...logsToSend, ...logQueue];
+            if (logQueue.length > MAX_LOG_QUEUE_SIZE) logQueue = logQueue.slice(-MAX_LOG_QUEUE_SIZE);
+        }).finally(() => { pendingFlush = false; });
     }
 
     function log(message, type = 'info') {
         const serverTimestamp = Date.now() + (serverOffset || 0);
         const timeStr = new Date(serverTimestamp).toISOString().substr(11, 12);
-
         console.log(`[${timeStr}] [${mySeat?.id || 'unknown'}] ${message}`);
-
-        const logEntry = {
-            timestamp: serverTimestamp,
-            timeStr: timeStr,
-            message: message,
-            seatId: mySeat ? mySeat.id : 'unknown',
-            type: type,
-            isHappy: isHappy,
-            speakerDelay: currentSpeakerDelay,
-            micDelay: myMicDelayMs
-        };
-
+        const logEntry = { timestamp: serverTimestamp, timeStr, message, seatId: mySeat ? mySeat.id : 'unknown', type, isHappy, speakerDelay: currentSpeakerDelay, micDelay: myMicDelayMs };
         logQueue.push(logEntry);
         if (logQueue.length >= MAX_LOG_QUEUE_SIZE && logRef) flushLogs();
     }
 
     // ============================================================================
-    // SECTION 4: FIREBASE, IDENTITY, CLOCK SYNC
+    // FIREBASE INIT
     // ============================================================================
-
     const firebaseConfig = {
         apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
         authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
@@ -581,12 +484,14 @@
         document.getElementById('sync-ind').className = 'indicator active';
     });
 
+    // ============================================================================
+    // CALIBRATION DISPLAY
+    // ============================================================================
     function updateCalibrationDisplay() {
         const displayDiv = document.getElementById('calibration-display');
         const speakerSpan = document.getElementById('display-speaker-delay');
         const micSpan = document.getElementById('display-mic-delay');
         const statusSpan = document.getElementById('calibration-status-text');
-
         if (isHappy && currentSpeakerDelay !== null && myMicDelayMs !== null) {
             displayDiv.style.display = 'block';
             speakerSpan.innerText = `${Math.round(currentSpeakerDelay)} ms`;
@@ -602,46 +507,33 @@
         }
     }
 
+    // ============================================================================
+    // IDENTITY & CONFIG
+    // ============================================================================
     async function resolveIdentity() {
         try {
             const urlParams = new URLSearchParams(window.location.search);
             const seatId = urlParams.get('seat');
-
             if (!seatId) {
-                log("No seat ID in URL, using default");
                 mySeat = { id: 'G12', x: 7.75, y: 12.5, section: 'Orchestra' };
                 document.getElementById('seat-label').innerText = `Seat ${mySeat.id}`;
                 document.getElementById('id-ind').className = 'indicator active';
                 updateCalibrationDisplay();
                 return true;
             }
-
             document.getElementById('seat-label').innerText = `Seat ${seatId} (loading...)`;
-
             const seatsSnap = await db.ref('seat_config/seats').once('value');
             const seatsData = seatsSnap.val();
-
             if (seatsData && seatsData[seatId]) {
-                mySeat = {
-                    id: seatId,
-                    x: seatsData[seatId].x,
-                    y: seatsData[seatId].y,
-                    section: seatsData[seatId].section || 'Orchestra'
-                };
+                mySeat = { id: seatId, x: seatsData[seatId].x, y: seatsData[seatId].y, section: seatsData[seatId].section || 'Orchestra' };
+                seatData = seatsData;
                 document.getElementById('seat-label').innerText = `Seat ${mySeat.id}`;
                 document.getElementById('id-ind').className = 'indicator active';
                 log(`✅ Resolved seat ${seatId} at (${mySeat.x}, ${mySeat.y})`);
-
                 const forceRetune = urlParams.get('forget') === 'true';
                 if (forceRetune) {
-                    log(`🔧 Force retune mode`);
                     localStorage.removeItem(`calibration_${mySeat.id}`);
-                    isHappy = false;
-                    phase1Complete = false;
-                    currentSpeakerDelay = estimatedDeviceDelayMs;
-                    myMicDelayMs = null;
-                    isListenOnlyMode = false;
-                    rawTimeShifts = [];
+                    isHappy = false; phase1Complete = false; currentSpeakerDelay = estimatedDeviceDelayMs; myMicDelayMs = null; isListenOnlyMode = false; rawTimeShifts = [];
                 } else {
                     loadStoredCalibration();
                 }
@@ -650,26 +542,15 @@
             } else if (Array.isArray(seatsData)) {
                 const config = seatsData.find(s => s.id === seatId);
                 if (config) {
-                    mySeat = {
-                        id: config.id,
-                        x: config.x,
-                        y: config.y,
-                        section: config.section || 'Orchestra'
-                    };
+                    mySeat = { id: config.id, x: config.x, y: config.y, section: config.section || 'Orchestra' };
+                    seatData = seatsData.reduce((acc, s) => { acc[s.id] = s; return acc; }, {});
                     document.getElementById('seat-label').innerText = `Seat ${mySeat.id}`;
                     document.getElementById('id-ind').className = 'indicator active';
                     log(`✅ Resolved seat ${seatId} from array`);
-
                     const forceRetune = urlParams.get('forget') === 'true';
                     if (forceRetune) {
-                        log(`🔧 Force retune mode`);
                         localStorage.removeItem(`calibration_${mySeat.id}`);
-                        isHappy = false;
-                        phase1Complete = false;
-                        currentSpeakerDelay = estimatedDeviceDelayMs;
-                        myMicDelayMs = null;
-                        isListenOnlyMode = false;
-                        rawTimeShifts = [];
+                        isHappy = false; phase1Complete = false; currentSpeakerDelay = estimatedDeviceDelayMs; myMicDelayMs = null; isListenOnlyMode = false; rawTimeShifts = [];
                     } else {
                         loadStoredCalibration();
                     }
@@ -677,29 +558,23 @@
                     return true;
                 }
             }
-
             log(`❌ Seat ${seatId} not found`);
             document.getElementById('id-ind').className = 'indicator error';
-            document.getElementById('seat-label').innerText = `Seat ${seatId} NOT FOUND`;
             return false;
-
         } catch (e) {
             log(`❌ Identity Error: ${e.message}`);
-            document.getElementById('id-ind').className = 'indicator error';
             return false;
         }
     }
 
     async function loadStoredCalibration() {
         if (!mySeat) return false;
-
         try {
             const stored = localStorage.getItem(`calibration_${mySeat.id}`);
             if (stored) {
                 const cal = JSON.parse(stored);
                 const age = Date.now() - cal.timestamp;
-                const maxAge = 30 * 24 * 60 * 60 * 1000;
-                if (age < maxAge && cal.speakerDelay && cal.micDelay) {
+                if (age < 30 * 24 * 60 * 60 * 1000 && cal.speakerDelay && cal.micDelay) {
                     currentSpeakerDelay = cal.speakerDelay;
                     myMicDelayMs = cal.micDelay;
                     phase1Complete = true;
@@ -718,11 +593,9 @@
 
     async function loadNeighborMap() {
         if (!mySeat) return false;
-
         try {
             const neighborSnap = await db.ref(`seat_config/neighborMap/${mySeat.id}`).once('value');
             const neighborData = neighborSnap.val();
-
             if (neighborData) {
                 myNeighbors = neighborData.neighbors || [];
                 allListeningTargets = [...myNeighbors];
@@ -745,88 +618,48 @@
         try {
             const tuningSnap = await db.ref('tuning_mode').once('value');
             const tuningData = tuningSnap.val();
-
-            if (!tuningData || !tuningData.piano_notes) {
-                log("⚠️ No tuning configuration found");
-                return;
-            }
-
-            noteTimings = tuningData.piano_notes.map((note, index) => ({
-                index: index,
-                startMs: note.ms_offset,
-                durationMs: note.duration_ms || 500,
-                measure: note.measure,
-                pitch: note.pitch,
-                midi: note.midi
-            }));
+            if (!tuningData || !tuningData.piano_notes) { log("⚠️ No tuning configuration found"); return; }
+            noteTimings = tuningData.piano_notes.map((note, index) => ({ index, startMs: note.ms_offset, durationMs: note.duration_ms || 500, measure: note.measure, pitch: note.pitch, midi: note.midi }));
             log(`📋 Loaded ${noteTimings.length} piccolo notes`);
-
-            if (tuningData.pillar_notes) {
-                window.allPillarNotes = tuningData.pillar_notes;
-                log(`📡 Loaded ${window.allPillarNotes.length} pillar notes`);
-            }
-
+            if (tuningData.pillar_notes) allPillarNotes = tuningData.pillar_notes;
             if (tuningData.metadata && tuningData.metadata.pillar_cal_windows) {
                 pillarWindows = tuningData.metadata.pillar_cal_windows;
                 phase1EndMs = pillarWindows[pillarWindows.length - 1].end_ms;
                 log(`📡 Loaded ${pillarWindows.length} calibration windows, Phase 1 ends at ${phase1EndMs}ms`);
             }
-
             if (tuningData.assets) {
                 if (tuningData.assets.piccolo) PICCOLO_URL = tuningData.assets.piccolo;
                 if (tuningData.assets.test_pulse) TEST_PULSE_URL = tuningData.assets.test_pulse;
-                if (tuningData.assets.pillars) window.pillarUrls = tuningData.assets.pillars;
+                if (tuningData.assets.pillars) pillarUrls = tuningData.assets.pillars;
             }
-
             log(`✅ Tuning configuration loaded`);
+        } catch (e) { log(`❌ Failed to load tuning config: ${e.message}`); }
+    }
 
-        } catch (e) {
-            log(`❌ Failed to load tuning config: ${e.message}`);
+    async function loadPillarData() {
+        const snap = await db.ref('pillar_config').once('value');
+        const config = snap.val();
+        if (config && config.pillars) {
+            config.pillars.forEach(p => { pillarData[p.id] = { x: p.x, y: p.y, speakerDelayMs: p.speakerDelayMs || 45, micDelayMs: p.micDelayMs || 18 }; });
+            log(`📡 Loaded ${Object.keys(pillarData).length} pillars`);
         }
     }
 
     // ============================================================================
-    // SECTION 5: MICROPHONE
+    // MICROPHONE
     // ============================================================================
-
     window.requestMicrophonePermission = async function() {
-        if (micPermissionGranted) {
-            log("✅ Mic already granted");
-            return true;
-        }
-
-        if (micPermissionRequested) {
-            log("⚠️ Mic already requested");
-            return false;
-        }
-
+        if (micPermissionGranted) return true;
+        if (micPermissionRequested) return false;
         micPermissionRequested = true;
-
         try {
-            log("🎤 Requesting microphone...");
-            const stream = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                    echoCancellation: false,
-                    noiseSuppression: false,
-                    autoGainControl: false,
-                    sampleRate: 44100
-                },
-                video: false
-            });
-
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, sampleRate: 44100 }, video: false });
             micStream = stream;
             micPermissionGranted = true;
             log("✅ Microphone permission GRANTED");
-
             const micBtn = document.getElementById('request-mic-btn');
-            if (micBtn) {
-                micBtn.style.background = "#1e4d1e";
-                micBtn.innerHTML = "✅ Mic Ready";
-                micBtn.disabled = true;
-            }
-
+            if (micBtn) { micBtn.style.background = "#1e4d1e"; micBtn.innerHTML = "✅ Mic Ready"; micBtn.disabled = true; }
             return true;
-
         } catch (e) {
             log(`❌ Mic permission DENIED: ${e.message}`);
             micPermissionRequested = false;
@@ -837,46 +670,25 @@
     async function setupMicrophone() {
         if (!micPermissionGranted) return false;
         if (isMicActive) return true;
-
         try {
-            if (!audioCtx) {
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-                masterGain = audioCtx.createGain();
-                masterGain.gain.value = MASTER_PLAYBACK_GAIN;
-                masterGain.connect(audioCtx.destination);
-            }
-
-            if (!micStream) {
-                const stream = await navigator.mediaDevices.getUserMedia({
-                    audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
-                });
-                micStream = stream;
-            }
-
+            if (!audioCtx) { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); masterGain = audioCtx.createGain(); masterGain.gain.value = MASTER_PLAYBACK_GAIN; masterGain.connect(audioCtx.destination); }
+            if (!micStream) { const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } }); micStream = stream; }
             const source = audioCtx.createMediaStreamSource(micStream);
             const micGain = audioCtx.createGain();
             micGain.gain.value = 3.0;
             source.connect(micGain);
-
             analyser = audioCtx.createAnalyser();
             analyser.fftSize = FFT_SIZE;
             analyser.smoothingTimeConstant = 0.1;
             micGain.connect(analyser);
-
             sampleRate = audioCtx.sampleRate;
             frequencyData = new Uint8Array(analyser.frequencyBinCount);
-
             isMicActive = true;
             document.getElementById('energy-meter').style.display = 'block';
             log(`🎤 Microphone active`);
-
             requestAnimationFrame(detectNeighborNotes);
             return true;
-
-        } catch (e) {
-            log(`❌ Failed to setup mic: ${e.message}`);
-            return false;
-        }
+        } catch (e) { log(`❌ Failed to setup mic: ${e.message}`); return false; }
     }
 
     async function enableMicrophone() {
@@ -886,71 +698,35 @@
     }
 
     // ============================================================================
-    // SECTION 6: PHASE 1 - MIC DELAY DETECTION (Pillar Piccolo)
+    // PHASE 1: MIC DELAY DETECTION
     // ============================================================================
-
-    let pillarRefBaseline = 0;
-    let pillarRefBaselineSamples = [];
-    let pillarData = {}; // Will be loaded from Firebase
-
-    async function loadPillarData() {
-        const snap = await db.ref('pillar_config').once('value');
-        const config = snap.val();
-        if (config && config.pillars) {
-            config.pillars.forEach(p => {
-                pillarData[p.id] = {
-                    x: p.x, y: p.y,
-                    speakerDelayMs: p.speakerDelayMs || 45,
-                    micDelayMs: p.micDelayMs || 18
-                };
-            });
-            log(`📡 Loaded ${Object.keys(pillarData).length} pillars`);
-        }
-    }
-
     function detectPillarOnsets(now) {
-        if (!window.allPillarNotes || window.allPillarNotes.length === 0) return;
+        if (!allPillarNotes || allPillarNotes.length === 0) return;
         if (!tuningStartTime) return;
         if (isHappy) return;
         if (phase1Complete) return;
-
         const songPosition = now - tuningStartTime;
         if (songPosition > phase1EndMs) return;
-
-        const activeNotes = window.allPillarNotes.filter(note => {
-            const timeDiff = Math.abs(songPosition - note.ms_offset);
-            return timeDiff < PHASE1_SCHEDULE_WINDOW_MS;
-        });
-
+        const activeNotes = allPillarNotes.filter(note => Math.abs(songPosition - note.ms_offset) < PHASE1_SCHEDULE_WINDOW_MS);
         for (const note of activeNotes) {
             const noteKey = `pillar_mic_${note.pillar_id}_${note.ms_offset}`;
             if (processedMeasurements.has(noteKey)) continue;
-
             const energy = calculateEnergyForNote(note.midi, sampleRate, FFT_SIZE);
-
             let threshold = MIN_DETECTION_ENERGY;
-            if (pillarRefBaseline > 0) {
-                threshold = pillarRefBaseline * PILLAR_ONSET_THRESHOLD;
-            }
-
+            if (pillarRefBaseline > 0) threshold = pillarRefBaseline * PILLAR_ONSET_THRESHOLD;
             if (energy > threshold) {
                 const expectedTimeAbs = tuningStartTime + note.ms_offset;
                 const rawDelay = now - expectedTimeAbs;
-
                 const pillar = pillarData[note.pillar_id];
                 if (!pillar) continue;
-
-                const dx = mySeat.x - pillar.x;
-                const dy = mySeat.y - pillar.y;
+                const dx = mySeat.x - pillar.x, dy = mySeat.y - pillar.y;
                 const distance = Math.sqrt(dx*dx + dy*dy);
                 const propagationMs = (distance / SPEED_OF_SOUND) * 1000;
                 const micDelay = rawDelay - pillar.speakerDelayMs - propagationMs;
-
                 if (micDelay >= MIC_DELAY_SANITY_MIN && micDelay <= MIC_DELAY_SANITY_MAX) {
                     micDelaySamples.push(micDelay);
                     processedMeasurements.add(noteKey);
                     document.getElementById('debug-phase1-samples').innerText = micDelaySamples.length;
-
                     if (micDelaySamples.length >= MIN_MIC_SAMPLES) {
                         myMicDelayMs = calculateMedian(micDelaySamples);
                         phase1Complete = true;
@@ -960,175 +736,130 @@
                     }
                 }
             }
-
-            // Update baseline
-            if (pillarRefBaselineSamples.length < 50) {
-                pillarRefBaselineSamples.push(energy);
-            } else {
-                const sorted = [...pillarRefBaselineSamples].sort((a, b) => a - b);
-                pillarRefBaseline = sorted[Math.floor(sorted.length / 2)];
-                pillarRefBaselineSamples.shift();
-                pillarRefBaselineSamples.push(energy);
-            }
+            if (pillarRefBaselineSamples.length < 50) pillarRefBaselineSamples.push(energy);
+            else { const sorted = [...pillarRefBaselineSamples].sort((a, b) => a - b); pillarRefBaseline = sorted[Math.floor(sorted.length / 2)]; pillarRefBaselineSamples.shift(); pillarRefBaselineSamples.push(energy); }
         }
     }
 
     // ============================================================================
-    // SECTION 7: PHASE 2A - PILLAR SYNC (Immutable Timing Reference)
+    // PHASE 2A: PILLAR SYNC (Immutable Timing Reference)
     // ============================================================================
-
     function detectPillarForSync(now) {
-        if (!window.allPillarNotes || window.allPillarNotes.length === 0) return;
+        if (!allPillarNotes || allPillarNotes.length === 0) return;
         if (!tuningStartTime) return;
         if (!phase1Complete) return;
         if (isHappy) return;
-
         const songPosition = now - tuningStartTime;
         if (songPosition < phase1EndMs) return;
-
-        const activeNotes = window.allPillarNotes.filter(note => {
-            const timeDiff = Math.abs(songPosition - note.ms_offset);
-            return timeDiff < PHASE1_SCHEDULE_WINDOW_MS;
-        });
-
+        const activeNotes = allPillarNotes.filter(note => Math.abs(songPosition - note.ms_offset) < PHASE1_SCHEDULE_WINDOW_MS);
         for (const note of activeNotes) {
             const noteKey = `pillar_sync_${note.pillar_id}_${note.ms_offset}`;
             if (processedMeasurements.has(noteKey)) continue;
-
             const energy = calculateEnergyForNote(note.midi, sampleRate, FFT_SIZE);
-
             let threshold = MIN_DETECTION_ENERGY;
-            if (pillarRefBaseline > 0) {
-                threshold = pillarRefBaseline * PILLAR_ONSET_THRESHOLD;
-            }
-
+            if (pillarRefBaseline > 0) threshold = pillarRefBaseline * PILLAR_ONSET_THRESHOLD;
             if (energy > threshold) {
                 const expectedTimeAbs = tuningStartTime + note.ms_offset;
                 const timeShift = now - expectedTimeAbs;
-
                 if (Math.abs(timeShift) < 500) {
                     rawTimeShifts.push(timeShift);
                     if (rawTimeShifts.length > 50) rawTimeShifts.shift();
-
-                    if (rawTimeShifts.length <= 10 || rawTimeShifts.length % 20 === 0) {
-                        log(`📡 Pillar sync: ${note.pillar_id} note ${note.index} → shift=${timeShift > 0 ? '+' : ''}${timeShift.toFixed(1)}ms`);
-                    }
+                    if (rawTimeShifts.length <= 10 || rawTimeShifts.length % 20 === 0) log(`📡 Pillar sync: ${note.pillar_id} note ${note.index} → shift=${timeShift > 0 ? '+' : ''}${timeShift.toFixed(1)}ms`);
                 }
                 processedMeasurements.add(noteKey);
             }
         }
-
-        // Update baseline
-        if (pillarRefBaselineSamples.length < 50) {
-            const energy = activeNotes.length ? calculateEnergyForNote(activeNotes[0]?.midi, sampleRate, FFT_SIZE) : 0;
-            pillarRefBaselineSamples.push(energy);
-        } else {
-            const sorted = [...pillarRefBaselineSamples].sort((a, b) => a - b);
-            pillarRefBaseline = sorted[Math.floor(sorted.length / 2)];
-            pillarRefBaselineSamples.shift();
-        }
+        if (pillarRefBaselineSamples.length < 50) { const e = activeNotes.length ? calculateEnergyForNote(activeNotes[0]?.midi, sampleRate, FFT_SIZE) : 0; pillarRefBaselineSamples.push(e); }
+        else { const sorted = [...pillarRefBaselineSamples].sort((a, b) => a - b); pillarRefBaseline = sorted[Math.floor(sorted.length / 2)]; pillarRefBaselineSamples.shift(); }
     }
 
     // ============================================================================
-    // SECTION 8: PHASE 2B - NEIGHBOR DETECTION + RECORDING
+    // RECORDING FOR PHASE 3 (NON-BLOCKING)
     // ============================================================================
-
-    function captureRecordingWindow(now, windowMs) {
-        if (!frequencyData) return null;
-
+    async function captureRecordingWindow(expectedNoteTime, windowMs) {
+        if (!analyser || !frequencyData) return null;
         const frames = [];
-        const startTime = now;
-        const endTime = now + windowMs;
-
-        while (Date.now() + serverOffset < endTime) {
+        const startTime = expectedNoteTime - (windowMs / 2);
+        const endTime = expectedNoteTime + (windowMs / 2);
+        let nowServer = Date.now() + serverOffset;
+        if (startTime > nowServer) await new Promise(r => setTimeout(r, startTime - nowServer));
+        const recordEndTime = Date.now() + serverOffset + windowMs;
+        while (Date.now() + serverOffset < recordEndTime) {
             analyser.getByteFrequencyData(frequencyData);
-            frames.push({
-                timestamp: Date.now() + serverOffset,
-                // Compress: only keep relevant frequency bins
-                data: compressFrequencyData(frequencyData)
-            });
-            // Small delay to not block
-            const waitStart = Date.now();
-            while (Date.now() - waitStart < 10) {}
+            const compressed = compressFrequencyData(frequencyData);
+            frames.push({ timestamp: Date.now() + serverOffset, data: compressed });
+            await new Promise(r => setTimeout(r, 10));
         }
-
-        return { frames, windowMs };
+        return { frames, windowMs, startTime, endTime };
     }
 
     function compressFrequencyData(freqData) {
         const nyquist = sampleRate / 2;
         const startBin = Math.floor(500 / nyquist * (FFT_SIZE / 2));
         const endBin = Math.ceil(2100 / nyquist * (FFT_SIZE / 2));
-
         const step = Math.max(1, Math.floor((endBin - startBin) / 20));
         const compressed = [];
-
         for (let i = startBin; i <= endBin; i += step) {
             let sum = 0, count = 0;
-            for (let j = 0; j < step && i + j <= endBin; j++) {
-                sum += freqData[i + j] / 255;
-                count++;
-            }
+            for (let j = 0; j < step && i + j <= endBin; j++) { sum += freqData[i + j] / 255; count++; }
             compressed.push(sum / count);
         }
         return compressed;
     }
 
     function storeRecording(neighborId, noteIndex, realTimeEstimate, recordingWindow) {
-        if (!localRecordings.has(neighborId)) {
-            localRecordings.set(neighborId, []);
-        }
-        localRecordings.get(neighborId).push({
-            noteIndex: noteIndex,
-            realTimeEstimate: realTimeEstimate,
-            recordingWindow: recordingWindow
-        });
+        if (!localRecordings.has(neighborId)) localRecordings.set(neighborId, []);
+        localRecordings.get(neighborId).push({ noteIndex, realTimeEstimate, recordingWindow });
     }
 
+    // ============================================================================
+    // PHASE 2B: NEIGHBOR DETECTION + SCHEDULED RECORDING
+    // ============================================================================
     function processDetectionWindows(now, piccoloEnergy) {
         if (!phase1Complete) return;
         if (!noteSchedule || noteSchedule.length === 0) return;
         if (!tuningStartTime) return;
         if (isHappy) return;
-
         const songPosition = now - tuningStartTime;
         if (songPosition < phase1EndMs) return;
-
         const candidateNotes = noteSchedule.filter(note => {
             if (note.deviceId === mySeat.id) return false;
             if (!allListeningTargets.includes(note.deviceId)) return false;
-            const noteKey = `${note.noteIndex}_${note.deviceId}`;
-            if (processedMeasurements.has(noteKey)) return false;
-            const timeDiff = Math.abs(songPosition - note.startMs);
-            return timeDiff <= 500;
+            if (processedMeasurements.has(`${note.noteIndex}_${note.deviceId}`)) return false;
+            return Math.abs(songPosition - note.startMs) <= 500;
         });
-
         for (const note of candidateNotes) {
             const expectedNote = noteTimings[note.noteIndex];
             if (!expectedNote || !expectedNote.midi) continue;
-
+            const expectedNoteTime = tuningStartTime + note.startMs;
+            const nowServer = Date.now() + serverOffset;
+            const windowStartDelay = expectedNoteTime - nowServer - (RECORDING_WINDOW_MS / 2);
+            if (windowStartDelay > 0 && windowStartDelay < 2000) {
+                const scheduleKey = `rec_${note.deviceId}_${note.noteIndex}`;
+                if (!scheduledRecordings.has(scheduleKey)) {
+                    scheduledRecordings.add(scheduleKey);
+                    setTimeout(async () => {
+                        const recordingWindow = await captureRecordingWindow(expectedNoteTime, RECORDING_WINDOW_MS);
+                        if (recordingWindow) storeRecording(note.deviceId, note.noteIndex, null, recordingWindow);
+                    }, windowStartDelay);
+                }
+            }
             const energy = calculateEnergyForNote(expectedNote.midi, sampleRate, FFT_SIZE);
-
             if (energy > MIN_DETECTION_ENERGY) {
                 const rawDelay = songPosition - note.startMs;
-                const dx = mySeat.x - note.originX;
-                const dy = mySeat.y - note.originY;
+                const dx = mySeat.x - note.originX, dy = mySeat.y - note.originY;
                 const distance = Math.sqrt(dx*dx + dy*dy);
                 const propagationMs = (distance / SPEED_OF_SOUND) * 1000;
                 const speakerDelay = rawDelay - propagationMs - (myMicDelayMs || 0);
-
                 if (speakerDelay >= -50 && speakerDelay <= 500) {
-                    // Store for Phase 3
-                    const recordingWindow = captureRecordingWindow(now, RECORDING_WINDOW_MS);
-                    storeRecording(note.deviceId, note.noteIndex, speakerDelay, recordingWindow);
-
-                    // Real-time correction (Phase 2B)
+                    if (localRecordings.has(note.deviceId)) {
+                        const existing = localRecordings.get(note.deviceId).find(r => r.noteIndex === note.noteIndex);
+                        if (existing) existing.realTimeEstimate = speakerDelay;
+                    }
                     rawTimeShifts.push(speakerDelay);
                     if (rawTimeShifts.length > 50) rawTimeShifts.shift();
-
                     reportMeasurement(note.noteIndex, note.deviceId, speakerDelay, rawDelay, propagationMs, now);
                     processedMeasurements.add(`${note.noteIndex}_${note.deviceId}`);
-
                     log(`👥 Neighbor: ${note.deviceId} note ${note.noteIndex} → delay=${speakerDelay.toFixed(1)}ms`);
                 }
             }
@@ -1138,25 +869,16 @@
     async function reportMeasurement(noteIndex, playingSeatId, speakerDelay, rawDelay, propagationMs, detectionTime) {
         try {
             await db.ref(`measurements/${noteIndex}/reporters/${mySeat.id}`).set({
-                targetSeatId: playingSeatId,
-                reporterSeatId: mySeat.id,
-                speakerDelay: Math.round(speakerDelay),
-                rawDelay: Math.round(rawDelay),
-                propagationMs: Math.round(propagationMs),
-                micDelayMs: myMicDelayMs || 0,
-                reportedAt: Date.now() + serverOffset,
-                detectedAt: detectionTime,
-                noteIndex: noteIndex
+                targetSeatId: playingSeatId, reporterSeatId: mySeat.id, speakerDelay: Math.round(speakerDelay),
+                rawDelay: Math.round(rawDelay), propagationMs: Math.round(propagationMs), micDelayMs: myMicDelayMs || 0,
+                reportedAt: Date.now() + serverOffset, detectedAt: detectionTime, noteIndex
             });
-        } catch (e) {
-            log(`❌ Failed to report: ${e.message}`);
-        }
+        } catch (e) { log(`❌ Failed to report: ${e.message}`); }
     }
 
     // ============================================================================
-    // SECTION 9: REAL-TIME CORRECTION
+    // REAL-TIME CORRECTION
     // ============================================================================
-
     function shouldIterate(medianShift, stdDev, sampleCount) {
         const absError = Math.abs(medianShift);
         if (sampleCount < MIN_SAMPLES_FOR_CORRECTION) return false;
@@ -1169,38 +891,18 @@
 
     function applyCorrection(medianShift) {
         const currentDelay = currentSpeakerDelay;
-
         if (Math.abs(medianShift - lastMedianShift) < 5 && Math.abs(medianShift) > 10) {
             sameShiftCount++;
-            if (sameShiftCount >= 3) {
-                log(`⚠️ Median shift stuck at ${medianShift.toFixed(1)}ms - pausing`, 'warn');
-                lastMedianShift = medianShift;
-                return;
-            }
-        } else {
-            sameShiftCount = 0;
-            lastMedianShift = medianShift;
-        }
-
+            if (sameShiftCount >= 3) { log(`⚠️ Median shift stuck at ${medianShift.toFixed(1)}ms - pausing`, 'warn'); lastMedianShift = medianShift; return; }
+        } else { sameShiftCount = 0; lastMedianShift = medianShift; }
         const newDelay = currentDelay - medianShift;
-        const MIN_DELAY = -50;
-        const MAX_DELAY = 1000;
-        const clampedDelay = Math.max(MIN_DELAY, Math.min(MAX_DELAY, newDelay));
+        const clampedDelay = Math.max(-50, Math.min(1000, newDelay));
         const correctionMagnitude = Math.abs(clampedDelay - currentDelay);
-
         if (correctionMagnitude < MIN_CORRECTION_MS) return;
-
         log(`🔄 Correction: shift=${medianShift > 0 ? '+' : ''}${medianShift.toFixed(1)}ms, ${currentDelay.toFixed(1)}ms → ${clampedDelay.toFixed(1)}ms`);
-
         currentSpeakerDelay = clampedDelay;
-
-        if (correctionMagnitude >= 20) {
-            restartWithNewDelay(currentSpeakerDelay);
-        } else {
-            if (tuningStartTime && continuousGain && !isSingleDeviceMode && !isListenOnlyMode) {
-                setTimeout(() => startEnvelopeScheduler(tuningStartTime), 10);
-            }
-        }
+        if (correctionMagnitude >= 20) restartWithNewDelay(currentSpeakerDelay);
+        else if (tuningStartTime && continuousGain && !isSingleDeviceMode && !isListenOnlyMode) setTimeout(() => startEnvelopeScheduler(tuningStartTime), 10);
         rawTimeShifts = [];
         updateCalibrationDisplay();
     }
@@ -1208,34 +910,19 @@
     function evaluateInRealTime() {
         if (isHappy) return;
         if (rawTimeShifts.length < MIN_SAMPLES_FOR_CORRECTION) return;
-
         const medianShift = calculateMedian(rawTimeShifts);
         const stdDev = calculateStdDev(rawTimeShifts);
-
         document.getElementById('debug-stddev').innerText = `${stdDev.toFixed(1)}ms`;
         document.getElementById('debug-speaker-delay').innerText = `${currentSpeakerDelay.toFixed(1)}ms`;
-
-        if (Math.abs(medianShift) <= 15 && stdDev <= 15) {
-            if (!isHappy) {
-                log(`✅ Converged! error=${Math.abs(medianShift).toFixed(1)}ms, σ=${stdDev.toFixed(1)}ms`, 'success');
-                completeCalibration();
-            }
-            return;
-        }
-
-        if (shouldIterate(medianShift, stdDev, rawTimeShifts.length)) {
-            applyCorrection(medianShift);
-        }
+        if (Math.abs(medianShift) <= 15 && stdDev <= 15) { if (!isHappy) { log(`✅ Converged! error=${Math.abs(medianShift).toFixed(1)}ms, σ=${stdDev.toFixed(1)}ms`, 'success'); completeCalibration(); } return; }
+        if (shouldIterate(medianShift, stdDev, rawTimeShifts.length)) applyCorrection(medianShift);
     }
 
     function restartWithNewDelay(newSpeakerDelay) {
         if (!audioCtx || audioCtx.state !== 'running') return;
-
         const nowWall = Date.now() + serverOffset;
         const currentSongPosition = nowWall - tuningStartTime;
-        const totalDuration = 182571;
-        if (currentSongPosition > totalDuration - 2000) return;
-
+        if (currentSongPosition > 182571 - 2000) return;
         log(`🔄 Restarting with delay: ${newSpeakerDelay.toFixed(1)}ms`);
         const newStartTime = nowWall - currentSongPosition + newSpeakerDelay;
         startContinuousPlayback(newStartTime, newSpeakerDelay);
@@ -1243,34 +930,25 @@
     }
 
     // ============================================================================
-    // SECTION 10: CONTINUOUS PLAYBACK
+    // CONTINUOUS PLAYBACK
     // ============================================================================
-
     function startContinuousPlayback(startTime, speakerDelay) {
-        if (isListenOnlyMode) {
-            log(`🔇 Listen-only mode - no playback`);
-            return;
-        }
+        if (isListenOnlyMode) { log(`🔇 Listen-only mode - no playback`); return; }
         if (!PICCOLO_URL || !bufferCache[PICCOLO_URL]) return;
-
         const nowWall = Date.now() + serverOffset;
         const adjustedStartTime = startTime - speakerDelay;
         const delayMs = adjustedStartTime - nowWall;
-
         if (delayMs > 0) {
             setTimeout(() => {
                 if (continuousSource) fadeOutAndStop();
-
                 continuousSource = audioCtx.createBufferSource();
                 continuousSource.buffer = bufferCache[PICCOLO_URL];
                 continuousSource.loop = false;
-
                 continuousGain = audioCtx.createGain();
                 continuousGain.gain.setValueAtTime(0, audioCtx.currentTime);
                 continuousSource.connect(continuousGain);
                 continuousGain.connect(masterGain || audioCtx.destination);
                 continuousSource.start(0);
-
                 startEnvelopeScheduler(startTime);
                 currentSpeakerDelay = speakerDelay;
                 currentPlaybackStartTime = startTime;
@@ -1283,29 +961,19 @@
         if (!continuousGain) return;
         const now = audioCtx.currentTime;
         continuousGain.gain.linearRampToValueAtTime(0, now + 0.1);
-        setTimeout(() => {
-            if (continuousSource) try { continuousSource.stop(); } catch(e) {}
-            continuousSource = null;
-            continuousGain = null;
-        }, 150);
+        setTimeout(() => { if (continuousSource) try { continuousSource.stop(); } catch(e) {} continuousSource = null; continuousGain = null; }, 150);
     }
 
     function startEnvelopeScheduler(pieceStartTime) {
         envelopeTimeouts.forEach(t => clearTimeout(t));
         envelopeTimeouts = [];
-
         if (isListenOnlyMode) return;
-        if (isSingleDeviceMode) {
-            if (continuousGain) continuousGain.gain.setValueAtTime(MASTER_PLAYBACK_GAIN, audioCtx.currentTime);
-            return;
-        }
-
+        if (isSingleDeviceMode) { if (continuousGain) continuousGain.gain.setValueAtTime(MASTER_PLAYBACK_GAIN, audioCtx.currentTime); return; }
         assignedNotes.forEach(note => {
             const noteStartWall = pieceStartTime + note.startMs;
             const nowWall = Date.now() + serverOffset;
             const rampUpStart = noteStartWall - currentSpeakerDelay;
             const rampUpDelay = rampUpStart - nowWall;
-
             if (rampUpDelay > 0) {
                 const timeoutId = setTimeout(() => {
                     if (!continuousGain) return;
@@ -1323,384 +991,228 @@
     }
 
     // ============================================================================
-    // SECTION 11: PHASE 3 - RECORDING ANALYSIS & COCKTAIL PARTY
+    // PHASE 3: RECORDING ANALYSIS & COCKTAIL PARTY
     // ============================================================================
-
-    function analyzeRecordingForNote(recording, noteIndex) {
+    function analyzeRecordingForNote(recording, noteIndex, expectedNoteTime) {
         if (!recording || !recording.frames) return null;
-
         const expectedNote = noteTimings[noteIndex];
         if (!expectedNote || !expectedNote.midi) return null;
-
-        const expectedFreq = getFrequencyFromMidi(expectedNote.midi);
-
-        // Find the frame with highest energy at expected frequency
-        let bestOffset = 0;
-        let highestEnergy = 0;
-
+        const band = getNoteFrequencyBand(expectedNote.midi);
+        const nyquist = sampleRate / 2;
+        const lowerBin = Math.floor(band.lowerFreq / nyquist * (FFT_SIZE / 2));
+        const upperBin = Math.ceil(band.upperFreq / nyquist * (FFT_SIZE / 2));
+        let bestOffset = null, highestEnergy = 0;
         for (const frame of recording.frames) {
-            // Reconstruct approximate energy from compressed data
-            // This is simplified - in practice we'd need to store more data
-            const avgEnergy = frame.data.reduce((a, b) => a + b, 0) / frame.data.length;
-            if (avgEnergy > highestEnergy) {
-                highestEnergy = avgEnergy;
-            }
+            let energy = 0, binsChecked = 0;
+            for (let i = lowerBin; i <= upperBin && i < frame.data.length; i++) { energy += frame.data[i]; binsChecked++; }
+            energy = binsChecked > 0 ? energy / binsChecked : 0;
+            if (energy > highestEnergy) { highestEnergy = energy; bestOffset = frame.timestamp - expectedNoteTime; }
         }
-
-        if (highestEnergy > MIN_DETECTION_ENERGY) {
-            // Return the refined delay (simplified - would need actual timing)
-            return recording.frames[0]?.timestamp - (tuningStartTime + expectedNote.startMs) || null;
-        }
+        if (highestEnergy > MIN_DETECTION_ENERGY && bestOffset !== null) return bestOffset;
         return null;
     }
 
     async function analyzeMyRecordings() {
         log(`📊 Analyzing ${localRecordings.size} neighbors' recordings...`);
-
         for (const [neighborId, recordings] of localRecordings.entries()) {
             const refinedDelays = [];
-
             for (const rec of recordings) {
-                const refinedDelay = analyzeRecordingForNote(rec.recordingWindow, rec.noteIndex);
+                if (!rec.recordingWindow) continue;
+                const expectedNoteTime = tuningStartTime + noteTimings[rec.noteIndex]?.startMs;
+                if (!expectedNoteTime) continue;
+                const refinedDelay = analyzeRecordingForNote(rec.recordingWindow, rec.noteIndex, expectedNoteTime);
                 if (refinedDelay !== null && Math.abs(refinedDelay) < 200) {
-                    refinedDelays.push({
-                        noteIndex: rec.noteIndex,
-                        refinedDelay: refinedDelay
-                    });
-                    log(`   🔍 ${neighborId} note ${rec.noteIndex}: ${rec.realTimeEstimate.toFixed(1)}ms → ${refinedDelay.toFixed(1)}ms`);
+                    refinedDelays.push({ noteIndex: rec.noteIndex, refinedDelay });
+                    log(`   🔍 ${neighborId} note ${rec.noteIndex}: refined=${refinedDelay.toFixed(1)}ms`);
                 }
             }
-
             if (refinedDelays.length > 0) {
-                refinedDataToSend.push({
-                    targetId: neighborId,
-                    listenerId: mySeat.id,
-                    refinedDelays: refinedDelays,
-                    myMicDelay: myMicDelayMs,
-                    timestamp: Date.now() + serverOffset
-                });
+                refinedDataToSend.push({ targetId: neighborId, listenerId: mySeat.id, refinedDelays, myMicDelay: myMicDelayMs, timestamp: Date.now() + serverOffset });
             }
         }
-
-        log(`📤 Queued ${refinedDataToSend.length} refinement messages for cocktail party`);
+        log(`📤 Queued ${refinedDataToSend.length} refinement messages`);
     }
 
     function startCocktailParty() {
-        if (refinedDataToSend.length === 0) {
-            log("🎉 No refinement data to send");
-            return;
-        }
-
+        if (refinedDataToSend.length === 0) { log("🎉 No refinement data to send"); return; }
         log(`🎉 Cocktail party starting: ${refinedDataToSend.length} messages`);
         phase3StartTime = Date.now();
-
         let index = 0;
-        const totalMessages = refinedDataToSend.length;
-        const targetDurationMs = Math.min(10000, Math.max(3000, totalMessages * 100));
-        const avgIntervalMs = targetDurationMs / totalMessages;
-
+        const messageCount = refinedDataToSend.length;
+        const estimatedDuration = Math.min(10000, Math.max(3000, messageCount * 100));
+        const avgIntervalMs = estimatedDuration / messageCount;
         function sendNext() {
-            if (index >= refinedDataToSend.length) {
-                log("🎉 Cocktail party finished");
-                cocktailPartyInterval = null;
-                return;
-            }
-
-            const message = refinedDataToSend[index];
-            sendRefinedMetadata(message);
+            if (index >= refinedDataToSend.length) { log("🎉 Cocktail party finished"); cocktailPartyInterval = null; return; }
+            sendRefinedMetadata(refinedDataToSend[index]);
             index++;
-
             const jitter = avgIntervalMs * (0.5 + Math.random());
             cocktailPartyInterval = setTimeout(sendNext, jitter);
         }
-
         setTimeout(sendNext, 1000);
     }
 
     async function sendRefinedMetadata(message) {
         try {
-            await db.ref(`calibration_refined/${message.targetId}/listeners/${message.listenerId}`).set({
-                listenerId: message.listenerId,
-                refinedDelays: message.refinedDelays,
-                myMicDelay: message.myMicDelay,
-                timestamp: message.timestamp
+            await db.ref(`calibration_refined/${message.targetId}/listeners/${message.listenerId}`).push({
+                listenerId: message.listenerId, refinedDelays: message.refinedDelays, myMicDelay: message.myMicDelay, timestamp: message.timestamp
             });
             log(`📤 Sent ${message.refinedDelays.length} notes to ${message.targetId}`);
-        } catch (e) {
-            log(`⚠️ Failed to send to ${message.targetId}: ${e.message}`);
-        }
+        } catch (e) { log(`⚠️ Failed to send to ${message.targetId}: ${e.message}`); }
     }
 
     function listenForRefinements() {
         db.ref(`calibration_refined/${mySeat.id}/listeners`).on('child_added', (snap) => {
             const data = snap.val();
             log(`📥 Received refined data from ${data.listenerId} (${data.refinedDelays.length} notes)`);
-
             for (const note of data.refinedDelays) {
-                receivedRefinements.push({
-                    listenerId: data.listenerId,
-                    noteIndex: note.noteIndex,
-                    refinedDelay: note.refinedDelay,
-                    theirMicDelay: data.myMicDelay
-                });
+                receivedRefinements.push({ listenerId: data.listenerId, noteIndex: note.noteIndex, refinedDelay: note.refinedDelay, theirMicDelay: data.myMicDelay });
             }
-
             scheduleRefinementProcessing();
         });
     }
 
-    let refinementTimer = null;
-
     function scheduleRefinementProcessing() {
         if (refinementTimer) clearTimeout(refinementTimer);
-        refinementTimer = setTimeout(() => {
-            processReceivedRefinements();
-        }, 5000);
+        refinementTimer = setTimeout(() => { processReceivedRefinements(); }, 5000);
     }
 
     function processReceivedRefinements() {
         if (receivedRefinements.length === 0) return;
-
         log(`📊 Processing ${receivedRefinements.length} refined measurements...`);
-
         const refinedSpeakerDelays = [];
-
         for (const ref of receivedRefinements) {
-            const neighborPos = { x: mySeat.x, y: mySeat.y }; // Would need actual neighbor positions
-            // Simplified: use my position as estimate
-            const dx = 0;
-            const dy = 0;
-            const distance = 1.5; // Approximate neighbor distance
+            const listenerPos = seatData[ref.listenerId];
+            if (!listenerPos) { log(`⚠️ Cannot find position for ${ref.listenerId}`); continue; }
+            const dx = mySeat.x - listenerPos.x, dy = mySeat.y - listenerPos.y;
+            const distance = Math.sqrt(dx*dx + dy*dy);
             const propagationMs = (distance / SPEED_OF_SOUND) * 1000;
-
             const myDelay = ref.refinedDelay - propagationMs - (ref.theirMicDelay || 0);
-            refinedSpeakerDelays.push(myDelay);
+            if (Math.abs(myDelay) < 500) refinedSpeakerDelays.push(myDelay);
         }
-
         if (refinedSpeakerDelays.length === 0) return;
-
-        // Combine Phase 2 (real-time) and Phase 3 (refined)
         const allDelays = [];
-
-        // Phase 2: real-time estimates (weight 1x)
         for (const d of rawTimeShifts) allDelays.push(d);
-
-        // Phase 3: refined metadata (weight 2x)
-        for (const d of refinedSpeakerDelays) {
-            allDelays.push(d);
-            allDelays.push(d);
-        }
-
+        for (const d of refinedSpeakerDelays) { allDelays.push(d); allDelays.push(d); }
         const finalDelay = calculateMedian(allDelays);
         log(`🎯 Final refined speaker delay: ${finalDelay.toFixed(1)}ms from ${allDelays.length} weighted samples`);
-
         if (Math.abs(finalDelay - currentSpeakerDelay) > 5) {
             currentSpeakerDelay = finalDelay;
             saveCalibration();
+            db.ref(`devices/${mySeat.id}`).update({ speakerDelay: Math.round(currentSpeakerDelay), phase3SpeakerDelay: Math.round(currentSpeakerDelay), phase3CompletedAt: Date.now() + serverOffset }).catch(e => log(`⚠️ Phase 3 sync failed: ${e.message}`));
             updateCalibrationDisplay();
-            log(`✅ Updated speaker delay to ${currentSpeakerDelay.toFixed(1)}ms`);
+            log(`✅ Phase 3 updated speaker delay to ${currentSpeakerDelay.toFixed(1)}ms`);
         }
-
         receivedRefinements = [];
     }
 
     function saveCalibration() {
-        try {
-            localStorage.setItem(`calibration_${mySeat.id}`, JSON.stringify({
-                speakerDelay: currentSpeakerDelay,
-                micDelay: myMicDelayMs,
-                timestamp: Date.now()
-            }));
-            log(`💾 Calibration saved`);
-        } catch (e) {
-            log(`⚠️ Could not save: ${e.message}`);
-        }
+        try { localStorage.setItem(`calibration_${mySeat.id}`, JSON.stringify({ speakerDelay: currentSpeakerDelay, micDelay: myMicDelayMs, timestamp: Date.now() })); log(`💾 Calibration saved`); }
+        catch (e) { log(`⚠️ Could not save: ${e.message}`); }
     }
 
     // ============================================================================
-    // SECTION 12: PHASE 4 - INDIVIDUAL TUNING
+    // PHASE 4: INDIVIDUAL TUNING
     // ============================================================================
-
     function listenForIndividualTuning() {
         db.ref(`tuning/individual/${mySeat.id}`).on('value', async (snap) => {
             const tuning = snap.val();
             if (!tuning || tuning.status !== 'ACTIVE') return;
-
             log(`🔧 Individual tuning requested`);
-
             const wasHappy = isHappy;
-            isHappy = false;
-            phase1Complete = false;
-            myMicDelayMs = null;
-            micDelaySamples = [];
-
-            // Listen for pillar test tones (simplified)
+            isHappy = false; phase1Complete = false; myMicDelayMs = null; micDelaySamples = [];
             const detections = [];
             const endTime = Date.now() + serverOffset + tuning.duration;
-
             while (Date.now() + serverOffset < endTime && detections.length < 8) {
                 analyser.getByteFrequencyData(frequencyData);
-
-                // Check for energy in pillar frequency range
                 let maxEnergy = 0;
-                for (let i = 0; i < frequencyData.length; i++) {
-                    const energy = frequencyData[i] / 255;
-                    if (energy > maxEnergy) maxEnergy = energy;
-                }
-
-                if (maxEnergy > MIN_DETECTION_ENERGY * 2) {
-                    detections.push({ time: Date.now() + serverOffset, energy: maxEnergy });
-                }
-
+                for (let i = 0; i < frequencyData.length; i++) maxEnergy = Math.max(maxEnergy, frequencyData[i] / 255);
+                if (maxEnergy > MIN_DETECTION_ENERGY * 2) detections.push({ time: Date.now() + serverOffset, energy: maxEnergy });
                 await new Promise(r => setTimeout(r, 50));
             }
-
-            if (detections.length >= 2) {
-                myMicDelayMs = 25; // Estimated
-                phase1Complete = true;
-                log(`✅ Individual tuning complete: mic=${myMicDelayMs}ms`);
-
-                await db.ref(`tuning/individual/${mySeat.id}/result`).set({
-                    speakerDelay: Math.round(currentSpeakerDelay),
-                    micDelay: Math.round(myMicDelayMs),
-                    detections: detections.length
-                });
-            } else {
-                log(`❌ Individual tuning failed`);
-                await db.ref(`tuning/individual/${mySeat.id}/result`).set({
-                    error: 'Insufficient detections',
-                    detections: detections.length
-                });
-            }
-
+            if (detections.length >= 2) { myMicDelayMs = 25; phase1Complete = true; log(`✅ Individual tuning complete: mic=${myMicDelayMs}ms`); await db.ref(`tuning/individual/${mySeat.id}/result`).set({ speakerDelay: Math.round(currentSpeakerDelay), micDelay: Math.round(myMicDelayMs), detections: detections.length }); }
+            else { log(`❌ Individual tuning failed`); await db.ref(`tuning/individual/${mySeat.id}/result`).set({ error: 'Insufficient detections', detections: detections.length }); }
             isHappy = wasHappy;
             await db.ref(`tuning/individual/${mySeat.id}`).remove();
         });
     }
 
     // ============================================================================
-    // SECTION 13: DETECTION LOOP
+    // DETECTION LOOP
     // ============================================================================
-
     function detectNeighborNotes() {
-        if (!isMicActive || !analyser || !frequencyData) {
-            requestAnimationFrame(detectNeighborNotes);
-            return;
-        }
-
+        if (!isMicActive || !analyser || !frequencyData) { requestAnimationFrame(detectNeighborNotes); return; }
         const now = Date.now() + serverOffset;
         analyser.getByteFrequencyData(frequencyData);
-
-        // Calculate piccolo band energy
-        let piccoloEnergy = 0;
         const nyquist = sampleRate / 2;
         const startBin = Math.floor(500 / nyquist * (FFT_SIZE / 2));
         const endBin = Math.ceil(2100 / nyquist * (FFT_SIZE / 2));
-        for (let i = startBin; i <= endBin && i < frequencyData.length; i++) {
-            piccoloEnergy += frequencyData[i] / 255;
-        }
+        let piccoloEnergy = 0;
+        for (let i = startBin; i <= endBin && i < frequencyData.length; i++) piccoloEnergy += frequencyData[i] / 255;
         piccoloEnergy = piccoloEnergy / (endBin - startBin + 1);
         currentAvgEnergy = piccoloEnergy;
-
         const energyFill = document.getElementById('energy-fill');
-        const energyValue = document.getElementById('energy-value');
         if (energyFill) energyFill.style.width = (piccoloEnergy * 100) + '%';
+        const energyValue = document.getElementById('energy-value');
         if (energyValue) energyValue.innerText = piccoloEnergy.toFixed(4);
-
-        // Update baseline
         if (!baselineComplete && tuningStartTime) {
-            if (now - baselineStartTime < BASELINE_SAMPLES_MS) {
-                baselineSamples.push(piccoloEnergy);
-            } else if (baselineSamples.length > 0) {
-                const sorted = [...baselineSamples].sort((a, b) => a - b);
-                baselineEnergy = sorted[Math.floor(sorted.length / 2)];
-                baselineComplete = true;
-                log(`📊 Baseline: ${baselineEnergy.toFixed(4)}`);
-            }
+            if (now - baselineStartTime < BASELINE_SAMPLES_MS) baselineSamples.push(piccoloEnergy);
+            else if (baselineSamples.length > 0) { const sorted = [...baselineSamples].sort((a, b) => a - b); baselineEnergy = sorted[Math.floor(sorted.length / 2)]; baselineComplete = true; log(`📊 Baseline: ${baselineEnergy.toFixed(4)}`); }
         }
-
         const songPosition = tuningStartTime ? now - tuningStartTime : 0;
         const isPhase1Music = songPosition < phase1EndMs;
         const isPhase2Music = songPosition >= phase1EndMs;
-
-        // PHASE 1: Mic delay (pillar detection)
-        if (!isHappy && !phase1Complete && isPhase1Music && tuningStartTime) {
-            detectPillarOnsets(now);
-        }
-
-        // PHASE 2A: Pillar sync (immutable timing reference)
-        if (!isHappy && isPhase2Music && tuningStartTime) {
-            detectPillarForSync(now);
-        }
-
-        // PHASE 2B: Neighbor detection + real-time correction
+        if (!isHappy && !phase1Complete && isPhase1Music && tuningStartTime) detectPillarOnsets(now);
+        if (!isHappy && isPhase2Music && tuningStartTime) detectPillarForSync(now);
         if (!isHappy && isPhase2Music && tuningStartTime) {
             processDetectionWindows(now, piccoloEnergy);
-
-            if (now - lastEvaluationTime > EVALUATION_INTERVAL_MS) {
-                lastEvaluationTime = now;
-                evaluateInRealTime();
-            }
+            if (now - lastEvaluationTime > EVALUATION_INTERVAL_MS) { lastEvaluationTime = now; evaluateInRealTime(); }
         }
-
         requestAnimationFrame(detectNeighborNotes);
     }
 
     // ============================================================================
-    // SECTION 14: COMPLETE CALIBRATION
+    // COMPLETE CALIBRATION
     // ============================================================================
+    async function startPhase3() {
+        log("📡 Phase 3: Analyzing recordings...");
+        await analyzeMyRecordings();
+        const messageCount = refinedDataToSend.length;
+        const estimatedDuration = Math.min(10000, Math.max(3000, messageCount * 100));
+        const timeoutMs = estimatedDuration + 5000;
+        log(`🎉 Cocktail party: ${messageCount} messages, estimated ${estimatedDuration/1000}s, timeout ${timeoutMs/1000}s`);
+        startCocktailParty();
+        listenForRefinements();
+        setTimeout(() => {
+            log(`⏰ Phase 3 finalizing after ${timeoutMs/1000}s`);
+            processReceivedRefinements();
+            db.ref(`devices/${mySeat.id}`).update({ phase3Complete: true }).catch(e => log(`⚠️ Phase 3 final sync failed: ${e.message}`));
+            log("✅ Phase 3 complete");
+        }, timeoutMs);
+    }
 
     async function completeCalibration() {
         if (isHappy) return;
-
         isHappy = true;
         log(`✅✅✅ CALIBRATION COMPLETE ✅✅✅`);
         log(`   Speaker delay: ${currentSpeakerDelay.toFixed(1)}ms`);
         log(`   Mic delay: ${myMicDelayMs?.toFixed(1) || '0'}ms`);
-
         saveCalibration();
-
-        await db.ref(`devices/${mySeat.id}`).update({
-            status: 'HAPPY',
-            calibrated: true,
-            finalSpeakerDelay: Math.round(currentSpeakerDelay),
-            finalMicDelay: Math.round(myMicDelayMs || 0),
-            convergedAt: Date.now() + serverOffset
-        });
-
+        await db.ref(`devices/${mySeat.id}`).update({ status: 'HAPPY', calibrated: true, finalSpeakerDelay: Math.round(currentSpeakerDelay), finalMicDelay: Math.round(myMicDelayMs || 0), convergedAt: Date.now() + serverOffset });
         updateCalibrationDisplay();
         document.getElementById('debug-status').innerHTML = 'HAPPY ✓';
-
-        // Start Phase 3
-        setTimeout(async () => {
-            log("📡 Phase 3: Analyzing recordings...");
-            await analyzeMyRecordings();
-            startCocktailParty();
-            listenForRefinements();
-
-            // Finalize after cocktail party
-            setTimeout(() => {
-                processReceivedRefinements();
-                log("✅ Phase 3 complete");
-            }, PHASE3_MAX_DURATION_MS);
-        }, 2000);
+        setTimeout(() => startPhase3(), 2000);
     }
 
     // ============================================================================
-    // SECTION 15: HEARTBEAT & INITIALIZATION
+    // HEARTBEAT
     // ============================================================================
-
     function startHeartbeat() {
         if (!mySeat) return;
         if (heartbeatInterval) clearInterval(heartbeatInterval);
-
         const scheduleNext = () => {
             const jitter = Math.floor(Math.random() * HEARTBEAT_JITTER_MS) - (HEARTBEAT_JITTER_MS / 2);
             const nextInterval = Math.max(1000, HEARTBEAT_BASE_INTERVAL_MS + jitter);
-            heartbeatInterval = setTimeout(async () => {
-                await sendHeartbeat();
-                scheduleNext();
-            }, nextInterval);
+            heartbeatInterval = setTimeout(async () => { await sendHeartbeat(); scheduleNext(); }, nextInterval);
         };
         scheduleNext();
         log(`💓 Heartbeat started`);
@@ -1709,193 +1221,81 @@
     async function sendHeartbeat() {
         if (!mySeat) return;
         try {
-            await db.ref(`devices/${mySeat.id}`).update({
-                lastSeen: Date.now() + serverOffset,
-                status: isHappy ? 'HAPPY' : (phase1Complete ? 'CALIBRATING' : 'ACTIVE'),
-                calibrated: isHappy,
-                x: mySeat.x,
-                y: mySeat.y,
-                speakerDelay: currentSpeakerDelay,
-                micDelay: myMicDelayMs || 0,
-                neighborCount: myNeighbors.length
-            });
-        } catch (e) {
-            log(`💔 Heartbeat failed: ${e.message}`);
-        }
+            await db.ref(`devices/${mySeat.id}`).update({ lastSeen: Date.now() + serverOffset, status: isHappy ? 'HAPPY' : (phase1Complete ? 'CALIBRATING' : 'ACTIVE'), calibrated: isHappy, x: mySeat.x, y: mySeat.y, speakerDelay: currentSpeakerDelay, micDelay: myMicDelayMs || 0, neighborCount: myNeighbors.length });
+        } catch (e) { log(`💔 Heartbeat failed: ${e.message}`); }
     }
 
-    function stopHeartbeat() {
-        if (heartbeatInterval) clearTimeout(heartbeatInterval);
-    }
+    function stopHeartbeat() { if (heartbeatInterval) clearTimeout(heartbeatInterval); }
 
+    // ============================================================================
+    // ASSET PRELOAD
+    // ============================================================================
     let assetsPreloaded = false;
-
     async function preloadAssets() {
         document.getElementById('asset-progress').style.display = 'block';
         log("📦 Starting asset preload...");
-
         try {
             const movementsSnap = await db.ref('show/movements').once('value');
             const movements = movementsSnap.val();
             const audioFiles = new Set();
-
             if (movements && movements.length) {
-                movements.forEach(movement => {
-                    (movement.cues || []).forEach(cue => {
-                        (cue.assets || []).forEach(asset => {
-                            if (asset.audio_url) audioFiles.add(asset.audio_url);
-                        });
-                    });
-                });
+                movements.forEach(movement => { (movement.cues || []).forEach(cue => { (cue.assets || []).forEach(asset => { if (asset.audio_url) audioFiles.add(asset.audio_url); }); }); });
             }
-
             if (PICCOLO_URL) audioFiles.add(PICCOLO_URL);
             if (TEST_PULSE_URL) audioFiles.add(TEST_PULSE_URL);
-
             const totalAssets = audioFiles.size;
+            if (totalAssets === 0) { document.getElementById('asset-ind').className = 'indicator active'; document.getElementById('asset-progress').style.display = 'none'; assetsPreloaded = true; return true; }
             let loadedCount = 0;
-
-            if (totalAssets === 0) {
-                document.getElementById('asset-ind').className = 'indicator active';
-                document.getElementById('asset-progress').style.display = 'none';
-                assetsPreloaded = true;
-                return true;
-            }
-
             for (const url of audioFiles) {
-                try {
-                    const res = await fetch(url);
-                    const arrayBuf = await res.arrayBuffer();
-                    bufferCache[url] = await audioCtx.decodeAudioData(arrayBuf);
-                    loadedCount++;
-                    const percent = (loadedCount / totalAssets) * 100;
-                    document.getElementById('asset-progress-fill').style.width = `${percent}%`;
-                } catch (e) {
-                    log(`❌ Failed to load ${url.split('/').pop()}: ${e.message}`);
-                    loadedCount++;
-                }
+                try { const res = await fetch(url); const arrayBuf = await res.arrayBuffer(); bufferCache[url] = await audioCtx.decodeAudioData(arrayBuf); loadedCount++; document.getElementById('asset-progress-fill').style.width = `${(loadedCount / totalAssets) * 100}%`; }
+                catch (e) { log(`❌ Failed to load ${url.split('/').pop()}: ${e.message}`); loadedCount++; }
             }
-
             document.getElementById('asset-ind').className = 'indicator active';
             document.getElementById('asset-progress').style.display = 'none';
             log(`✅ Asset preload complete (${loadedCount}/${totalAssets})`);
             assetsPreloaded = true;
-
-            if (micPermissionGranted && mySeat && myNeighbors) {
-                document.getElementById('ready-btn').disabled = false;
-            }
+            if (micPermissionGranted && mySeat && myNeighbors) document.getElementById('ready-btn').disabled = false;
             return true;
-
-        } catch (e) {
-            log(`❌ Asset Load Failure: ${e.message}`);
-            document.getElementById('asset-ind').className = 'indicator error';
-            return false;
-        }
+        } catch (e) { log(`❌ Asset Load Failure: ${e.message}`); document.getElementById('asset-ind').className = 'indicator error'; return false; }
     }
 
     // ============================================================================
-    // SECTION 16: TUNING LISTENER
+    // TUNING LISTENER
     // ============================================================================
-
     let isProcessingTuning = false;
-
     function initTuningListener() {
         db.ref('tuning/current').on('value', async snap => {
             const schedule = snap.val();
             if (!schedule || schedule.status !== 'ACTIVE') return;
             if (isProcessingTuning || tuningStartTime === schedule.startTime) return;
-
             const now = Date.now() + serverOffset;
-            if (schedule.startTime < now - 60000) {
-                log(`❌ Schedule is in the past`);
-                return;
-            }
-
+            if (schedule.startTime < now - 60000) { log(`❌ Schedule is in the past`); return; }
             log(`🎵 Tuning schedule received! startTime=${new Date(schedule.startTime).toISOString().substr(11, 12)}`);
-
             isProcessingTuning = true;
             currentTuningSchedule = schedule;
             tuningStartTime = schedule.startTime;
-
             const activePillars = (schedule.deviceOrder || []).filter(id => id.startsWith('PILLAR_'));
-
-            // Check if calibrated
             const calibratedPatronIds = schedule.calibratedPatronIds || [];
             const isCalibrated = calibratedPatronIds.includes(mySeat.id);
-
-            if (isCalibrated) {
-                isListenOnlyMode = true;
-                assignedNotes = [];
-                phase1Complete = true;
-                log(`🎯 Listen-only mode (already calibrated)`);
-            } else {
+            if (isCalibrated) { isListenOnlyMode = true; assignedNotes = []; phase1Complete = true; log(`🎯 Listen-only mode (already calibrated)`); }
+            else {
                 isListenOnlyMode = false;
-                if (schedule.schedule) {
-                    noteSchedule = schedule.schedule.map(note => ({
-                        ...note,
-                        startMs: parseFloat(note.startMs),
-                        durationMs: parseFloat(note.durationMs)
-                    }));
-                    assignedNotes = noteSchedule.filter(note => note.deviceId === mySeat.id);
-                    log(`🎯 Assigned ${assignedNotes.length} notes`);
-                }
+                if (schedule.schedule) { noteSchedule = schedule.schedule.map(note => ({ ...note, startMs: parseFloat(note.startMs), durationMs: parseFloat(note.durationMs) })); assignedNotes = noteSchedule.filter(note => note.deviceId === mySeat.id); log(`🎯 Assigned ${assignedNotes.length} notes`); }
             }
-
-            // Load pillar notes
-            if (!isListenOnlyMode && schedule.pillar_notes) {
-                window.allPillarNotes = schedule.pillar_notes;
-                log(`📡 Loaded ${window.allPillarNotes.length} pillar notes`);
-            }
-
-            // Load calibration windows
-            if (schedule.metadata && schedule.metadata.pillar_cal_windows) {
-                pillarWindows = schedule.metadata.pillar_cal_windows;
-                phase1EndMs = pillarWindows[pillarWindows.length - 1].end_ms;
-            }
-
-            // Detect single device mode
-            if (schedule.deviceOrder && !isListenOnlyMode) {
-                const patronOrder = schedule.deviceOrder.filter(id => !id.startsWith('PILLAR_'));
-                isSingleDeviceMode = (patronOrder.length === 1);
-            }
-
-            // Reset Phase 1 state
-            if (!isListenOnlyMode) {
-                phase1Complete = false;
-                phase1WindowActive = true;
-                micDelaySamples = [];
-                myMicDelayMs = null;
-                rawTimeShifts = [];
-                processedMeasurements.clear();
-                localRecordings.clear();
-
-                log(`🎤 Phase 1: listening for mic delay (0-${phase1EndMs}ms)`);
-            }
-
-            // Start playback
-            if (!isListenOnlyMode) {
-                const initialDelay = currentSpeakerDelay !== null ? currentSpeakerDelay : estimatedDeviceDelayMs;
-                log(`🎵 Starting playback with delay ${initialDelay.toFixed(1)}ms`);
-                startContinuousPlayback(tuningStartTime, initialDelay);
-            } else {
-                log(`🔇 Listen-only mode - no playback`);
-            }
-
+            if (!isListenOnlyMode && schedule.pillar_notes) allPillarNotes = schedule.pillar_notes;
+            if (schedule.metadata && schedule.metadata.pillar_cal_windows) { pillarWindows = schedule.metadata.pillar_cal_windows; phase1EndMs = pillarWindows[pillarWindows.length - 1].end_ms; }
+            if (schedule.deviceOrder && !isListenOnlyMode) { const patronOrder = schedule.deviceOrder.filter(id => !id.startsWith('PILLAR_')); isSingleDeviceMode = (patronOrder.length === 1); }
+            if (!isListenOnlyMode) { phase1Complete = false; phase1WindowActive = true; micDelaySamples = []; myMicDelayMs = null; rawTimeShifts = []; processedMeasurements.clear(); localRecordings.clear(); scheduledRecordings.clear(); log(`🎤 Phase 1: listening for mic delay (0-${phase1EndMs}ms)`); }
+            if (!isListenOnlyMode) { const initialDelay = currentSpeakerDelay !== null ? currentSpeakerDelay : estimatedDeviceDelayMs; log(`🎵 Starting playback with delay ${initialDelay.toFixed(1)}ms`); startContinuousPlayback(tuningStartTime, initialDelay); }
+            else { log(`🔇 Listen-only mode - no playback`); }
             await enableMicrophone();
             log("🎧 Listening...");
-
-            // Phase 1 timeout
             if (!isListenOnlyMode && pillarWindows.length > 0 && activePillars.length > 0) {
                 setTimeout(() => {
                     if (phase1WindowActive && !phase1Complete) {
                         log(`⏱️ Phase 1 timeout - using default mic delay`);
-                        phase1WindowActive = false;
-                        phase1Complete = true;
-                        if (micDelaySamples.length === 0) {
-                            myMicDelayMs = estimatedDeviceMicDelayMs;
-                        } else {
-                            myMicDelayMs = calculateMedian(micDelaySamples);
-                        }
+                        phase1WindowActive = false; phase1Complete = true;
+                        myMicDelayMs = micDelaySamples.length > 0 ? calculateMedian(micDelaySamples) : estimatedDeviceMicDelayMs;
                         updateCalibrationDisplay();
                     }
                 }, phase1EndMs);
@@ -1904,164 +1304,45 @@
     }
 
     // ============================================================================
-    // SECTION 17: SHOW PLAYBACK
+    // SHOW PLAYBACK
     // ============================================================================
-
     let wakeLock = null;
-    async function requestWakeLock() {
-        try {
-            if ('wakeLock' in navigator) {
-                wakeLock = await navigator.wakeLock.request('screen');
-            }
-        } catch (err) { console.warn('Wake lock failed:', err); }
-    }
-
-    function handleMovementStart(cue) {
-        if (!cue.startTime || !cue.movement || !cue.cues) return;
-        log(`🎬 MOVEMENT START: "${cue.movement}"`);
-        clearAllScheduledCues();
-        currentMovement = cue.movement;
-        movementStartTime = cue.startTime;
-        document.getElementById('movement-indicator').innerText = `🎭 ${currentMovement}`;
-        if (cue.cues) scheduleTimelineCues(cue.cues);
-    }
-
-    function clearAllScheduledCues() {
-        activeTimeouts.forEach(t => clearTimeout(t));
-        activeTimeouts = [];
-        activeAudioCues.forEach(cue => { if (cue.source) try { cue.source.stop(); } catch(e) {} });
-        activeAudioCues = [];
-        activeLightCues = [];
-        const canvas = document.getElementById('stage-canvas');
-        canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
-    }
-
-    function scheduleTimelineCues(cues) {
-        const now = Date.now() + serverOffset;
-        cues.forEach(cue => {
-            if (cue.type !== 'MASTER_MEDIA_SYNC') return;
-            const cueOffsetMs = (cue.time || 0) * 1000;
-            const absoluteStartTime = movementStartTime + cueOffsetMs;
-            const startDelayMs = absoluteStartTime - now - (currentSpeakerDelay || 0) - (myMicDelayMs || 0);
-            (cue.assets || []).forEach(asset => {
-                if (asset.type === 'pillar') return;
-                if (startDelayMs > 0) {
-                    const timeoutId = setTimeout(() => { playSpatialCue(asset); }, startDelayMs);
-                    activeTimeouts.push(timeoutId);
-                } else if (startDelayMs > -1000) {
-                    playSpatialCue(asset);
-                }
-            });
-        });
-    }
-
-    async function playSpatialCue(cue) {
-        const url = cue.audio_url;
-        if (!url || !bufferCache[url]) return;
-        const source = audioCtx.createBufferSource();
-        source.buffer = bufferCache[url];
-        const gainNode = audioCtx.createGain();
-        gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime);
-        source.connect(gainNode);
-        gainNode.connect(masterGain || audioCtx.destination);
-        source.start(0);
-        activeAudioCues.push({ ...cue, source, gainNode });
-    }
-
-    function frame(now) {
-        const delta = now - lastFrameTime;
-        if (delta < FRAME_DURATION) { requestAnimationFrame(frame); return; }
-        lastFrameTime = now;
-
-        const serverNow = Date.now() + serverOffset;
-        if (currentMovement && movementStartTime > serverNow) {
-            const secondsToStart = ((movementStartTime - serverNow) / 1000).toFixed(1);
-            document.getElementById('movement-indicator').innerText = `🎭 ${currentMovement} (T-${secondsToStart}s)`;
-        } else if (currentMovement) {
-            document.getElementById('movement-indicator').innerText = `🎭 ${currentMovement} (Playing)`;
-        }
-
-        const fps = Math.round(1000 / delta);
-        document.getElementById('performance-overlay').innerHTML =
-            `FPS: ${fps} | Speaker: ${currentSpeakerDelay?.toFixed(0) || '--'}ms | Mic: ${myMicDelayMs?.toFixed(0) || '--'}ms | Neighbors: ${myNeighbors.length} | ${isHappy ? '✅' : (phase1Complete ? '🔄' : '🎤')}`;
-
-        requestAnimationFrame(frame);
-    }
+    async function requestWakeLock() { try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch (err) { console.warn('Wake lock failed:', err); } }
+    function handleMovementStart(cue) { if (!cue.startTime || !cue.movement || !cue.cues) return; log(`🎬 MOVEMENT START: "${cue.movement}"`); clearAllScheduledCues(); currentMovement = cue.movement; movementStartTime = cue.startTime; document.getElementById('movement-indicator').innerText = `🎭 ${currentMovement}`; if (cue.cues) scheduleTimelineCues(cue.cues); }
+    function clearAllScheduledCues() { activeTimeouts.forEach(t => clearTimeout(t)); activeTimeouts = []; activeAudioCues.forEach(cue => { if (cue.source) try { cue.source.stop(); } catch(e) {} }); activeAudioCues = []; activeLightCues = []; document.getElementById('stage-canvas').getContext('2d').clearRect(0, 0, canvas.width, canvas.height); }
+    function scheduleTimelineCues(cues) { const now = Date.now() + serverOffset; cues.forEach(cue => { if (cue.type !== 'MASTER_MEDIA_SYNC') return; const cueOffsetMs = (cue.time || 0) * 1000; const absoluteStartTime = movementStartTime + cueOffsetMs; const startDelayMs = absoluteStartTime - now - (currentSpeakerDelay || 0) - (myMicDelayMs || 0); (cue.assets || []).forEach(asset => { if (asset.type === 'pillar') return; if (startDelayMs > 0) { const timeoutId = setTimeout(() => { playSpatialCue(asset); }, startDelayMs); activeTimeouts.push(timeoutId); } else if (startDelayMs > -1000) { playSpatialCue(asset); } }); }); }
+    async function playSpatialCue(cue) { const url = cue.audio_url; if (!url || !bufferCache[url]) return; const source = audioCtx.createBufferSource(); source.buffer = bufferCache[url]; const gainNode = audioCtx.createGain(); gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime); source.connect(gainNode); gainNode.connect(masterGain || audioCtx.destination); source.start(0); activeAudioCues.push({ ...cue, source, gainNode }); }
+    function frame(now) { const delta = now - lastFrameTime; if (delta < FRAME_DURATION) { requestAnimationFrame(frame); return; } lastFrameTime = now; const serverNow = Date.now() + serverOffset; if (currentMovement && movementStartTime > serverNow) { const secondsToStart = ((movementStartTime - serverNow) / 1000).toFixed(1); document.getElementById('movement-indicator').innerText = `🎭 ${currentMovement} (T-${secondsToStart}s)`; } else if (currentMovement) { document.getElementById('movement-indicator').innerText = `🎭 ${currentMovement} (Playing)`; } const fps = Math.round(1000 / delta); document.getElementById('performance-overlay').innerHTML = `FPS: ${fps} | Speaker: ${currentSpeakerDelay?.toFixed(0) || '--'}ms | Mic: ${myMicDelayMs?.toFixed(0) || '--'}ms | Neighbors: ${myNeighbors.length} | ${isHappy ? '✅' : (phase1Complete ? '🔄' : '🎤')}`; requestAnimationFrame(frame); }
 
     // ============================================================================
-    // SECTION 18: INITIALIZATION
+    // INITIALIZATION
     // ============================================================================
-
     const micButton = document.getElementById('request-mic-btn');
-    if (micButton) {
-        micButton.onclick = async () => {
-            await window.requestMicrophonePermission();
-            if (micPermissionGranted && mySeat && myNeighbors && assetsPreloaded) {
-                document.getElementById('ready-btn').disabled = false;
-            }
-        };
-    }
-
+    if (micButton) { micButton.onclick = async () => { await window.requestMicrophonePermission(); if (micPermissionGranted && mySeat && myNeighbors && assetsPreloaded) document.getElementById('ready-btn').disabled = false; }; }
     document.getElementById('ready-btn').onclick = async () => {
         try {
             log("🎯 ENTER THE ISLE button pressed");
-            if (!micPermissionGranted) {
-                log("⚠️ Please grant microphone permission first");
-                return;
-            }
-
-            if (!audioCtx) {
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-                masterGain = audioCtx.createGain();
-                masterGain.gain.value = MASTER_PLAYBACK_GAIN;
-                masterGain.connect(audioCtx.destination);
-            }
-
+            if (!micPermissionGranted) { log("⚠️ Please grant microphone permission first"); return; }
+            if (!audioCtx) { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); masterGain = audioCtx.createGain(); masterGain.gain.value = MASTER_PLAYBACK_GAIN; masterGain.connect(audioCtx.destination); }
             if (audioCtx.state === 'suspended') await audioCtx.resume();
-
             document.getElementById('setup-screen').style.display = 'none';
             document.getElementById('show-screen').style.display = 'block';
             log("🎬 Entered show screen");
-
             const canvas = document.getElementById('stage-canvas');
             canvas.width = window.innerWidth;
             canvas.height = window.innerHeight;
             await requestWakeLock();
             requestAnimationFrame(frame);
-
-            db.ref('show/currentCue').on('value', snap => {
-                const cue = snap.val();
-                if (!cue) return;
-                if (cue.action === 'KILL') {
-                    log("💀 KILL signal - reloading");
-                    location.reload();
-                } else if (cue.action === 'GO') {
-                    handleMovementStart(cue);
-                }
-            });
-
+            db.ref('show/currentCue').on('value', snap => { const cue = snap.val(); if (!cue) return; if (cue.action === 'KILL') { log("💀 KILL signal - reloading"); location.reload(); } else if (cue.action === 'GO') { handleMovementStart(cue); } });
             initTuningListener();
             listenForIndividualTuning();
             await loadPillarData();
-
-            await db.ref(`devices/${mySeat.id}`).update({
-                lastSeen: Date.now() + serverOffset,
-                status: 'ACTIVE',
-                x: mySeat.x,
-                y: mySeat.y,
-                neighborCount: myNeighbors.length
-            });
+            await db.ref(`devices/${mySeat.id}`).update({ lastSeen: Date.now() + serverOffset, status: 'ACTIVE', x: mySeat.x, y: mySeat.y, neighborCount: myNeighbors.length });
             startHeartbeat();
-
             log("✅ Device activated, waiting for tuning schedule...");
             document.getElementById('ready-btn').disabled = true;
-
-        } catch (error) {
-            log(`❌ Error: ${error.message}`);
-            document.getElementById('ready-btn').disabled = false;
-        }
+        } catch (error) { log(`❌ Error: ${error.message}`); document.getElementById('ready-btn').disabled = false; }
     };
-
     window.onload = async () => {
         log(`🚀 onLoad`);
         await resolveIdentity();
@@ -2073,27 +1354,11 @@
         masterGain.connect(audioCtx.destination);
         await preloadAssets();
         if (mySeat) initLogging();
-        if (mySeat && myNeighbors && assetsPreloaded) {
-            document.getElementById('system-msg').innerText = "Please grant microphone permission to continue.";
-            document.getElementById('ready-btn').disabled = true;
-            if (micPermissionGranted) {
-                document.getElementById('ready-btn').disabled = false;
-                document.getElementById('system-msg').innerText = "System Ready. Please Enter.";
-            }
-        }
+        if (mySeat && myNeighbors && assetsPreloaded) { document.getElementById('system-msg').innerText = "Please grant microphone permission to continue."; document.getElementById('ready-btn').disabled = true; if (micPermissionGranted) { document.getElementById('ready-btn').disabled = false; document.getElementById('system-msg').innerText = "System Ready. Please Enter."; } }
         updateCalibrationDisplay();
     };
-
-    window.onresize = () => {
-        const canvas = document.getElementById('stage-canvas');
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
-    };
-
-    window.addEventListener('beforeunload', () => {
-        stopHeartbeat();
-        flushLogs();
-    });
+    window.onresize = () => { const canvas = document.getElementById('stage-canvas'); canvas.width = window.innerWidth; canvas.height = window.innerHeight; };
+    window.addEventListener('beforeunload', () => { stopHeartbeat(); flushLogs(); });
     </script>
 </body>
 </html>
