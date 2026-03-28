@@ -1704,6 +1704,12 @@
     }
 
     function evaluateInRealTime() {
+        // Skip evaluation if already calibrated
+        if (isHappy) {
+            // Don't log spam, just return silently
+            return;
+        }
+
         if (rawTimeShifts.length < MIN_SAMPLES_FOR_CORRECTION) return;
 
         const medianShift = calculateMedian(rawTimeShifts);
@@ -1843,39 +1849,56 @@
             }
         }
 
-        // Logging only - Mic energy check
+        // Logging only - Mic energy check (every 5 seconds)
         if (performance.now() - lastMicCheck > 5000 && tuningStartTime) {
-            const maxBin = 0;
-            let maxEnergy = 0;
+            let maxOverallEnergy = 0;
             for (let i = 0; i < frequencyData.length; i++) {
                 const energy = frequencyData[i] / 255;
-                if (energy > maxEnergy) {
-                    maxEnergy = energy;
+                if (energy > maxOverallEnergy) {
+                    maxOverallEnergy = energy;
                 }
             }
-            log(`🎧 Mic energy check: max=${maxEnergy.toFixed(3)}, piccoloBand=${piccoloEnergy.toFixed(3)}`);
+            log(`🎧 Mic energy check: max=${maxOverallEnergy.toFixed(3)}, piccoloBand=${piccoloEnergy.toFixed(3)}`);
             lastMicCheck = performance.now();
         }
 
-        // Phase 1: Get mic delay (skip if listen-only or already have mic delay)
-        if (!isListenOnlyMode && myMicDelayMs === null && tuningStartTime) {
+        // ============================================================
+        // PHASE 1: Get mic delay (only if not calibrated and not listen-only)
+        // ============================================================
+        if (!isListenOnlyMode && !isHappy && myMicDelayMs === null && tuningStartTime) {
             detectPillarOnsets(now, frequencyData, sampleRate, FFT_SIZE);
         }
 
-        // Phase 2: Sync and correction (skip for listen-only)
-        if (!isListenOnlyMode && myMicDelayMs !== null && tuningStartTime) {
+        // ============================================================
+        // PHASE 2: Sync and correction (only if not calibrated and not listen-only)
+        // ============================================================
+        // CRITICAL FIX: Skip all calibration if device is already HAPPY
+        if (!isListenOnlyMode && !isHappy && myMicDelayMs !== null && tuningStartTime) {
+            // Detect pillar references for sync (Phase 2)
             detectPillarForSync(now, frequencyData, sampleRate, FFT_SIZE);
+
+            // Process neighbor detection windows
             processDetectionWindows(now, piccoloEnergy, dominantFreq, ratioToBaseline);
 
-            // Periodic evaluation
+            // Periodic evaluation for calibration correction
             if (now - lastEvaluationTime > EVALUATION_INTERVAL_MS) {
                 lastEvaluationTime = now;
                 evaluateInRealTime();
             }
+        } else if (isHappy && tuningStartTime) {
+            // Device is already calibrated - only listen for neighbors to help others calibrate
+            // But don't process our own calibration or corrections
+            if (!isListenOnlyMode) {
+                // Still listen for neighbors to help other devices calibrate
+                processDetectionWindows(now, piccoloEnergy, dominantFreq, ratioToBaseline);
+            }
         }
 
-        // Listen-only mode: only process neighbor detection
+        // ============================================================
+        // LISTEN-ONLY MODE: Already calibrated devices helping others
+        // ============================================================
         if (isListenOnlyMode && tuningStartTime) {
+            // Listen for neighbors to help them calibrate, but don't do our own calibration
             processDetectionWindows(now, piccoloEnergy, dominantFreq, ratioToBaseline);
         }
 
