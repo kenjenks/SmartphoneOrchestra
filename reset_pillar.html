@@ -115,38 +115,10 @@
         button.primary:active {
             transform: scale(0.97);
         }
-        button.test-tone {
-            background: #3a2a2a;
-            border-color: #ffaa66;
-            color: #ffaa66;
-        }
-        button.test-tone.active {
-            background: #aa6644;
-            border-color: #ffaa66;
-            color: white;
-            box-shadow: 0 0 6px #ffaa66;
-        }
-        button.cal-tone {
-            background: #2a3a2a;
-            border-color: #88cc88;
-            color: #88cc88;
-        }
         button:disabled {
             opacity: 0.4;
             transform: none;
             cursor: not-allowed;
-        }
-        .button-group {
-            display: flex;
-            gap: 6px;
-            margin-top: 8px;
-            flex-wrap: wrap;
-        }
-        .button-group button {
-            flex: 1;
-            font-size: 0.7rem;
-            padding: 5px 6px;
-            margin-top: 0;
         }
         .log {
             background: #050505;
@@ -235,13 +207,13 @@
 
     <div class="section-title">📊 Calibration Results</div>
     <div id="results-panel" style="background: #0a0a0a; border-radius: 12px; padding: 10px; margin: 10px 0;">
-        <div class="small-text">Waiting for tuning movement...</div>
+        <div class="small-text">Waiting for calibration...</div>
     </div>
 
-    <button id="calibrate-btn" class="primary" disabled>🎯 Listen to Tuning Movement</button>
+    <button id="calibrate-btn" class="primary">🎤 Grant Mic Permission & Start</button>
     <div class="small-text" style="margin-top: 8px; text-align: center;">
-        All four pillars must be active. Click the button to start listening for the conductor's tuning movement.
-        Each pillar will record its own playback and microphone detections.
+        All four pillars must be online. Click the button to grant microphone permission and start listening.
+        After Phase 1 completes (25 seconds), delays will be calculated automatically.
     </div>
 
     <div class="log" id="log-panel">
@@ -271,10 +243,6 @@
     let logRef = null;
     const LOG_FLUSH_INTERVAL_MS = 2000;
     const MAX_LOG_QUEUE_SIZE = 50;
-
-    // Tuning listener stuff for listenToTuningMovement
-    let currentTuningListener = null;
-    let lastProcessedStartTime = 0;
 
     function initLogging() {
         if (!myId) return;
@@ -320,10 +288,9 @@
         const serverTimestamp = Date.now() + (serverOffset || 0);
         const timeStr = new Date(serverTimestamp).toISOString().substr(11, 12);
 
-        // Also log to console for debugging
         console.log(`[${timeStr}] [${myId || 'unknown'}] ${message}`);
 
-        // Also add to local UI log
+        // Add to local UI log
         const div = document.createElement('div');
         div.className = 'log-entry';
         const time = new Date().toLocaleTimeString();
@@ -355,20 +322,27 @@
         }
     }
 
+    function addLog(msg, type = 'info') {
+        pillarLog(msg, type);
+    }
+
     // --------------------------------------------------------------
     //  GLOBALS
     // --------------------------------------------------------------
     let myId = null;
     let allPillars = ['PILLAR_FL', 'PILLAR_FR', 'PILLAR_BR', 'PILLAR_BL'];
-    let pillarData = {};           // keyed by pillar ID, contains all config
-    let pillarOrder = [];          // from config
+    let pillarData = {};
+    let pillarOrder = [];
     let audioCtx = null;
     let bufferCache = {};
     let serverOffset = 0;
     let isListening = false;
     let tuningStartTime = null;
+    let hasStartedListening = false;
+    let currentTuningListener = null;
+    let lastProcessedStartTime = 0;
 
-    // Microphone for detecting other pillars
+    // Microphone
     let micStream = null;
     let analyser = null;
     let isMicActive = false;
@@ -376,15 +350,14 @@
     let sampleRate = 48000;
 
     // Measurement storage
-    let pillarMeasurements = {};    // { targetPillar: [{ rawDelay, listenerId, timestamp }] }
+    let pillarMeasurements = {};
     let myPlaybackStartTime = null;
-    let mySpeakerDelay = 45;        // from config
-    let myMicDelay = 18;            // from config
+    let mySpeakerDelay = 45;
+    let myMicDelay = 18;
 
-    // FFT parameters for onset detection
+    // FFT parameters
     const FFT_SIZE = 2048;
     const MIN_DETECTION_ENERGY = 0.03;
-    const DETECTION_WINDOW_MS = 500;
 
     // UI elements
     const calibrateBtn = document.getElementById('calibrate-btn');
@@ -398,10 +371,6 @@
     // --------------------------------------------------------------
     //  UTILITIES
     // --------------------------------------------------------------
-    function addLog(msg, type = 'info') {
-        pillarLog(msg, type);
-    }
-
     function calculateMedian(values) {
         if (values.length === 0) return 0;
         const sorted = [...values].sort((a, b) => a - b);
@@ -410,13 +379,6 @@
             return (sorted[mid - 1] + sorted[mid]) / 2;
         }
         return sorted[mid];
-    }
-
-    function calculateStdDev(values) {
-        if (values.length < 2) return 999;
-        const mean = values.reduce((a, b) => a + b, 0) / values.length;
-        const variance = values.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / values.length;
-        return Math.sqrt(variance);
     }
 
     function getBinForFrequency(frequency, sampleRate, fftSize) {
@@ -483,7 +445,6 @@
         }
         addLog(`✅ Loaded ${pillarOrder.length} pillars from config`, 'success');
 
-        // Store my own delays
         if (pillarData[myId]) {
             mySpeakerDelay = pillarData[myId].speakerDelayMs;
             myMicDelay = pillarData[myId].micDelayMs;
@@ -539,9 +500,8 @@
     //  DETECT OTHER PILLARS' PLAYBACK
     // --------------------------------------------------------------
     async function detectPillarPlayback(targetPillarId, expectedTimeServer, frequency) {
-        // Skip if listening to ourselves
+        // Skip self-detection
         if (targetPillarId === myId) {
-            addLog(`🔇 Skipping self-detection for ${targetPillarId}`, 'info');
             return null;
         }
 
@@ -575,193 +535,7 @@
     }
 
     // --------------------------------------------------------------
-    //  LISTEN TO TUNING MOVEMENT
-    // --------------------------------------------------------------
-
-    async function listenToTuningMovement() {
-        // Prevent multiple simultaneous listening sessions
-        if (isListening) {
-            addLog('Already listening for tuning movement', 'warn');
-            return;
-        }
-
-        // If we already have a listener attached, remove it first
-        const tuningRef = db.ref('tuning/current');
-        if (currentTuningListener) {
-            addLog('⚠️ Removing existing listener before starting new session', 'warn');
-            tuningRef.off('value', currentTuningListener);
-            currentTuningListener = null;
-        }
-
-        if (!allPillarsPresent()) {
-            addLog('Not all pillars are online – cannot start', 'warn');
-            return;
-        }
-
-        const micOk = await setupMicrophone();
-        if (!micOk) {
-            addLog('Microphone required for detection', 'warn');
-            return;
-        }
-
-        isListening = true;
-        calibrateBtn.disabled = true;
-        calibrateBtn.innerText = '🎧 Listening for tuning movement...';
-        stateTextSpan.innerText = 'Listening for tuning...';
-        stateLed.className = 'status-led led-yellow';
-
-        addLog('🔊 Waiting for conductor to start tuning movement...', 'info');
-
-        // Create the listener function
-        const tuningListener = async (snap) => {
-            const schedule = snap.val();
-
-            if (!schedule || schedule.status !== 'ACTIVE') {
-                return;
-            }
-
-            if (!schedule.startTime) {
-                return;
-            }
-
-            // Skip if we've already processed this schedule
-            if (schedule.startTime === lastProcessedStartTime) {
-                addLog(`⏭️ Skipping already processed schedule (startTime: ${new Date(schedule.startTime).toLocaleTimeString()})`, 'info');
-                return;
-            }
-
-            // Skip if we already have enough measurements
-            if (pillarMeasurements && Object.keys(pillarMeasurements).length >= pillarOrder.length) {
-                addLog(`⏭️ Calibration already complete, ignoring duplicate schedule`, 'info');
-                return;
-            }
-
-            lastProcessedStartTime = schedule.startTime;
-
-            addLog(`🎵 Tuning movement detected! Start time: ${new Date(schedule.startTime).toLocaleTimeString()}`, 'success');
-            tuningStartTime = schedule.startTime;
-
-            // Clear previous measurements
-            pillarMeasurements = {};
-
-            const activePillars = schedule.activePillars || pillarOrder;
-            addLog(`📡 Will listen for ${activePillars.length} pillars during Phase 1`, 'info');
-
-            // Schedule detection windows based on calibration windows
-            if (schedule.metadata && schedule.metadata.pillar_cal_windows) {
-                const windows = schedule.metadata.pillar_cal_windows;
-
-                addLog(`📋 Pillar calibration windows:`);
-                for (const w of windows) {
-                    addLog(`   ${w.pillar_id}: ${w.start_ms}ms → ${w.end_ms}ms (${w.note_count} notes)`);
-                }
-
-                for (const window of windows) {
-                    const pillarId = window.pillar_id;
-                    const startMs = window.start_ms;
-                    const endMs = window.end_ms;
-
-                    const pillarNotes = (schedule.pillar_notes || []).filter(n => n.pillar_id === pillarId);
-                    const midiNote = pillarNotes.length > 0 ? pillarNotes[0].midi : 69;
-                    const frequency = getFrequencyFromMidi(midiNote);
-
-                    const expectedStartServer = tuningStartTime + startMs;
-                    const nowServer = Date.now() + serverOffset;
-                    const delayMs = expectedStartServer - nowServer;
-
-                    addLog(`🎯 Will listen for ${pillarId} at ~${frequency.toFixed(0)}Hz between ${(startMs/1000).toFixed(1)}s-${(endMs/1000).toFixed(1)}s`);
-
-                    if (delayMs > 0 && delayMs < 25000) {
-                        setTimeout(async () => {
-                            addLog(`🎧 Listening for ${pillarId}...`);
-
-                            const detection = await detectPillarPlayback(pillarId, expectedStartServer, frequency);
-
-                            if (detection) {
-                                if (!pillarMeasurements[pillarId]) {
-                                    pillarMeasurements[pillarId] = [];
-                                }
-                                pillarMeasurements[pillarId].push({
-                                    rawDelay: detection.rawDelay,
-                                    listenerId: myId,
-                                    timestamp: detection.detectionTime,
-                                    energy: detection.energy,
-                                    expectedTime: expectedStartServer
-                                });
-
-                                const measurementRef = db.ref(`pillar_calibration/measurements/${pillarId}/${myId}`);
-                                await measurementRef.set({
-                                    rawDelayMs: detection.rawDelay,
-                                    listenerId: myId,
-                                    timestamp: detection.detectionTime,
-                                    expectedTime: expectedStartServer,
-                                    energy: detection.energy
-                                });
-
-                                updateResultsDisplay();
-                            }
-                        }, delayMs);
-                    } else {
-                        addLog(`⚠️ Detection window for ${pillarId} is too ${delayMs < 0 ? 'late' : 'far'} (${delayMs}ms), skipping`, 'warn');
-                    }
-                }
-            }
-
-            // Schedule own playback
-            const myWindow = (schedule.metadata?.pillar_cal_windows || []).find(w => w.pillar_id === myId);
-
-            if (myWindow && pillarData[myId]?.audioUrl) {
-                const myStartMs = myWindow.start_ms;
-                const myStartServer = tuningStartTime + myStartMs;
-                const nowServer = Date.now() + serverOffset;
-                const delayMs = myStartServer - nowServer - mySpeakerDelay;
-
-                if (delayMs > 0 && delayMs < 25000) {
-                    setTimeout(() => {
-                        playMyPillarAudio(pillarData[myId].audioUrl, myStartServer);
-                    }, delayMs);
-                    addLog(`🎵 ${myId} will play at ${new Date(myStartServer).toLocaleTimeString()} (delay: ${Math.round(delayMs)}ms)`);
-                } else if (delayMs <= 0) {
-                    addLog(`⚠️ ${myId} playback window is ${Math.abs(delayMs)}ms late, playing immediately`, 'warn');
-                    playMyPillarAudio(pillarData[myId].audioUrl, myStartServer);
-                } else {
-                    addLog(`❌ ${myId} playback delay too large (${Math.round(delayMs)}ms > 25000ms), skipping`, 'warn');
-                }
-            }
-
-            // Set timeout to stop listening after Phase 1
-            const timeoutId = setTimeout(() => {
-                addLog(`⏰ Timeout executing at ${new Date().toLocaleTimeString()}`, 'info');
-                isListening = false;
-                calibrateBtn.disabled = false;
-                calibrateBtn.innerText = '🎯 Listen to Tuning Movement';
-                stateTextSpan.innerText = 'Ready';
-                stateLed.className = 'status-led led-green';
-                addLog('⏹️ Phase 1 listening complete', 'info');
-
-                computePillarDelays();
-
-                // CRITICAL: Remove the listener so it doesn't fire again
-                if (currentTuningListener) {
-                    tuningRef.off('value', currentTuningListener);
-                    currentTuningListener = null;
-                    addLog('🔇 Tuning listener removed', 'info');
-                } else {
-                    addLog('⚠️ No currentTuningListener to remove', 'warn');
-                }
-            }, 25000);
-
-            addLog(`⏰ Timeout scheduled for ${new Date(Date.now() + 25000).toLocaleTimeString()}`, 'info');
-        };
-
-        // Store the listener reference and attach it
-        currentTuningListener = tuningListener;
-        tuningRef.on('value', tuningListener);
-        addLog(`🔊 Tuning listener attached at ${new Date().toLocaleTimeString()}`, 'info');
-    }
-
-    // --------------------------------------------------------------
-    //  PLAY PILLAR AUDIO (for own playback)
+    //  PLAY PILLAR AUDIO
     // --------------------------------------------------------------
     async function preloadAudio(url) {
         if (bufferCache[url]) return bufferCache[url];
@@ -794,7 +568,6 @@
 
         addLog(`🔊 ${myId} played at ${new Date(actualStartServer).toLocaleTimeString()} (deviation: ${rawDelay > 0 ? '+' : ''}${rawDelay.toFixed(1)}ms)`);
 
-        // Log this playback for others to detect
         await db.ref(`pillar_calibration/playback/${myId}/${Date.now()}`).set({
             expectedTime: expectedStartServer,
             actualTime: actualStartServer,
@@ -836,12 +609,10 @@
                 addLog(`✅ All ${pillarOrder.length} pillars are online`, 'success');
                 stateTextSpan.innerText = 'All pillars ready';
                 stateLed.className = 'status-led led-green';
-                calibrateBtn.disabled = false;
             } else {
                 addLog(`⏳ Waiting for pillars: ${missing.join(', ')}`, 'warn');
                 stateTextSpan.innerText = `Waiting: ${missing.join(', ')}`;
                 stateLed.className = 'status-led led-red';
-                calibrateBtn.disabled = true;
             }
         }
         return allOnline;
@@ -852,7 +623,7 @@
     }
 
     // --------------------------------------------------------------
-    //  HEARTBEAT (Send to Firebase so other pillars see this pillar)
+    //  HEARTBEAT
     // --------------------------------------------------------------
     let heartbeatInterval = null;
 
@@ -896,9 +667,8 @@
         for (const [pillarId, measurements] of Object.entries(pillarMeasurements)) {
             const rawDelays = measurements.map(m => m.rawDelay);
             const median = calculateMedian(rawDelays);
-            const stdDev = calculateStdDev(rawDelays);
             html += `<tr>
-                <td><span style="color:#88ffcc;">${pillarId}</span></td>
+                <td style="color:#88ffcc;">${pillarId}</td>
                 <td>${rawDelays.map(d => d.toFixed(1)).join(', ')}</td>
                 <td><strong>${median.toFixed(1)} ms</strong></td>
                 <td>${measurements.length}</td>
@@ -913,17 +683,14 @@
     //  COMPUTE PILLAR DELAYS
     // --------------------------------------------------------------
     async function computePillarDelays() {
-        // Also fetch measurements from Firebase that other pillars recorded
         const snap = await db.ref('pillar_calibration/measurements').once('value');
         const allMeasurements = snap.val() || {};
 
-        // Combine local and remote measurements
         for (const [targetId, listeners] of Object.entries(allMeasurements)) {
             for (const [listenerId, data] of Object.entries(listeners)) {
                 if (!pillarMeasurements[targetId]) {
                     pillarMeasurements[targetId] = [];
                 }
-                // Avoid duplicates (check if already exists)
                 const exists = pillarMeasurements[targetId].some(m =>
                     m.timestamp === data.timestamp && m.listenerId === data.listenerId
                 );
@@ -940,13 +707,11 @@
 
         updateResultsDisplay();
 
-        // Now compute speaker and mic delays using the full measurement set
         if (Object.keys(pillarMeasurements).length < pillarOrder.length) {
             addLog(`⚠️ Not enough measurements yet (got ${Object.keys(pillarMeasurements).length}/${pillarOrder.length})`, 'warn');
             return;
         }
 
-        // Use the same iterative solver as before
         let spk = {}, mic = {};
         for (let id of pillarOrder) {
             spk[id] = pillarData[id].speakerDelayMs;
@@ -955,7 +720,6 @@
 
         const iterations = 6;
         for (let iter = 0; iter < iterations; iter++) {
-            // Update speaker estimates
             for (let player of pillarOrder) {
                 let values = [];
                 const measurements = pillarMeasurements[player] || [];
@@ -975,7 +739,6 @@
                 if (values.length) spk[player] = calculateMedian(values);
             }
 
-            // Update mic estimates
             for (let listener of pillarOrder) {
                 let values = [];
                 for (let player of pillarOrder) {
@@ -997,23 +760,19 @@
             }
         }
 
-        // Display final results
         let resultHtml = '<div class="section-title">✅ Calibration Results</div>';
         resultHtml += '<table class="measurement-table">';
-        resultHtml += ' <tr><th>Pillar</th><th>Speaker Delay (ms)</th><th>Mic Delay (ms)</th><th>Status</th></tr>';
+        resultHtml += '<tr><th>Pillar</th><th>Speaker Delay (ms)</th><th>Mic Delay (ms)</th><th>Status</th></tr>';
 
         for (let id of pillarOrder) {
             let spkVal = Math.round(Math.max(5, Math.min(300, spk[id])));
             let micVal = Math.round(Math.max(2, Math.min(150, mic[id])));
-            resultHtml += `
-                <tr>
-                    <td><span style="color:#88ffcc;">${id}</span></td>
-                    <td><strong>${spkVal} ms</strong></td>
-                    <td><strong>${micVal} ms</strong></td>
-                    <td>📊</td>
-                </tr>`;
-
-            // Update the card display
+            resultHtml += `<tr>
+                <td style="color:#88ffcc;">${id}</td>
+                <td><strong>${spkVal} ms</strong></td>
+                <td><strong>${micVal} ms</strong></td>
+                <td>📊</td>
+            </tr>`;
             updateCardValue(id, 'spk', `${spkVal} ms`);
             updateCardValue(id, 'mic', `${micVal} ms`);
             pillarData[id].speakerDelayMs = spkVal;
@@ -1060,6 +819,170 @@
     }
 
     // --------------------------------------------------------------
+    //  LISTEN TO TUNING MOVEMENT
+    // --------------------------------------------------------------
+    async function listenToTuningMovement() {
+        if (isListening) {
+            addLog('Already listening for tuning movement', 'warn');
+            return;
+        }
+
+        const tuningRef = db.ref('tuning/current');
+        if (currentTuningListener) {
+            addLog('⚠️ Removing existing listener before starting new session', 'warn');
+            tuningRef.off('value', currentTuningListener);
+            currentTuningListener = null;
+        }
+
+        if (!allPillarsPresent()) {
+            addLog('Not all pillars are online – cannot start', 'warn');
+            calibrateBtn.disabled = false;
+            calibrateBtn.innerText = '🎤 Grant Mic Permission & Start';
+            hasStartedListening = false;
+            return;
+        }
+
+        if (!isMicActive) {
+            addLog('Microphone not ready. Please grant permission first.', 'warn');
+            calibrateBtn.disabled = false;
+            calibrateBtn.innerText = '🎤 Grant Mic Permission & Start';
+            hasStartedListening = false;
+            return;
+        }
+
+        isListening = true;
+        calibrateBtn.disabled = true;
+        calibrateBtn.innerText = '🎧 Listening for tuning movement...';
+        stateTextSpan.innerText = 'Listening for tuning...';
+        stateLed.className = 'status-led led-yellow';
+
+        addLog('🔊 Waiting for conductor to start tuning movement...', 'info');
+
+        const tuningListener = async (snap) => {
+            const schedule = snap.val();
+
+            if (!schedule || schedule.status !== 'ACTIVE') {
+                return;
+            }
+
+            if (!schedule.startTime) {
+                return;
+            }
+
+            if (schedule.startTime === lastProcessedStartTime) {
+                addLog(`⏭️ Skipping already processed schedule (startTime: ${new Date(schedule.startTime).toLocaleTimeString()})`, 'info');
+                return;
+            }
+
+            if (pillarMeasurements && Object.keys(pillarMeasurements).length >= pillarOrder.length) {
+                addLog(`⏭️ Calibration already complete, ignoring duplicate schedule`, 'info');
+                return;
+            }
+
+            lastProcessedStartTime = schedule.startTime;
+
+            addLog(`🎵 Tuning movement detected! Start time: ${new Date(schedule.startTime).toLocaleTimeString()}`, 'success');
+            tuningStartTime = schedule.startTime;
+            pillarMeasurements = {};
+
+            if (schedule.metadata && schedule.metadata.pillar_cal_windows) {
+                const windows = schedule.metadata.pillar_cal_windows;
+
+                addLog(`📋 Pillar calibration windows:`);
+                for (const w of windows) {
+                    addLog(`   ${w.pillar_id}: ${w.start_ms}ms → ${w.end_ms}ms (${w.note_count} notes)`);
+                }
+
+                for (const window of windows) {
+                    const pillarId = window.pillar_id;
+                    const startMs = window.start_ms;
+                    const pillarNotes = (schedule.pillar_notes || []).filter(n => n.pillar_id === pillarId);
+                    const midiNote = pillarNotes.length > 0 ? pillarNotes[0].midi : 69;
+                    const frequency = getFrequencyFromMidi(midiNote);
+                    const expectedStartServer = tuningStartTime + startMs;
+                    const nowServer = Date.now() + serverOffset;
+                    const delayMs = expectedStartServer - nowServer;
+
+                    addLog(`🎯 Will listen for ${pillarId} at ~${frequency.toFixed(0)}Hz between ${(startMs/1000).toFixed(1)}s-${(startMs/1000 + 5).toFixed(1)}s`);
+
+                    if (delayMs > 0 && delayMs < 25000) {
+                        setTimeout(async () => {
+                            addLog(`🎧 Listening for ${pillarId}...`);
+                            const detection = await detectPillarPlayback(pillarId, expectedStartServer, frequency);
+                            if (detection) {
+                                if (!pillarMeasurements[pillarId]) {
+                                    pillarMeasurements[pillarId] = [];
+                                }
+                                pillarMeasurements[pillarId].push({
+                                    rawDelay: detection.rawDelay,
+                                    listenerId: myId,
+                                    timestamp: detection.detectionTime,
+                                    energy: detection.energy,
+                                    expectedTime: expectedStartServer
+                                });
+                                const measurementRef = db.ref(`pillar_calibration/measurements/${pillarId}/${myId}`);
+                                await measurementRef.set({
+                                    rawDelayMs: detection.rawDelay,
+                                    listenerId: myId,
+                                    timestamp: detection.detectionTime,
+                                    expectedTime: expectedStartServer,
+                                    energy: detection.energy
+                                });
+                                updateResultsDisplay();
+                            }
+                        }, delayMs);
+                    } else {
+                        addLog(`⚠️ Detection window for ${pillarId} is too ${delayMs < 0 ? 'late' : 'far'} (${delayMs}ms), skipping`, 'warn');
+                    }
+                }
+            }
+
+            const myWindow = (schedule.metadata?.pillar_cal_windows || []).find(w => w.pillar_id === myId);
+
+            if (myWindow && pillarData[myId]?.audioUrl) {
+                const myStartMs = myWindow.start_ms;
+                const myStartServer = tuningStartTime + myStartMs;
+                const nowServer = Date.now() + serverOffset;
+                const delayMs = myStartServer - nowServer - mySpeakerDelay;
+
+                if (delayMs > 0 && delayMs < 25000) {
+                    setTimeout(() => {
+                        playMyPillarAudio(pillarData[myId].audioUrl, myStartServer);
+                    }, delayMs);
+                    addLog(`🎵 ${myId} will play at ${new Date(myStartServer).toLocaleTimeString()} (delay: ${Math.round(delayMs)}ms)`);
+                } else if (delayMs <= 0) {
+                    addLog(`⚠️ ${myId} playback window is ${Math.abs(delayMs)}ms late, playing immediately`, 'warn');
+                    playMyPillarAudio(pillarData[myId].audioUrl, myStartServer);
+                } else {
+                    addLog(`❌ ${myId} playback delay too large (${Math.round(delayMs)}ms > 25000ms), skipping`, 'warn');
+                }
+            }
+
+            setTimeout(() => {
+                isListening = false;
+                hasStartedListening = false;
+                calibrateBtn.disabled = false;
+                calibrateBtn.innerText = '🎤 Calibrate Again';
+                stateTextSpan.innerText = 'Ready';
+                stateLed.className = 'status-led led-green';
+                addLog('⏹️ Phase 1 listening complete', 'info');
+
+                computePillarDelays();
+
+                if (currentTuningListener) {
+                    tuningRef.off('value', currentTuningListener);
+                    currentTuningListener = null;
+                    addLog('🔇 Tuning listener removed', 'info');
+                }
+            }, 25000);
+        };
+
+        currentTuningListener = tuningListener;
+        tuningRef.on('value', tuningListener);
+        addLog(`🔊 Tuning listener attached at ${new Date().toLocaleTimeString()}`, 'info');
+    }
+
+    // --------------------------------------------------------------
     //  INIT
     // --------------------------------------------------------------
     async function init() {
@@ -1071,10 +994,8 @@
         }
         myId = seatParam;
         addLog(`🚀 ${myId} Loaded`);
-
         document.getElementById('pillar-id-badge').innerText = myId;
 
-        // Clock sync
         const offsetRef = db.ref(".info/serverTimeOffset");
         offsetRef.on("value", snap => {
             serverOffset = snap.val() || 0;
@@ -1083,25 +1004,34 @@
         await loadPillarConfig();
         startHeartbeat();
         renderCards();
-
-        // Initialize logging after we have myId
         initLogging();
 
-        // Start presence checking
         await checkAllPillarsOnline();
         presenceCheckInterval = setInterval(checkAllPillarsOnline, 5000);
 
         calibrateBtn.onclick = async () => {
-            if (!allPillarsPresentFlag) {
-                addLog('Waiting for all pillars to be online', 'warn');
+            if (hasStartedListening) {
+                addLog('Already listening for tuning movement', 'warn');
                 return;
             }
+
+            addLog('🎤 Requesting microphone permission...', 'info');
+            const micOk = await setupMicrophone();
+            if (!micOk) {
+                addLog('❌ Microphone permission required for calibration', 'warn');
+                return;
+            }
+
+            addLog('✅ Microphone ready. Starting to listen for tuning movement...', 'success');
+            hasStartedListening = true;
+            calibrateBtn.disabled = true;
+            calibrateBtn.innerText = '🎧 Listening...';
+
             await listenToTuningMovement();
         };
 
-        addLog(`🚀 ${myId} ready. Click "Listen to Tuning Movement" to start.`, 'success');
+        addLog(`🚀 ${myId} ready. Click button to grant mic permission and start listening.`, 'success');
         addLog(`   Initial speaker delay: ${mySpeakerDelay}ms, mic delay: ${myMicDelay}ms`, 'info');
-        addLog(`   Will listen during Phase 1 of the tuning movement`, 'info');
     }
 
     window.onload = init;
