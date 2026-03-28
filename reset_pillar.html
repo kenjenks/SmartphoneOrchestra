@@ -651,7 +651,8 @@
                     const nowServer = Date.now() + serverOffset;
                     const delayMs = expectedStartServer - nowServer;
 
-                    if (delayMs > 0 && delayMs < 10000) {
+                    // Increased threshold to 25000ms (Phase 1 is ~20.5 seconds)
+                    if (delayMs > 0 && delayMs < 25000) {
                         setTimeout(async () => {
                             addLog(`🎧 Listening for ${pillarId}...`);
 
@@ -715,7 +716,8 @@
                 addLog(`   mySpeakerDelay: ${mySpeakerDelay}ms`);
                 addLog(`   delayMs: ${delayMs.toFixed(1)}ms`);
 
-                if (delayMs > 0 && delayMs < 10000) {
+                // Increased threshold to 25000ms (Phase 1 is ~20.5 seconds)
+                if (delayMs > 0 && delayMs < 25000) {
                     setTimeout(() => {
                         playMyPillarAudio(pillarData[myId].audioUrl, myStartServer);
                     }, delayMs);
@@ -724,7 +726,7 @@
                     addLog(`⚠️ ${myId} playback window is ${Math.abs(delayMs)}ms late, playing immediately`, 'warn');
                     playMyPillarAudio(pillarData[myId].audioUrl, myStartServer);
                 } else {
-                    addLog(`❌ ${myId} playback delay too large (${Math.round(delayMs)}ms > 10000ms), skipping`, 'warn');
+                    addLog(`❌ ${myId} playback delay too large (${Math.round(delayMs)}ms > 25000ms), skipping`, 'warn');
                 }
             } else {
                 if (!myWindow) {
@@ -735,7 +737,7 @@
                 }
             }
 
-            // Set a timeout to stop listening after Phase 1
+            // Set a timeout to stop listening after Phase 1 (20.5 seconds + buffer)
             setTimeout(() => {
                 isListening = false;
                 calibrateBtn.disabled = false;
