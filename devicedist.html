@@ -705,39 +705,55 @@
         if (!tuningStartTime) return;
         if (isHappy) return;
         if (phase1Complete) return;
+
         const songPosition = now - tuningStartTime;
         if (songPosition > phase1EndMs) return;
-        const activeNotes = allPillarNotes.filter(note => Math.abs(songPosition - note.ms_offset) < PHASE1_SCHEDULE_WINDOW_MS);
+
+        const activeNotes = allPillarNotes.filter(note =>
+            Math.abs(songPosition - note.ms_offset) < PHASE1_SCHEDULE_WINDOW_MS
+        );
+
         for (const note of activeNotes) {
             const noteKey = `pillar_mic_${note.pillar_id}_${note.ms_offset}`;
             if (processedMeasurements.has(noteKey)) continue;
+
             const energy = calculateEnergyForNote(note.midi, sampleRate, FFT_SIZE);
+
             let threshold = MIN_DETECTION_ENERGY;
             if (pillarRefBaseline > 0) threshold = pillarRefBaseline * PILLAR_ONSET_THRESHOLD;
+
             if (energy > threshold) {
                 const expectedTimeAbs = tuningStartTime + note.ms_offset;
                 const rawDelay = now - expectedTimeAbs;
-                const pillar = pillarData[note.pillar_id];
-                if (!pillar) continue;
-                const dx = mySeat.x - pillar.x, dy = mySeat.y - pillar.y;
-                const distance = Math.sqrt(dx*dx + dy*dy);
-                const propagationMs = (distance / SPEED_OF_SOUND) * 1000;
-                const micDelay = rawDelay - pillar.speakerDelayMs - propagationMs;
-                if (micDelay >= MIC_DELAY_SANITY_MIN && micDelay <= MIC_DELAY_SANITY_MAX) {
-                    micDelaySamples.push(micDelay);
-                    processedMeasurements.add(noteKey);
-                    document.getElementById('debug-phase1-samples').innerText = micDelaySamples.length;
-                    if (micDelaySamples.length >= MIN_MIC_SAMPLES) {
-                        myMicDelayMs = calculateMedian(micDelaySamples);
-                        phase1Complete = true;
-                        log(`🎤 Mic delay: ${myMicDelayMs.toFixed(1)}ms from ${micDelaySamples.length} detections`, 'success');
-                        document.getElementById('debug-mic-delay').innerText = `${myMicDelayMs.toFixed(1)}ms`;
-                        updateCalibrationDisplay();
+
+                // Get pillar position from seat_config
+                const pillarPos = seatData[note.pillar_id];
+                if (pillarPos) {
+                    const dx = mySeat.x - pillarPos.x;
+                    const dy = mySeat.y - pillarPos.y;
+                    const distance = Math.sqrt(dx*dx + dy*dy);
+                    const propagationMs = (distance / SPEED_OF_SOUND) * 1000;
+
+                    // Get pillar's speaker delay
+                    const pillarDelay = pillarData[note.pillar_id]?.speakerDelayMs || 45;
+
+                    // Mic delay = rawDelay - propagation - pillarSpeakerDelay
+                    const micDelay = rawDelay - propagationMs - pillarDelay;
+
+                    if (micDelay >= MIC_DELAY_SANITY_MIN && micDelay <= MIC_DELAY_SANITY_MAX) {
+                        micDelaySamples.push(micDelay);
+                        processedMeasurements.add(noteKey);
+                        document.getElementById('debug-phase1-samples').innerText = micDelaySamples.length;
+
+                        if (micDelaySamples.length >= MIN_MIC_SAMPLES) {
+                            myMicDelayMs = calculateMedian(micDelaySamples);
+                            phase1Complete = true;
+                            log(`🎤 Mic delay: ${myMicDelayMs.toFixed(1)}ms from ${micDelaySamples.length} detections`);
+                            updateCalibrationDisplay();
+                        }
                     }
                 }
             }
-            if (pillarRefBaselineSamples.length < 50) pillarRefBaselineSamples.push(energy);
-            else { const sorted = [...pillarRefBaselineSamples].sort((a, b) => a - b); pillarRefBaseline = sorted[Math.floor(sorted.length / 2)]; pillarRefBaselineSamples.shift(); pillarRefBaselineSamples.push(energy); }
         }
     }
 
@@ -749,28 +765,51 @@
         if (!tuningStartTime) return;
         if (!phase1Complete) return;
         if (isHappy) return;
+
         const songPosition = now - tuningStartTime;
         if (songPosition < phase1EndMs) return;
-        const activeNotes = allPillarNotes.filter(note => Math.abs(songPosition - note.ms_offset) < PHASE1_SCHEDULE_WINDOW_MS);
+
+        const activeNotes = allPillarNotes.filter(note =>
+            Math.abs(songPosition - note.ms_offset) < PHASE1_SCHEDULE_WINDOW_MS
+        );
+
         for (const note of activeNotes) {
             const noteKey = `pillar_sync_${note.pillar_id}_${note.ms_offset}`;
             if (processedMeasurements.has(noteKey)) continue;
+
             const energy = calculateEnergyForNote(note.midi, sampleRate, FFT_SIZE);
+
             let threshold = MIN_DETECTION_ENERGY;
             if (pillarRefBaseline > 0) threshold = pillarRefBaseline * PILLAR_ONSET_THRESHOLD;
+
             if (energy > threshold) {
                 const expectedTimeAbs = tuningStartTime + note.ms_offset;
-                const timeShift = now - expectedTimeAbs;
-                if (Math.abs(timeShift) < 500) {
-                    rawTimeShifts.push(timeShift);
-                    if (rawTimeShifts.length > 50) rawTimeShifts.shift();
-                    if (rawTimeShifts.length <= 10 || rawTimeShifts.length % 20 === 0) log(`📡 Pillar sync: ${note.pillar_id} note ${note.index} → shift=${timeShift > 0 ? '+' : ''}${timeShift.toFixed(1)}ms`);
+                const rawShift = now - expectedTimeAbs;
+
+                if (Math.abs(rawShift) < 500) {
+                    // Get pillar position from seat_config (loaded earlier)
+                    const pillarPos = seatData[note.pillar_id];
+                    if (pillarPos) {
+                        const dx = mySeat.x - pillarPos.x;
+                        const dy = mySeat.y - pillarPos.y;
+                        const distance = Math.sqrt(dx*dx + dy*dy);
+                        const propagationMs = (distance / SPEED_OF_SOUND) * 1000;
+
+                        // Get pillar's speaker delay from pillar_config
+                        const pillarDelay = pillarData[note.pillar_id]?.speakerDelayMs || 45;
+
+                        // True speaker delay = rawShift - propagation - pillarSpeakerDelay
+                        const trueSpeakerDelay = rawShift - propagationMs - pillarDelay;
+
+                        rawTimeShifts.push(trueSpeakerDelay);
+                        if (rawTimeShifts.length > 50) rawTimeShifts.shift();
+
+                        log(`📡 Pillar sync: ${note.pillar_id} → raw=${rawShift.toFixed(1)}ms, prop=${propagationMs.toFixed(1)}ms, pillarDelay=${pillarDelay}ms, trueDelay=${trueSpeakerDelay.toFixed(1)}ms`);
+                    }
                 }
                 processedMeasurements.add(noteKey);
             }
         }
-        if (pillarRefBaselineSamples.length < 50) { const e = activeNotes.length ? calculateEnergyForNote(activeNotes[0]?.midi, sampleRate, FFT_SIZE) : 0; pillarRefBaselineSamples.push(e); }
-        else { const sorted = [...pillarRefBaselineSamples].sort((a, b) => a - b); pillarRefBaseline = sorted[Math.floor(sorted.length / 2)]; pillarRefBaselineSamples.shift(); }
     }
 
     // ============================================================================
