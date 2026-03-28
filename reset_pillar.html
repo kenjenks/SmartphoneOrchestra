@@ -212,7 +212,7 @@
 
     <button id="calibrate-btn" class="primary">🎤 Grant Mic Permission & Start</button>
     <div class="small-text" style="margin-top: 8px; text-align: center;">
-        All four pillars must be online. Click the button to grant microphone permission and start listening.
+        All four pillars must be online. Click the button to grant microphone permission, preload audio, and start listening.
         After Phase 1 completes (25 seconds), delays will be calculated automatically.
     </div>
 
@@ -235,14 +235,24 @@
     const db = firebase.database();
 
     // --------------------------------------------------------------
+    //  CONSTANTS
+    // --------------------------------------------------------------
+    const SILENT_WARMUP_MS = 100;
+    const WARMUP_ADVANCE_MS = 500;
+    const LOG_FLUSH_INTERVAL_MS = 2000;
+    const MAX_LOG_QUEUE_SIZE = 50;
+    const FFT_SIZE = 2048;
+    const MIN_DETECTION_ENERGY = 0.03;
+
+    // --------------------------------------------------------------
     //  LOGGING SYSTEM (Sends logs to Firebase device_logs)
     // --------------------------------------------------------------
     let logQueue = [];
     let logFlushTimer = null;
     let pendingFlush = false;
     let logRef = null;
-    const LOG_FLUSH_INTERVAL_MS = 2000;
-    const MAX_LOG_QUEUE_SIZE = 50;
+    let myId = null;
+    let serverOffset = 0;
 
     function initLogging() {
         if (!myId) return;
@@ -329,13 +339,11 @@
     // --------------------------------------------------------------
     //  GLOBALS
     // --------------------------------------------------------------
-    let myId = null;
     let allPillars = ['PILLAR_FL', 'PILLAR_FR', 'PILLAR_BR', 'PILLAR_BL'];
     let pillarData = {};
     let pillarOrder = [];
     let audioCtx = null;
     let bufferCache = {};
-    let serverOffset = 0;
     let isListening = false;
     let tuningStartTime = null;
     let hasStartedListening = false;
@@ -351,13 +359,8 @@
 
     // Measurement storage
     let pillarMeasurements = {};
-    let myPlaybackStartTime = null;
     let mySpeakerDelay = 45;
     let myMicDelay = 18;
-
-    // FFT parameters
-    const FFT_SIZE = 2048;
-    const MIN_DETECTION_ENERGY = 0.03;
 
     // UI elements
     const calibrateBtn = document.getElementById('calibrate-btn');
@@ -454,15 +457,85 @@
     }
 
     // --------------------------------------------------------------
+    //  AUDIO PRELOAD AND PLAYBACK
+    // --------------------------------------------------------------
+    async function ensureAudioContext() {
+        if (!audioCtx) {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        if (audioCtx.state === 'suspended') {
+            await audioCtx.resume();
+        }
+        return audioCtx;
+    }
+
+    async function preloadAudio(url) {
+        if (bufferCache[url]) return bufferCache[url];
+        try {
+            const res = await fetch(url);
+            const arrayBuf = await res.arrayBuffer();
+            const audioBuffer = await audioCtx.decodeAudioData(arrayBuf);
+            bufferCache[url] = audioBuffer;
+            return audioBuffer;
+        } catch (e) {
+            addLog(`❌ Failed to load audio: ${e.message}`, 'warn');
+            return null;
+        }
+    }
+
+    async function warmUpCalibrationMp3(url, pillarId) {
+        await ensureAudioContext();
+
+        const audioBuffer = await preloadAudio(url);
+        if (!audioBuffer) return;
+
+        const source = audioCtx.createBufferSource();
+        source.buffer = audioBuffer;
+        const gainNode = audioCtx.createGain();
+        gainNode.gain.setValueAtTime(0, audioCtx.currentTime);  // Silent
+        source.connect(gainNode);
+        gainNode.connect(audioCtx.destination);
+        source.start(0);
+        source.stop(audioCtx.currentTime + (SILENT_WARMUP_MS / 1000));
+        addLog(`🔇 Warm-up pulse for ${pillarId} (priming MP3 path)`);
+    }
+
+    async function playMyPillarAudio(url, expectedStartServer) {
+        await ensureAudioContext();
+
+        const audioBuffer = await preloadAudio(url);
+        if (!audioBuffer) return;
+
+        const nowServer = Date.now() + serverOffset;
+        const actualStartServer = nowServer;
+        const rawDelay = actualStartServer - expectedStartServer;
+
+        addLog(`🔊 ${myId} played at ${new Date(actualStartServer).toLocaleTimeString()} (deviation: ${rawDelay > 0 ? '+' : ''}${rawDelay.toFixed(1)}ms)`);
+
+        await db.ref(`pillar_calibration/playback/${myId}/${Date.now()}`).set({
+            expectedTime: expectedStartServer,
+            actualTime: actualStartServer,
+            deviation: rawDelay,
+            speakerDelay: mySpeakerDelay
+        });
+
+        const source = audioCtx.createBufferSource();
+        source.buffer = audioBuffer;
+        const gainNode = audioCtx.createGain();
+        gainNode.gain.setValueAtTime(0.8, audioCtx.currentTime);
+        source.connect(gainNode);
+        gainNode.connect(audioCtx.destination);
+        source.start(0);
+    }
+
+    // --------------------------------------------------------------
     //  MICROPHONE SETUP
     // --------------------------------------------------------------
     async function setupMicrophone() {
         if (isMicActive) return true;
 
         try {
-            if (!audioCtx) {
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            }
+            await ensureAudioContext();
 
             const stream = await navigator.mediaDevices.getUserMedia({
                 audio: {
@@ -532,58 +605,6 @@
 
         addLog(`⚠️ Could not detect ${targetPillarId} (timeout)`, 'warn');
         return null;
-    }
-
-    // --------------------------------------------------------------
-    //  PLAY PILLAR AUDIO
-    // --------------------------------------------------------------
-    async function preloadAudio(url) {
-        if (bufferCache[url]) return bufferCache[url];
-        try {
-            const res = await fetch(url);
-            const arrayBuf = await res.arrayBuffer();
-            const audioBuffer = await audioCtx.decodeAudioData(arrayBuf);
-            bufferCache[url] = audioBuffer;
-            return audioBuffer;
-        } catch (e) {
-            addLog(`❌ Failed to load audio: ${e.message}`, 'warn');
-            return null;
-        }
-    }
-
-    async function playMyPillarAudio(url, expectedStartServer) {
-        if (!audioCtx) {
-            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        }
-        if (audioCtx.state === 'suspended') {
-            await audioCtx.resume();
-        }
-
-        const audioBuffer = await preloadAudio(url);
-        if (!audioBuffer) return;
-
-        const nowServer = Date.now() + serverOffset;
-        const actualStartServer = nowServer;
-        const rawDelay = actualStartServer - expectedStartServer;
-
-        addLog(`🔊 ${myId} played at ${new Date(actualStartServer).toLocaleTimeString()} (deviation: ${rawDelay > 0 ? '+' : ''}${rawDelay.toFixed(1)}ms)`);
-
-        await db.ref(`pillar_calibration/playback/${myId}/${Date.now()}`).set({
-            expectedTime: expectedStartServer,
-            actualTime: actualStartServer,
-            deviation: rawDelay,
-            speakerDelay: mySpeakerDelay
-        });
-
-        const source = audioCtx.createBufferSource();
-        source.buffer = audioBuffer;
-        const gainNode = audioCtx.createGain();
-        gainNode.gain.setValueAtTime(0.8, audioCtx.currentTime);
-        source.connect(gainNode);
-        gainNode.connect(audioCtx.destination);
-        source.start(0);
-
-        myPlaybackStartTime = actualStartServer;
     }
 
     // --------------------------------------------------------------
@@ -662,17 +683,19 @@
         }
 
         let html = '<table class="measurement-table">';
-        html += '<tr><th>Target Pillar</th><th>Raw Delays (ms)</th><th>Median (ms)</th><th>Samples</th></tr>';
+        html += '  <tr><th>Target Pillar</th><th>Raw Delays (ms)</th><th>Median (ms)</th><th>Samples</th></tr>';
 
         for (const [pillarId, measurements] of Object.entries(pillarMeasurements)) {
             const rawDelays = measurements.map(m => m.rawDelay);
             const median = calculateMedian(rawDelays);
-            html += `<tr>
-                <td style="color:#88ffcc;">${pillarId}</td>
-                <td>${rawDelays.map(d => d.toFixed(1)).join(', ')}</td>
-                <td><strong>${median.toFixed(1)} ms</strong></td>
-                <td>${measurements.length}</td>
-            </tr>`;
+            html += `
+                <tr>
+                    <td style="color:#88ffcc;">${pillarId}</td>
+                    <td>${rawDelays.map(d => d.toFixed(1)).join(', ')}</td>
+                    <td><strong>${median.toFixed(1)} ms</strong></td>
+                    <td>${measurements.length}</td>
+                </tr>
+            `;
         }
         html += '</table>';
 
@@ -762,17 +785,19 @@
 
         let resultHtml = '<div class="section-title">✅ Calibration Results</div>';
         resultHtml += '<table class="measurement-table">';
-        resultHtml += '<tr><th>Pillar</th><th>Speaker Delay (ms)</th><th>Mic Delay (ms)</th><th>Status</th></tr>';
+        resultHtml += '  <tr><th>Pillar</th><th>Speaker Delay (ms)</th><th>Mic Delay (ms)</th><th>Status</th></tr>';
 
         for (let id of pillarOrder) {
             let spkVal = Math.round(Math.max(5, Math.min(300, spk[id])));
             let micVal = Math.round(Math.max(2, Math.min(150, mic[id])));
-            resultHtml += `<tr>
-                <td style="color:#88ffcc;">${id}</td>
-                <td><strong>${spkVal} ms</strong></td>
-                <td><strong>${micVal} ms</strong></td>
-                <td>📊</td>
-            </tr>`;
+            resultHtml += `
+                <tr>
+                    <td style="color:#88ffcc;">${id}</td>
+                    <td><strong>${spkVal} ms</strong></td>
+                    <td><strong>${micVal} ms</strong></td>
+                    <td>📊</td>
+                </tr>
+            `;
             updateCardValue(id, 'spk', `${spkVal} ms`);
             updateCardValue(id, 'mic', `${micVal} ms`);
             pillarData[id].speakerDelayMs = spkVal;
@@ -819,7 +844,7 @@
     }
 
     // --------------------------------------------------------------
-    //  LISTEN TO TUNING MOVEMENT
+    //  LISTEN TO TUNING MOVEMENT (with preload and warm-up)
     // --------------------------------------------------------------
     async function listenToTuningMovement() {
         if (isListening) {
@@ -829,7 +854,6 @@
 
         const tuningRef = db.ref('tuning/current');
         if (currentTuningListener) {
-            addLog('⚠️ Removing existing listener before starting new session', 'warn');
             tuningRef.off('value', currentTuningListener);
             currentTuningListener = null;
         }
@@ -848,6 +872,25 @@
             calibrateBtn.innerText = '🎤 Grant Mic Permission & Start';
             hasStartedListening = false;
             return;
+        }
+
+        // ============ PRELOAD AUDIO NOW (before waiting for conductor) ============
+        const myConfig = pillarData[myId];
+        if (myConfig && myConfig.audioUrl) {
+            addLog(`📦 Preloading audio for ${myId}...`, 'info');
+            const preloadSuccess = await preloadAudio(myConfig.audioUrl);
+            if (preloadSuccess) {
+                addLog(`✅ Audio preloaded for ${myId}`, 'success');
+            } else {
+                addLog(`⚠️ Failed to preload audio for ${myId}, will retry when tuning starts`, 'warn');
+            }
+        }
+
+        // ============ OPTIONAL: PRIME HARDWARE WITH SILENT WARM-UP ============
+        if (myConfig && myConfig.audioUrl && bufferCache[myConfig.audioUrl]) {
+            addLog(`🔇 Priming audio hardware for ${myId}...`, 'info');
+            await warmUpCalibrationMp3(myConfig.audioUrl, myId);
+            addLog(`✅ Hardware primed for ${myId}`, 'success');
         }
 
         isListening = true;
@@ -870,12 +913,7 @@
             }
 
             if (schedule.startTime === lastProcessedStartTime) {
-                addLog(`⏭️ Skipping already processed schedule (startTime: ${new Date(schedule.startTime).toLocaleTimeString()})`, 'info');
-                return;
-            }
-
-            if (pillarMeasurements && Object.keys(pillarMeasurements).length >= pillarOrder.length) {
-                addLog(`⏭️ Calibration already complete, ignoring duplicate schedule`, 'info');
+                addLog(`⏭️ Skipping already processed schedule`, 'info');
                 return;
             }
 
@@ -885,6 +923,7 @@
             tuningStartTime = schedule.startTime;
             pillarMeasurements = {};
 
+            // Schedule detection windows
             if (schedule.metadata && schedule.metadata.pillar_cal_windows) {
                 const windows = schedule.metadata.pillar_cal_windows;
 
@@ -937,6 +976,7 @@
                 }
             }
 
+            // Schedule own playback (audio already preloaded)
             const myWindow = (schedule.metadata?.pillar_cal_windows || []).find(w => w.pillar_id === myId);
 
             if (myWindow && pillarData[myId]?.audioUrl) {
@@ -958,6 +998,7 @@
                 }
             }
 
+            // Set timeout to stop listening after Phase 1
             setTimeout(() => {
                 isListening = false;
                 hasStartedListening = false;
@@ -1042,10 +1083,10 @@
                 return;
             }
 
-            addLog('✅ All pillars online. Starting to listen for tuning movement...', 'success');
+            addLog('✅ All pillars online. Preloading audio and priming hardware...', 'success');
             hasStartedListening = true;
             calibrateBtn.disabled = true;
-            calibrateBtn.innerText = '🎧 Listening...';
+            calibrateBtn.innerText = '🎧 Preloading...';
 
             await listenToTuningMovement();
         };
