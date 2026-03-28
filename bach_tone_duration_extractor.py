@@ -233,7 +233,10 @@ class BachToneExtractor:
         """
         Extract pillar notes from quad piano MusicXML.
 
-        Supports staff filtering: each pillar can specify which staff to extract from.
+        Supports staff filtering and note collision detection.
+        Only notes that overlap with another note of the SAME PITCH are filtered out,
+        because that causes ambiguous detection. Simultaneous different pitches (chords)
+        are fine and actually help detection.
         """
         print(f"\n🎹 Loading pillar MusicXML: {self.pillars_path}")
 
@@ -272,14 +275,14 @@ class BachToneExtractor:
 
             # Check if this part is one of our pillar parts
             if part_id not in self.part_id_to_pillar:
-                # Skip non-pillar parts
                 print(f"      ⚠️ Skipping part {part_id} - not mapped to a pillar")
                 continue
 
             pillar_id = self.part_id_to_pillar[part_id]
             target_staff = self.pillar_staff_map.get(pillar_id, self.default_pillar_staff)
 
-            notes_in_part = []
+            # First pass: collect all notes with their timing
+            raw_notes = []
             current_offset_q = 0.0
 
             print(f"      → {part_id} belongs to {pillar_id} (staff {target_staff})")
@@ -294,9 +297,6 @@ class BachToneExtractor:
 
                     # Skip if staff doesn't match target
                     if staff_num is not None and staff_num != target_staff:
-                        # Only print first few skips to avoid clutter
-                        if len(notes_in_part) < 5:
-                            print(f"         Skipping note in measure {measure} (staff {staff_num} != {target_staff})")
                         continue
 
                     # Get pitch
@@ -309,30 +309,95 @@ class BachToneExtractor:
                     # Calculate time in ms
                     ms_offset = current_offset_q * quarter_duration_ms
                     duration_ms = duration_q * quarter_duration_ms
-                    pulse_ms = ms_offset + (duration_ms / 2)
+                    ms_end = ms_offset + duration_ms
 
-                    note_data = {
+                    raw_notes.append({
                         "pillar_id": pillar_id,
-                        "index": None,  # Will set later after sorting
                         "measure": measure,
-                        "ms_offset": round(ms_offset, 1),
-                        "duration_ms": round(duration_ms, 1),
+                        "ms_offset": ms_offset,
+                        "ms_end": ms_end,
+                        "duration_ms": duration_ms,
                         "pitch": pitch,
                         "midi": midi,
-                        "pulse_ms": round(pulse_ms, 1)
-                    }
-
-                    notes_in_part.append(note_data)
-                    print(f"         Note {measure}: {pitch} at {ms_offset:.1f}ms (staff {staff_num})")
+                        "staff": staff_num
+                    })
 
                 current_offset_q += element.duration.quarterLength
 
-            # Add notes to the pillar's list
-            if notes_in_part:
-                pillar_notes_by_id[pillar_id].extend(notes_in_part)
-                print(f"      Added {len(notes_in_part)} notes to {pillar_id}")
+            # Filter out notes that overlap with another note of the SAME PITCH
+            filtered_notes = []
+            same_pitch_overlap_count = 0
+            different_pitch_overlap_count = 0
+
+            # Sort by start time
+            raw_notes.sort(key=lambda x: x['ms_offset'])
+
+            for i, note in enumerate(raw_notes):
+                # Check if this note overlaps with another note of the SAME PITCH
+                has_same_pitch_overlap = False
+                overlapping_same_pitch = []
+
+                for j, other in enumerate(raw_notes):
+                    if i == j:
+                        continue
+
+                    # Only check same pitch
+                    if note['midi'] != other['midi']:
+                        continue
+
+                    # Check for overlap (any time intersection)
+                    if not (note['ms_end'] <= other['ms_offset'] or other['ms_end'] <= note['ms_offset']):
+                        has_same_pitch_overlap = True
+                        overlapping_same_pitch.append({
+                            'index': j,
+                            'pitch': other['pitch'],
+                            'offset': other['ms_offset'],
+                            'end': other['ms_end']
+                        })
+
+                if has_same_pitch_overlap:
+                    same_pitch_overlap_count += 1
+                    if same_pitch_overlap_count <= 10:  # Print first 10 overlaps
+                        print(f"         ⚠️ Filtering same-pitch overlap: {note['pitch']} at {note['ms_offset']:.1f}ms "
+                              f"(overlaps with {len(overlapping_same_pitch)} other {note['pitch']} notes)")
+                else:
+                    # Note is clean (no same-pitch overlaps)
+                    filtered_notes.append({
+                        "pillar_id": pillar_id,
+                        "index": None,  # Will set later
+                        "measure": note['measure'],
+                        "ms_offset": round(note['ms_offset'], 1),
+                        "duration_ms": round(note['duration_ms'], 1),
+                        "pitch": note['pitch'],
+                        "midi": note['midi'],
+                        "pulse_ms": round(note['ms_offset'] + note['duration_ms'] / 2, 1)
+                    })
+
+                    # Count different-pitch overlaps for info (not filtered)
+                    different_pitch_count = 0
+                    for j, other in enumerate(raw_notes):
+                        if i == j:
+                            continue
+                        if note['midi'] == other['midi']:
+                            continue
+                        if not (note['ms_end'] <= other['ms_offset'] or other['ms_end'] <= note['ms_offset']):
+                            different_pitch_count += 1
+                    if different_pitch_count > 0:
+                        different_pitch_overlap_count += 1
+                        if different_pitch_overlap_count <= 10:
+                            print(f"         ✅ Keeping chord note: {note['pitch']} at {note['ms_offset']:.1f}ms "
+                                  f"(simultaneous with {different_pitch_count} other pitches)")
+
+            # Add filtered notes to pillar's list
+            if filtered_notes:
+                pillar_notes_by_id[pillar_id].extend(filtered_notes)
+                print(
+                    f"      Added {len(filtered_notes)} clean notes (filtered {same_pitch_overlap_count} same-pitch overlaps)")
+                if different_pitch_overlap_count > 0:
+                    print(
+                        f"      Kept {different_pitch_overlap_count} notes that overlap with different pitches (chords)")
             else:
-                print(f"      ⚠️ No notes found in {part_id} (staff {target_staff})")
+                print(f"      ⚠️ No clean notes found in {part_id} after filtering")
 
         # Combine all pillar notes into a single list with global indices
         all_pillar_notes = []
@@ -345,21 +410,20 @@ class BachToneExtractor:
                 note['index'] = len(all_pillar_notes)
                 all_pillar_notes.append(note)
 
-            print(f"\n   {pillar_id}: {len(notes)} notes extracted")
+            print(f"\n   {pillar_id}: {len(notes)} clean notes extracted")
             if notes:
                 print(
                     f"      First note: {notes[0]['pitch']} at {notes[0]['ms_offset']:.1f}ms (measure {notes[0]['measure']})")
                 print(
                     f"      Last note: {notes[-1]['pitch']} at {notes[-1]['ms_offset']:.1f}ms (measure {notes[-1]['measure']})")
 
-        # Create calibration windows (2 measures each, using window_start_measures from config)
+        # Create calibration windows (2 measures each)
         pillar_windows = []
 
         for i, pillar_id in enumerate(self.pillar_order):
             if i < len(self.window_start_measures):
                 start_measure = self.window_start_measures[i]
             else:
-                # Fallback: calculate based on index
                 start_measure = i * self.window_measures + 1
 
             end_measure = start_measure + self.window_measures - 1
@@ -368,7 +432,7 @@ class BachToneExtractor:
             start_ms = (start_measure - 1) * measure_duration_ms
             end_ms = end_measure * measure_duration_ms
 
-            # Count how many notes this pillar actually has in its window
+            # Count how many clean notes this pillar actually has in its window
             pillar_notes = pillar_notes_by_id.get(pillar_id, [])
             window_notes = [n for n in pillar_notes if start_measure <= n["measure"] <= end_measure]
 
@@ -381,7 +445,7 @@ class BachToneExtractor:
                 "note_count": len(window_notes)
             })
 
-            print(f"\n   {pillar_id}: {len(window_notes)} notes in measures {start_measure}-{end_measure}")
+            print(f"\n   {pillar_id}: {len(window_notes)} clean notes in measures {start_measure}-{end_measure}")
             print(f"      Window: {start_ms:.1f}ms → {end_ms:.1f}ms")
 
         # Calculate total duration from the last window
@@ -391,7 +455,7 @@ class BachToneExtractor:
         else:
             total_duration_ms = len(self.pillar_order) * self.window_measures * measure_duration_ms
 
-        print(f"\n✅ Extracted {len(all_pillar_notes)} total pillar notes")
+        print(f"\n✅ Extracted {len(all_pillar_notes)} total clean pillar notes")
         print(f"   Total duration: {total_duration_ms / 1000:.2f}s")
 
         return all_pillar_notes, pillar_windows, total_duration_ms
