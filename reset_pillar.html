@@ -1110,7 +1110,7 @@
             }
         }
 
-        // Prime hardware
+        // Prime hardware with silent warm-up
         if (myConfig && myConfig.audioUrl && bufferCache[myConfig.audioUrl]) {
             addLog(`🔇 Priming audio hardware for ${myId}...`, 'info');
             await warmUpCalibrationMp3(myConfig.audioUrl, myId);
@@ -1143,7 +1143,7 @@
 
             lastProcessedStartTime = schedule.startTime;
 
-            // CRITICAL: Use Firebase time from schedule for all pillars
+            // Use Firebase time from schedule for all pillars
             const globalStartTime = schedule.startTime;
             tuningStartTime = globalStartTime;
 
@@ -1151,6 +1151,7 @@
             addLog(`🎵 Tuning movement detected! Global start: ${startStr}`, 'success');
             addLog(`   Server offset: ${serverOffset > 0 ? '+' : ''}${serverOffset}ms`);
 
+            // Reset state for new calibration run
             pillarMeasurements = {};
             processedMeasurements.clear();
             detectionWindows.clear();
@@ -1178,12 +1179,23 @@
                 addLog(`⚠️ No calibration windows in tuning schedule`, 'warn');
             }
 
-            // Set up detection for each window
+            // ============================================================
+            // Set up detection for EACH window.
+            // Skip listening to our own pillar ID.
+            // ============================================================
             for (const window of windows) {
                 const pillarId = window.pillar_id;
+
+                // Skip listening to our own pillar
+                if (pillarId === myId) {
+                    addLog(`⏭️ Skipping self-detection for ${pillarId} (listening to other pillars only)`, 'info');
+                    continue;
+                }
+
                 const startMs = window.start_ms;
                 const endMs = window.end_ms;
 
+                // Get all notes for this pillar within this window
                 const pillarNotesForWindow = pillarNotes.filter(n =>
                     n.pillar_id === pillarId &&
                     n.ms_offset >= startMs &&
@@ -1205,20 +1217,24 @@
                     setTimeout(() => {
                         addLog(`🎧 Listening for ${pillarId}...`);
 
+                        // Continuous detection loop for this window
                         const detectionInterval = setInterval(() => {
                             const now = Date.now() + serverOffset;
                             const songPosition = now - tuningStartTime;
 
+                            // Stop if we're past the window
                             if (songPosition > endMs + 500) {
                                 clearInterval(detectionInterval);
                                 addLog(`⏹️ Stopped listening for ${pillarId} (window ended)`);
                                 return;
                             }
 
+                            // Process detections for this pillar
                             processPillarDetectionWindows(now, pillarNotesForWindow, pillarId, startMs, endMs);
 
-                        }, 20);
+                        }, 20); // Check every 20ms for better timing resolution
 
+                        // Store interval ID to clear later if needed
                         if (!window.detectionIntervals) window.detectionIntervals = [];
                         window.detectionIntervals.push(detectionInterval);
 
@@ -1228,7 +1244,9 @@
                 }
             }
 
-            // CRITICAL: Schedule own playback using precise Firebase time
+            // ============================================================
+            // Schedule own playback using precise Firebase time
+            // ============================================================
             const myWindow = (windows || []).find(w => w.pillar_id === myId);
             if (myWindow && pillarData[myId]?.audioUrl) {
                 const myStartMs = myWindow.start_ms;
@@ -1240,10 +1258,18 @@
 
                 if (scheduled) {
                     addLog(`✅ ${myId} playback scheduled successfully`);
+                } else {
+                    addLog(`❌ Failed to schedule playback for ${myId}`, 'warn');
                 }
+            } else if (myWindow && !pillarData[myId]?.audioUrl) {
+                addLog(`⚠️ No audio URL found for ${myId}, cannot schedule playback`, 'warn');
+            } else if (!myWindow) {
+                addLog(`⚠️ No calibration window found for ${myId}`, 'warn');
             }
 
-            // Timeout to stop listening after Phase 1
+            // ============================================================
+            // Timeout to stop listening after Phase 1 completes
+            // ============================================================
             setTimeout(() => {
                 isListening = false;
                 hasStartedListening = false;
@@ -1253,14 +1279,24 @@
                 stateLed.className = 'status-led led-green';
                 addLog('⏹️ Phase 1 listening complete', 'info');
 
+                // Compute final delays from collected measurements
                 computePillarDelays();
 
+                // Clean up tuning listener
                 if (currentTuningListener) {
                     tuningRef.off('value', currentTuningListener);
                     currentTuningListener = null;
                     addLog('🔇 Tuning listener removed', 'info');
                 }
-            }, 30000);
+
+                // Clean up any remaining detection intervals
+                if (window.detectionIntervals) {
+                    window.detectionIntervals.forEach(interval => {
+                        if (interval) clearInterval(interval);
+                    });
+                    window.detectionIntervals = [];
+                }
+            }, 30000); // 30 second timeout (covers entire Phase 1)
         };
 
         currentTuningListener = tuningListener;
