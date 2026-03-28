@@ -101,6 +101,11 @@
             background: #ffaa44;
             transition: width 0.1s linear;
         }
+        .error-text {
+            color: #ff6666;
+            font-size: 0.8rem;
+            margin-top: 10px;
+        }
     </style>
 </head>
 <body>
@@ -122,6 +127,7 @@
         </div>
         <button id="ready-btn" disabled>ACTIVATE PILLAR</button>
         <p id="system-msg" style="margin-top:20px; font-size: 0.8rem; color: #888;">Waiting for Audio Context...</p>
+        <div id="error-msg" class="error-text" style="display: none;"></div>
     </div>
     <div id="show-screen">
         <div id="performance-overlay">Pillar: -- | Status: Waiting</div>
@@ -153,39 +159,19 @@
         let pillarAudioElement = null;
         let animationFrame = null;
         let isPlaying = false;
-        let currentPlaybackType = null; // 'tuning' or 'show'
+        let currentPlaybackType = null;
+        let currentSessionId = null;
+        let pillarConfig = {};
 
         // Constants
         const SPEED_OF_SOUND = 343;
         const HEARTBEAT_INTERVAL_MS = 10000;
 
         // ==================== UTILITY FUNCTIONS ====================
-
-        let currentSessionId = null;
-
         function log(message, eventType = "log", meta = {}) {
             const timestamp = Date.now() + (serverOffset || 0);
-            const pillarId = mySeat?.id || myPillarId || 'unknown';
-
-            // Always send to Firebase
-            if (currentSessionId) {
-                const payload = {
-                    pillarId,
-                    type: eventType,
-                    message,
-                    t: timestamp,
-                    ...meta
-                };
-
-                db.ref(`tuningLogs/${currentSessionId}/${pillarId}`)
-                  .push(payload)
-                  .catch(() => {});
-            }
-
-            // Optional: still console log (helps during desktop testing)
-            console.log(`[${pillarId}] ${message}`);
-
-            // Optional: update on-screen debug UI (xplaypillar already has this)
+            const pillarId = mySeat?.id || 'unknown';
+            console.log(`[${new Date(timestamp).toISOString().substr(11, 12)}] [${pillarId}] ${message}`);
         }
 
         // ==================== CLOCK SYNC ====================
@@ -201,10 +187,27 @@
                 const urlParams = new URLSearchParams(window.location.search);
                 const seatId = urlParams.get('seat');
 
+                log(`🔍 Resolving identity for seat: ${seatId}`);
+
                 if (!seatId || !seatId.startsWith('PILLAR_')) {
-                    log(`Invalid pillar ID: ${seatId}`);
+                    log(`❌ Invalid pillar ID: ${seatId}`);
                     document.getElementById('id-ind').className = 'indicator error';
+                    document.getElementById('error-msg').style.display = 'block';
+                    document.getElementById('error-msg').innerHTML = `Invalid pillar ID: ${seatId}<br>Expected format: ?seat=PILLAR_FL, PILLAR_FR, PILLAR_BL, or PILLAR_BR`;
                     return false;
+                }
+
+                // First, try to get pillar config to verify the ID exists
+                const configSnap = await db.ref('pillar_config').once('value');
+                const configData = configSnap.val();
+
+                let found = false;
+                if (configData && configData.pillars) {
+                    found = configData.pillars.some(p => p.id === seatId);
+                }
+
+                if (!found) {
+                    log(`⚠️ Pillar ${seatId} not found in pillar_config, but will still proceed (may be added later)`);
                 }
 
                 mySeat = { id: seatId };
@@ -213,17 +216,22 @@
                 document.getElementById('pillar-badge').innerHTML = `🎵 ${seatId} | ePillar v1.0`;
                 document.getElementById('performance-overlay').innerHTML = `Pillar: ${seatId} | Status: Ready`;
                 log(`✅ Resolved pillar: ${mySeat.id}`);
+
+                // Enable the activate button once identity is resolved
+                document.getElementById('ready-btn').disabled = false;
+                document.getElementById('system-msg').innerHTML = "✅ Identity resolved. Tap to activate.";
+
                 return true;
             } catch (e) {
                 log(`❌ Identity Resolution Error: ${e.message}`);
                 document.getElementById('id-ind').className = 'indicator error';
+                document.getElementById('error-msg').style.display = 'block';
+                document.getElementById('error-msg').innerHTML = `Error: ${e.message}`;
                 return false;
             }
         }
 
         // ==================== PILLAR CONFIGURATION ====================
-        let pillarConfig = {};
-
         async function loadPillarConfig() {
             try {
                 const snap = await db.ref('pillar_config').once('value');
@@ -247,21 +255,27 @@
                     if (myConfig && myConfig.audioUrl) {
                         document.getElementById('audio-ind').className = 'indicator active';
                         log(`   Audio URL: ${myConfig.audioUrl.split('/').pop()}`);
+                        return true;
                     } else {
                         log(`⚠️ No audio URL found for ${mySeat?.id}`);
                         document.getElementById('audio-ind').className = 'indicator error';
+                        return false;
                     }
+                } else {
+                    log(`⚠️ No pillar_config found in Firebase`);
+                    document.getElementById('audio-ind').className = 'indicator error';
+                    return false;
                 }
             } catch (e) {
                 log(`⚠️ Failed to load pillar config: ${e.message}`);
                 document.getElementById('audio-ind').className = 'indicator error';
+                return false;
             }
         }
 
         // ==================== VISUALIZER ====================
         function startVisualizer() {
             if (animationFrame) cancelAnimationFrame(animationFrame);
-
             function updateVisualizer() {
                 if (pillarAudioElement && isPlaying) {
                     const duration = pillarAudioElement.duration;
@@ -285,21 +299,6 @@
         }
 
         // ==================== PLAY PILLAR AUDIO ====================
-
-        function logSyncStatus(expectedStartTime, actualStartTime, pillarId) {
-            const syncData = {
-                pillarId: pillarId,
-                expectedStart: expectedStartTime,
-                actualStart: actualStartTime,
-                deviation: actualStartTime - expectedStartTime,
-                timestamp: Date.now() + serverOffset
-            };
-
-            db.ref('pillar_sync_log').push(syncData);
-
-            log(`📊 Sync deviation for ${pillarId}: ${syncData.deviation > 0 ? '+' : ''}${syncData.deviation.toFixed(1)}ms`);
-        }
-
         function playPillarAudio(audioUrl) {
             if (!audioUrl) {
                 audioUrl = pillarConfig[mySeat.id]?.audioUrl;
@@ -310,23 +309,19 @@
             }
 
             try {
-                // Stop any existing playback
                 if (pillarAudioElement) {
                     pillarAudioElement.pause();
                     pillarAudioElement = null;
                 }
 
-                // Record load start time
                 const audioLoadStart = Date.now() + serverOffset;
                 log(`📀 Loading audio for ${mySeat.id}: ${audioUrl.split('/').pop()}`);
 
-                // Create new audio element
                 pillarAudioElement = new Audio(audioUrl);
                 pillarAudioElement.volume = 1.0;
                 pillarAudioElement.loop = false;
                 pillarAudioElement.preload = 'auto';
 
-                // Track load completion
                 let loadCompleted = false;
                 pillarAudioElement.oncanplaythrough = () => {
                     if (!loadCompleted) {
@@ -336,7 +331,6 @@
                     }
                 };
 
-                // Listen for playback events
                 pillarAudioElement.onplay = () => {
                     const actualPlayTime = Date.now() + serverOffset;
                     const expectedPlayTime = currentPlaybackStartTime || 0;
@@ -345,18 +339,11 @@
 
                     isPlaying = true;
 
-                    // Format timestamps with milliseconds
                     const actualStr = new Date(actualPlayTime).toISOString().substr(11, 12) + '.' + String(actualPlayTime % 1000).padStart(3, '0');
-                    const expectedStr = expectedPlayTime ?
-                        new Date(expectedPlayTime).toISOString().substr(11, 12) + '.' + String(expectedPlayTime % 1000).padStart(3, '0') :
-                        'unknown';
 
                     log(`🔊 Pillar ${mySeat.id} STARTED playing at ${actualStr}`);
-                    log(`   Expected start: ${expectedStr}`);
-                    log(`   Playback deviation: ${playDelay > 0 ? '+' : ''}${playDelay.toFixed(1)}ms relative to expected`);
-                    log(`   Time from load to play: ${timeSinceLoad}ms`);
+                    log(`   Playback deviation: ${playDelay > 0 ? '+' : ''}${playDelay.toFixed(1)}ms`);
 
-                    // Log sync status to Firebase for cross-pillar comparison
                     const syncData = {
                         pillarId: mySeat.id,
                         expectedStart: expectedPlayTime,
@@ -368,19 +355,15 @@
                         speakerDelay: pillarConfig[mySeat.id]?.speakerDelayMs || 45
                     };
 
-                    // Send to Firebase for conductor monitoring
                     db.ref(`pillar_sync/${mySeat.id}/${Date.now()}`).set(syncData).catch(e => {
                         log(`⚠️ Failed to log sync data: ${e.message}`);
                     });
 
-                    // Update UI
                     document.getElementById('performance-overlay').innerHTML =
                         `Pillar: ${mySeat.id} | Status: PLAYING (${currentPlaybackType || ''}) | ` +
                         `Delay: ${pillarConfig[mySeat.id]?.speakerDelayMs || 45}ms | ` +
-                        `Deviation: ${playDelay > 0 ? '+' : ''}${playDelay.toFixed(0)}ms | ` +
-                        `Load: ${timeSinceLoad}ms`;
+                        `Deviation: ${playDelay > 0 ? '+' : ''}${playDelay.toFixed(0)}ms`;
 
-                    // Visual flash on start
                     const canvas = document.getElementById('stage-canvas');
                     const ctx = canvas.getContext('2d');
                     ctx.fillStyle = '#ffaa44';
@@ -391,56 +374,34 @@
                 };
 
                 pillarAudioElement.onended = () => {
-                    const endTime = Date.now() + serverOffset;
-                    const duration = pillarAudioElement.duration;
-                    const actualDuration = (endTime - (currentPlaybackStartTime || endTime)) / 1000;
-
                     log(`🔊 Pillar ${mySeat.id} FINISHED playing`);
-                    log(`   Expected duration: ${duration?.toFixed(2)}s, Actual: ${actualDuration.toFixed(2)}s`);
-                    log(`   Deviation: ${(actualDuration - (duration || 0)).toFixed(2)}s`);
-
                     isPlaying = false;
-                    document.getElementById('performance-overlay').innerHTML =
-                        `Pillar: ${mySeat.id} | Status: Ready`;
+                    document.getElementById('performance-overlay').innerHTML = `Pillar: ${mySeat.id} | Status: Ready`;
                     stopVisualizer();
                 };
 
                 pillarAudioElement.onerror = (e) => {
-                    const errorTime = Date.now() + serverOffset;
                     log(`❌ Pillar audio error for ${mySeat.id}: ${e.message || 'Unknown error'}`);
-                    log(`   Audio URL: ${audioUrl}`);
-                    log(`   Network state: ${pillarAudioElement.networkState}`);
-                    log(`   Ready state: ${pillarAudioElement.readyState}`);
                     isPlaying = false;
-                    document.getElementById('performance-overlay').innerHTML =
-                        `Pillar: ${mySeat.id} | Status: ERROR`;
+                    document.getElementById('performance-overlay').innerHTML = `Pillar: ${mySeat.id} | Status: ERROR`;
                 };
 
-                // Start playing with promise handling
                 const playPromise = pillarAudioElement.play();
                 if (playPromise) {
-                    playPromise
-                        .then(() => {
-                            // Playback started successfully
-                            const playStartTime = Date.now() + serverOffset;
-                            log(`🎵 Playback initiated for ${mySeat.id} at ${new Date(playStartTime).toISOString().substr(11, 12)}.${String(playStartTime % 1000).padStart(3, '0')}`);
-                        })
-                        .catch(e => {
-                            log(`❌ Playback failed for ${mySeat.id}: ${e.message}`);
-                            isPlaying = false;
-                            document.getElementById('performance-overlay').innerHTML =
-                                `Pillar: ${mySeat.id} | Status: PLAYBACK FAILED`;
-                        });
+                    playPromise.catch(e => {
+                        log(`❌ Playback failed for ${mySeat.id}: ${e.message}`);
+                        isPlaying = false;
+                    });
                 }
 
             } catch (e) {
-                log(`❌ Failed to create audio element for ${mySeat.id}: ${e.message}`);
-                document.getElementById('performance-overlay').innerHTML =
-                    `Pillar: ${mySeat.id} | Status: INIT ERROR`;
+                log(`❌ Failed to create audio element: ${e.message}`);
             }
         }
 
         // ==================== SCHEDULE PLAYBACK ====================
+        let currentPlaybackStartTime = 0;
+
         function schedulePlayback(startTime, audioUrl, type = 'show') {
             const myConfig = pillarConfig[mySeat.id];
             if (!myConfig || !myConfig.audioUrl) {
@@ -455,64 +416,31 @@
             const adjustedStartTime = startTime - pillarSpeakerDelay;
             const delayMs = adjustedStartTime - nowWall;
 
-            // Log with microsecond precision
-            const nowStr = new Date(nowWall).toISOString().substr(11, 12) + '.' + String(nowWall % 1000).padStart(3, '0');
-            const startStr = new Date(startTime).toISOString().substr(11, 12) + '.' + String(startTime % 1000).padStart(3, '0');
-            const adjustedStr = new Date(adjustedStartTime).toISOString().substr(11, 12) + '.' + String(adjustedStartTime % 1000).padStart(3, '0');
-
             log(`🎵 Scheduling pillar ${mySeat.id} playback (${type})`);
-            log(`   Current wall time: ${nowStr}`);
-            log(`   Conductor start: ${startStr}`);
-            log(`   Adjusted start (start - ${pillarSpeakerDelay}ms): ${adjustedStr}`);
             log(`   Delay: ${delayMs.toFixed(1)}ms`);
 
-            // Check if we're receiving the schedule late
-            if (delayMs < 0) {
-                log(`⚠️ SCHEDULE RECEIVED LATE: ${Math.abs(delayMs).toFixed(1)}ms after adjusted start time`);
-            }
-
-            // Clear any existing scheduled playback
             if (activeTimeout) {
                 clearTimeout(activeTimeout);
                 activeTimeout = null;
             }
 
-            // Schedule the playback
             if (delayMs > 0) {
-                const scheduledFireTime = nowWall + delayMs;
-                const scheduledFireStr = new Date(scheduledFireTime).toISOString().substr(11, 12) + '.' + String(scheduledFireTime % 1000).padStart(3, '0');
-
-                log(`   Scheduled to fire at: ${scheduledFireStr} (in ${(delayMs/1000).toFixed(3)}s)`);
-
-                const startTimer = Date.now();
                 activeTimeout = setTimeout(() => {
-                    const actualFireTime = Date.now() + serverOffset;
-                    const timerDrift = actualFireTime - scheduledFireTime;
-
-                    log(`⏱️ setTimeout fired at ${new Date(actualFireTime).toISOString().substr(11, 12)}.${String(actualFireTime % 1000).padStart(3, '0')}`);
-                    log(`   Timer drift: ${timerDrift > 0 ? '+' : ''}${timerDrift.toFixed(1)}ms`);
-
                     currentPlaybackType = type;
-
-                    const playStartTime = Date.now();
+                    currentPlaybackStartTime = startTime;
                     playPillarAudio(urlToPlay);
-                    const playStartLatency = Date.now() - playStartTime;
-
-                    log(`   Audio.play() initiated, startup latency: ${playStartLatency}ms`);
-
                     activeTimeout = null;
                 }, delayMs);
-
             } else if (delayMs > -1000) {
                 log(`⚠️ Playback is ${Math.round(-delayMs)}ms late, playing immediately`);
                 currentPlaybackType = type;
+                currentPlaybackStartTime = startTime;
                 playPillarAudio(urlToPlay);
             } else {
                 log(`❌ Playback too late (${Math.round(-delayMs)}ms), skipping`);
             }
         }
 
-        // ==================== STOP PLAYBACK ====================
         function stopPlayback() {
             if (pillarAudioElement) {
                 pillarAudioElement.pause();
@@ -543,7 +471,9 @@
                         speakerDelay: pillarConfig[mySeat.id]?.speakerDelayMs || 45,
                         micDelay: pillarConfig[mySeat.id]?.micDelayMs || 18,
                         isPlaying: isPlaying,
-                        playbackType: currentPlaybackType
+                        playbackType: currentPlaybackType,
+                        x: pillarConfig[mySeat.id]?.x || 0,
+                        y: pillarConfig[mySeat.id]?.y || 0
                     });
                 }
             }, HEARTBEAT_INTERVAL_MS);
@@ -554,7 +484,6 @@
             if (heartbeatInterval) {
                 clearInterval(heartbeatInterval);
                 heartbeatInterval = null;
-                log(`💓 Heartbeat stopped for ${mySeat?.id}`);
             }
         }
 
@@ -577,48 +506,13 @@
                 }
 
                 const now = Date.now() + serverOffset;
-                const receiptTime = now;
                 const conductorStartTime = schedule.startTime;
                 const timeToStart = conductorStartTime - now;
 
-                // Log precise receipt timing
-                log(`🎵 Tuning schedule received at ${new Date(receiptTime).toISOString().substr(11, 12)}.${String(receiptTime % 1000).padStart(3, '0')}`);
-                log(`   Conductor start time: ${new Date(conductorStartTime).toISOString().substr(11, 12)}.${String(conductorStartTime % 1000).padStart(3, '0')}`);
-                log(`   Time to start: ${(timeToStart / 1000).toFixed(3)}s`);
+                log(`🎵 Tuning schedule received! Time to start: ${(timeToStart / 1000).toFixed(3)}s`);
 
-                // Check if we received the schedule too late
-                if (timeToStart < 0) {
-                    log(`❌ SCHEDULE RECEIVED TOO LATE: ${Math.abs(timeToStart).toFixed(0)}ms after conductor start time`);
-                    log(`   Pillar will attempt to play but may be out of sync`);
-                } else if (timeToStart < 1000) {
-                    log(`⚠️ Schedule received with only ${(timeToStart / 1000).toFixed(2)}s buffer - may cause timing issues`);
-                } else {
-                    log(`✅ Schedule received with ${(timeToStart / 1000).toFixed(2)}s buffer`);
-                }
-
-                // Store receipt time for comparison across pillars
-                window.pillarReceiptTime = receiptTime;
-                window.pillarConductorStartTime = conductorStartTime;
-
-                // Log schedule details if available
-                if (schedule.metadata) {
-                    log(`   Tuning duration: ${(schedule.metadata.total_duration_ms / 1000).toFixed(1)}s`);
-                    if (schedule.uncalibratedCount !== undefined) {
-                        log(`   Uncalibrated patrons: ${schedule.uncalibratedCount}, Calibrated: ${schedule.calibratedCount || 0}`);
-                    }
-                }
-
-                // Stop any ongoing show playback
                 stopPlayback();
-
-                // Schedule tuning playback
                 schedulePlayback(schedule.startTime, null, 'tuning');
-
-                // Also log the current device state for debugging
-                const myConfig = pillarConfig[mySeat?.id];
-                if (myConfig) {
-                    log(`   Pillar config: speakerDelay=${myConfig.speakerDelayMs}ms, micDelay=${myConfig.micDelayMs}ms`);
-                }
             });
         }
 
@@ -626,10 +520,8 @@
         function listenForShowMovement() {
             db.ref('show/currentCue').on('value', snap => {
                 const cue = snap.val();
-
                 if (!cue) return;
 
-                // Handle KILL signal
                 if (cue.action === 'KILL') {
                     log(`💀 KILL signal received - stopping playback`);
                     stopPlayback();
@@ -638,14 +530,10 @@
                     return;
                 }
 
-                // Handle GO signal (show movement)
                 if (cue.action === 'GO' && cue.startTime && cue.movement && cue.cues) {
                     log(`🎭 Show movement received: "${cue.movement}"`);
-                    log(`   Start time: ${new Date(cue.startTime).toISOString().substr(11, 12)}.${String(cue.startTime % 1000).padStart(3, '0')}`);
 
-                    // Find pillar assets in this movement's cues
                     let foundPillarAsset = null;
-
                     for (const movementCue of cue.cues) {
                         if (movementCue.assets) {
                             for (const asset of movementCue.assets) {
@@ -659,10 +547,8 @@
                     }
 
                     if (foundPillarAsset && foundPillarAsset.audio_url) {
-                        log(`🎵 Found pillar asset for ${mySeat.id}: ${foundPillarAsset.audio_url.split('/').pop()}`);
-                        // Stop any ongoing tuning playback
+                        log(`🎵 Found pillar asset for ${mySeat.id}`);
                         stopPlayback();
-                        // Schedule show playback
                         schedulePlayback(cue.startTime, foundPillarAsset.audio_url, 'show');
                     } else {
                         log(`⚠️ No pillar asset found for ${mySeat.id} in movement "${cue.movement}"`);
@@ -671,15 +557,12 @@
             });
         }
 
-        // ==================== AUDIO CONTEXT (for visualizer sync) ====================
+        // ==================== AUDIO CONTEXT ====================
         async function initAudio() {
             try {
-                // Create audio context for visualizer sync (optional)
                 audioCtx = new (window.AudioContext || window.webkitAudioContext)();
                 log(`🎛️ Audio context created (state: ${audioCtx.state})`);
-
                 if (audioCtx.state === 'suspended') {
-                    // Resume on user interaction
                     document.body.addEventListener('click', () => {
                         if (audioCtx && audioCtx.state === 'suspended') {
                             audioCtx.resume();
@@ -694,26 +577,23 @@
             }
         }
 
-        // ==================== TEST TONE (verify audio output) ====================
+        // ==================== TEST TONE ====================
         function playTestTone() {
-            if (!pillarAudioElement) {
-                // Create a quick test tone using Web Audio if available
-                if (audioCtx && audioCtx.state === 'running') {
-                    try {
-                        const osc = audioCtx.createOscillator();
-                        const gain = audioCtx.createGain();
-                        osc.type = 'sine';
-                        osc.frequency.setValueAtTime(440, audioCtx.currentTime);
-                        gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
-                        gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.5);
-                        osc.connect(gain);
-                        gain.connect(audioCtx.destination);
-                        osc.start();
-                        osc.stop(audioCtx.currentTime + 0.5);
-                        log(`🔊 Test tone played (440Hz)`);
-                    } catch (e) {
-                        log(`⚠️ Could not play test tone: ${e.message}`);
-                    }
+            if (audioCtx && audioCtx.state === 'running') {
+                try {
+                    const osc = audioCtx.createOscillator();
+                    const gain = audioCtx.createGain();
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(440, audioCtx.currentTime);
+                    gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+                    gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.5);
+                    osc.connect(gain);
+                    gain.connect(audioCtx.destination);
+                    osc.start();
+                    osc.stop(audioCtx.currentTime + 0.5);
+                    log(`🔊 Test tone played (440Hz)`);
+                } catch (e) {
+                    log(`⚠️ Could not play test tone: ${e.message}`);
                 }
             }
         }
@@ -730,17 +610,15 @@
             canvas.height = window.innerHeight;
 
             isActive = true;
-
             startHeartbeat();
 
+            const myConfig = pillarConfig[mySeat.id];
             log(`🔊 Pillar ${mySeat.id} activated`);
-            log(`   Audio: ${pillarConfig[mySeat.id]?.audioUrl?.split('/').pop() || 'none'}`);
-            log(`   Speaker delay: ${pillarConfig[mySeat.id]?.speakerDelayMs || 45}ms`);
+            log(`   Audio: ${myConfig?.audioUrl?.split('/').pop() || 'none'}`);
+            log(`   Speaker delay: ${myConfig?.speakerDelayMs || 45}ms`);
 
-            // Play test tone to verify audio output
             setTimeout(() => playTestTone(), 500);
 
-            // Start listening for both tuning and show movements
             listenForTuning();
             listenForShowMovement();
         }
@@ -749,18 +627,28 @@
         window.onload = async () => {
             log(`🎧 ePillar starting`);
 
+            // Set a timeout to show error if identity resolution takes too long
+            const timeoutId = setTimeout(() => {
+                if (!mySeat) {
+                    document.getElementById('error-msg').style.display = 'block';
+                    document.getElementById('error-msg').innerHTML = 'Timeout: Could not resolve pillar identity. Check Firebase connection and URL parameters.';
+                }
+            }, 10000);
+
             const idOk = await resolveIdentity();
+            clearTimeout(timeoutId);
+
             if (!idOk) {
-                document.getElementById('system-msg').innerText = "Failed to identify pillar";
+                document.getElementById('system-msg').innerHTML = "Failed to identify pillar. Check URL parameters.";
+                document.getElementById('ready-btn').disabled = true;
                 return;
             }
 
             await loadPillarConfig();
 
-            // Check if audio URL is configured
             const hasAudio = pillarConfig[mySeat.id]?.audioUrl;
             if (!hasAudio) {
-                document.getElementById('system-msg').innerText = "No audio URL configured for this pillar";
+                document.getElementById('system-msg').innerHTML = "No audio URL configured for this pillar in pillar_config.json";
                 document.getElementById('ready-btn').disabled = true;
             } else {
                 document.getElementById('ready-btn').disabled = false;
