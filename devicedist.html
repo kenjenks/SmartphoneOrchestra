@@ -71,10 +71,55 @@
             color: #000;
             cursor: pointer;
             transition: transform 0.2s;
+            margin-top: 20px;
         }
 
         #ready-btn:disabled { background: #333; color: #666; cursor: not-allowed; }
         #ready-btn:active { transform: scale(0.95); }
+
+        /* Calibration Display Box */
+        #calibration-display {
+            background: rgba(0,0,0,0.8);
+            border: 1px solid #00ffcc;
+            border-radius: 12px;
+            padding: 12px 20px;
+            margin-top: 20px;
+            width: 80%;
+            max-width: 400px;
+            text-align: center;
+            font-family: monospace;
+        }
+        .calibration-title {
+            font-size: 0.7rem;
+            color: #888;
+            letter-spacing: 1px;
+            margin-bottom: 8px;
+        }
+        .calibration-values {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            font-size: 1rem;
+        }
+        .calibration-value {
+            color: #00ffcc;
+            font-weight: bold;
+        }
+        .calibration-label {
+            color: #888;
+            font-size: 0.8rem;
+        }
+        .calibration-status {
+            margin-top: 8px;
+            font-size: 0.7rem;
+            color: #00ffcc;
+        }
+        .calibration-status.happy {
+            color: #00ffcc;
+        }
+        .calibration-status.uncalibrated {
+            color: #ffaa66;
+        }
 
         #show-screen { display: none; height: 100vh; width: 100vw; }
         canvas { width: 100%; height: 100%; display: block; }
@@ -209,6 +254,22 @@
         <div id="mic-permission-section" style="margin: 20px 0;">
             <button id="request-mic-btn" style="background: #00ffcc; color: #000; width: auto; padding: 12px 24px;">🎤 Request Mic Permission</button>
             <p id="mic-status-msg" style="font-size: 0.7rem; color: #888; margin-top: 8px;">Mic not requested. Required for neighbor calibration.</p>
+        </div>
+
+        <!-- CALIBRATION DISPLAY - Shows stored values if available -->
+        <div id="calibration-display" style="display: none;">
+            <div class="calibration-title">📊 CALIBRATION STATUS</div>
+            <div class="calibration-values">
+                <div>
+                    <span class="calibration-label">Speaker Delay</span><br>
+                    <span class="calibration-value" id="display-speaker-delay">--</span>
+                </div>
+                <div>
+                    <span class="calibration-label">Mic Delay</span><br>
+                    <span class="calibration-value" id="display-mic-delay">--</span>
+                </div>
+            </div>
+            <div class="calibration-status" id="calibration-status-text">Not Calibrated</div>
         </div>
 
         <button id="ready-btn" disabled>ENTER THE ISLE</button>
@@ -548,6 +609,39 @@
         document.getElementById('sync-ind').className = 'indicator active';
     });
 
+    // ============================================================================
+    // UPDATE CALIBRATION DISPLAY
+    // ============================================================================
+    function updateCalibrationDisplay() {
+        const displayDiv = document.getElementById('calibration-display');
+        const speakerSpan = document.getElementById('display-speaker-delay');
+        const micSpan = document.getElementById('display-mic-delay');
+        const statusSpan = document.getElementById('calibration-status-text');
+
+        if (isHappy && currentSpeakerDelay !== null && myMicDelayMs !== null) {
+            // Show stored calibration values
+            displayDiv.style.display = 'block';
+            speakerSpan.innerText = `${Math.round(currentSpeakerDelay)} ms`;
+            micSpan.innerText = `${Math.round(myMicDelayMs)} ms`;
+            statusSpan.innerText = '✅ Calibrated - Ready';
+            statusSpan.className = 'calibration-status happy';
+        } else if (phase1Complete && myMicDelayMs !== null && currentSpeakerDelay !== null) {
+            // Partial calibration (should not happen normally, but just in case)
+            displayDiv.style.display = 'block';
+            speakerSpan.innerText = `${Math.round(currentSpeakerDelay)} ms`;
+            micSpan.innerText = `${Math.round(myMicDelayMs)} ms`;
+            statusSpan.innerText = '🔄 Partial Calibration';
+            statusSpan.className = 'calibration-status';
+        } else {
+            // No calibration stored
+            displayDiv.style.display = 'block';
+            speakerSpan.innerText = '-- ms';
+            micSpan.innerText = '-- ms';
+            statusSpan.innerText = '⚠️ Not Calibrated - Will calibrate on ENTER';
+            statusSpan.className = 'calibration-status uncalibrated';
+        }
+    }
+
     async function resolveIdentity() {
         try {
             const urlParams = new URLSearchParams(window.location.search);
@@ -558,6 +652,7 @@
                 mySeat = { id: 'G12', x: 7.75, y: 12.5, section: 'Orchestra' };
                 document.getElementById('seat-label').innerText = `Seat ${mySeat.id}`;
                 document.getElementById('id-ind').className = 'indicator active';
+                updateCalibrationDisplay();
                 return true;
             }
 
@@ -598,6 +693,9 @@
                 }
                 // ===============================================================
 
+                // Update the display after loading calibration
+                updateCalibrationDisplay();
+
                 return true;
             } else if (Array.isArray(seatsData)) {
                 const config = seatsData.find(s => s.id === seatId);
@@ -628,6 +726,9 @@
                         loadStoredCalibration();
                     }
                     // ===============================================================
+
+                    // Update the display after loading calibration
+                    updateCalibrationDisplay();
 
                     return true;
                 }
@@ -1230,6 +1331,7 @@
                     log(`🎤 Mic delay derived: ${myMicDelayMs.toFixed(1)}ms from ${micDelaySamples.length} pillar detections`);
                     document.getElementById('debug-mic-delay').innerText = `${myMicDelayMs.toFixed(1)}ms`;
                     document.getElementById('debug-status').innerHTML = `Mic: ${myMicDelayMs.toFixed(0)}ms`;
+                    updateCalibrationDisplay();
                 }
             }
         }
@@ -1563,6 +1665,7 @@
         }
 
         currentSpeakerDelay = newSpeakerDelay;
+        updateCalibrationDisplay();
     }
 
     function startContinuousPlayback(startTime, speakerDelay) {
@@ -1682,6 +1785,7 @@
 
         currentSpeakerDelay = clampedDelay;
         iterationFinalDelays.push(currentSpeakerDelay);
+        updateCalibrationDisplay();
 
         // Only restart if correction is significant
         const RESTART_THRESHOLD = 20;
@@ -1706,7 +1810,6 @@
     function evaluateInRealTime() {
         // Skip evaluation if already calibrated
         if (isHappy) {
-            // Don't log spam, just return silently
             return;
         }
 
@@ -1786,6 +1889,9 @@
         document.getElementById('debug-status').innerHTML = 'HAPPY ✓';
         document.getElementById('debug-speaker-delay').innerText = (currentSpeakerDelay || estimatedDeviceDelayMs).toFixed(1) + 'ms';
 
+        // Update the calibration display
+        updateCalibrationDisplay();
+
         const flash = document.getElementById('detection-flash');
         if (flash) {
             flash.style.background = '#00ffcc';
@@ -1849,16 +1955,17 @@
             }
         }
 
-        // Logging only - Mic energy check (every 5 seconds)
+        // Logging only - Mic energy check
         if (performance.now() - lastMicCheck > 5000 && tuningStartTime) {
-            let maxOverallEnergy = 0;
+            const maxBin = 0;
+            let maxEnergy = 0;
             for (let i = 0; i < frequencyData.length; i++) {
                 const energy = frequencyData[i] / 255;
-                if (energy > maxOverallEnergy) {
-                    maxOverallEnergy = energy;
+                if (energy > maxEnergy) {
+                    maxEnergy = energy;
                 }
             }
-            log(`🎧 Mic energy check: max=${maxOverallEnergy.toFixed(3)}, piccoloBand=${piccoloEnergy.toFixed(3)}`);
+            log(`🎧 Mic energy check: max=${maxEnergy.toFixed(3)}, piccoloBand=${piccoloEnergy.toFixed(3)}`);
             lastMicCheck = performance.now();
         }
 
@@ -2278,6 +2385,7 @@
                             myMicDelayMs = calculateMedian(micDelaySamples);
                             log(`🎤 Phase 1 complete (timeout): mic delay = ${myMicDelayMs.toFixed(1)}ms from ${micDelaySamples.length} samples`);
                         }
+                        updateCalibrationDisplay();
                     }
                 }, phase1Duration);
                 log(`⏱️ Phase 1 timeout set for ${phase1Duration}ms`);
@@ -2397,6 +2505,8 @@
                 document.getElementById('system-msg').innerText = "System Ready. Please Enter.";
             }
         }
+        // Update calibration display after everything is loaded
+        updateCalibrationDisplay();
     };
 
     window.onresize = () => { const canvas = document.getElementById('stage-canvas'); canvas.width = window.innerWidth; canvas.height = window.innerHeight; };
