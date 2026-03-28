@@ -356,7 +356,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
     const db = firebase.database();
 
     // --- MASTER STATE ---
-    let MAX_LOG_ENTRIES = 1000;
+    let MAX_LOG_ENTRIES = 5000;
     let seats = [];
     let deviceData = {};
     let isTuningActive = false;
@@ -626,7 +626,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         document.getElementById('copy-logs-btn').onclick = copyLogsToClipboard;
         document.getElementById('clear-logs-btn').onclick = clearAllLogs;
 
-        db.ref('device_logs').limitToLast(50).on('child_added', (snap) => {
+        db.ref('device_logs').limitToLast(1000).on('child_added', (snap) => {
             const deviceId = snap.key;
             const logs = snap.val();
             if (logs) {
