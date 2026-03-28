@@ -891,20 +891,81 @@
 
     function applyCorrection(medianShift) {
         const currentDelay = currentSpeakerDelay;
+
+        // Check if median shift is stuck (not changing)
         if (Math.abs(medianShift - lastMedianShift) < 5 && Math.abs(medianShift) > 10) {
             sameShiftCount++;
-            if (sameShiftCount >= 3) { log(`⚠️ Median shift stuck at ${medianShift.toFixed(1)}ms - pausing`, 'warn'); lastMedianShift = medianShift; return; }
-        } else { sameShiftCount = 0; lastMedianShift = medianShift; }
-        const newDelay = currentDelay - medianShift;
-        const clampedDelay = Math.max(-50, Math.min(1000, newDelay));
+            if (sameShiftCount >= 3) {
+                log(`⚠️ Median shift stuck at ${medianShift.toFixed(1)}ms for ${sameShiftCount} evaluations - pausing corrections`, 'warn');
+                log(`   Current delay: ${currentDelay.toFixed(1)}ms`);
+                // Calculate what the theoretical needed delay would be
+                const theoreticalDelay = currentDelay + medianShift;
+                log(`   Theoretical needed delay: ${theoreticalDelay.toFixed(1)}ms (${theoreticalDelay > currentDelay ? 'increase' : 'decrease'} by ${Math.abs(medianShift).toFixed(1)}ms)`);
+                lastMedianShift = medianShift;
+                return;
+            }
+        } else {
+            sameShiftCount = 0;
+            lastMedianShift = medianShift;
+        }
+
+        // If medianShift is negative (late), we need to DECREASE delay to play earlier
+        // If medianShift is positive (early), we need to INCREASE delay to play later
+        // So: newDelay = currentDelay + medianShift
+        const newDelay = currentDelay + medianShift;
+
+        // Sanity bounds - allow negative for early devices, up to 2000ms for high-latency devices
+        const MIN_DELAY = -100;
+        const MAX_DELAY = 2000;
+        const clampedDelay = Math.max(MIN_DELAY, Math.min(MAX_DELAY, newDelay));
+
         const correctionMagnitude = Math.abs(clampedDelay - currentDelay);
-        if (correctionMagnitude < MIN_CORRECTION_MS) return;
-        log(`🔄 Correction: shift=${medianShift > 0 ? '+' : ''}${medianShift.toFixed(1)}ms, ${currentDelay.toFixed(1)}ms → ${clampedDelay.toFixed(1)}ms`);
+
+        // Don't correct if change is too small (prevents jitter)
+        if (correctionMagnitude < MIN_CORRECTION_MS) {
+            log(`⏭️ Correction too small (${correctionMagnitude.toFixed(1)}ms < ${MIN_CORRECTION_MS}ms), skipping`, 'info');
+            return;
+        }
+
+        // Log the correction with clear direction
+        const direction = medianShift > 0 ? 'early' : 'late';
+        const adjustment = clampedDelay > currentDelay ? 'increase' : 'decrease';
+
+        log(`🔄 Applying correction:`);
+        log(`   Median shift: ${medianShift > 0 ? '+' : ''}${medianShift.toFixed(1)}ms (${direction})`);
+        log(`   Current speaker delay: ${currentDelay.toFixed(1)}ms`);
+        log(`   New speaker delay: ${clampedDelay.toFixed(1)}ms (${adjustment} by ${correctionMagnitude.toFixed(1)}ms)`);
+
+        // Store the new delay
         currentSpeakerDelay = clampedDelay;
-        if (correctionMagnitude >= 20) restartWithNewDelay(currentSpeakerDelay);
-        else if (tuningStartTime && continuousGain && !isSingleDeviceMode && !isListenOnlyMode) setTimeout(() => startEnvelopeScheduler(tuningStartTime), 10);
+        iterationFinalDelays.push(currentSpeakerDelay);
+
+        // Only restart playback if correction is significant enough to be audible
+        const RESTART_THRESHOLD = 20;
+        if (correctionMagnitude >= RESTART_THRESHOLD) {
+            log(`   🔄 Restarting playback with new delay`);
+            restartWithNewDelay(currentSpeakerDelay);
+        } else {
+            log(`   ⏸️ Small correction, updating delay without restart`);
+            // Just update the envelope scheduler if playback is active
+            if (tuningStartTime && continuousGain && !isSingleDeviceMode && !isListenOnlyMode) {
+                setTimeout(() => startEnvelopeScheduler(tuningStartTime), 10);
+            }
+        }
+
+        // Clear collected shifts after applying correction
         rawTimeShifts = [];
+
+        // Visual feedback
+        const flash = document.getElementById('detection-flash');
+        if (flash) {
+            flash.style.background = '#ffaa44';
+            setTimeout(() => { flash.style.background = '#333'; }, 200);
+        }
+
+        // Update UI
         updateCalibrationDisplay();
+        document.getElementById('debug-speaker-delay').innerText = `${currentSpeakerDelay.toFixed(1)}ms`;
     }
 
     function evaluateInRealTime() {
