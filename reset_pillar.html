@@ -1,8 +1,3 @@
-<!--
-reset_pillar.html - Part of the SmartphoneOrchestra
-
-Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at each corner of the house.
--->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -268,6 +263,95 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
     const db = firebase.database();
 
     // --------------------------------------------------------------
+    //  LOGGING SYSTEM (Sends logs to Firebase device_logs)
+    // --------------------------------------------------------------
+    let logQueue = [];
+    let logFlushTimer = null;
+    let pendingFlush = false;
+    let logRef = null;
+    const LOG_FLUSH_INTERVAL_MS = 2000;
+    const MAX_LOG_QUEUE_SIZE = 50;
+
+    function initLogging() {
+        if (!myId) return;
+        logRef = db.ref(`device_logs/${myId}`);
+
+        if (logFlushTimer) clearInterval(logFlushTimer);
+        logFlushTimer = setInterval(flushLogs, LOG_FLUSH_INTERVAL_MS);
+
+        const serverTimestamp = Date.now() + (serverOffset || 0);
+        pillarLog(`🚀 Pillar ${myId} started at ${new Date(serverTimestamp).toISOString()}`);
+        pillarLog(`   Platform: ${navigator.platform}, User Agent: ${navigator.userAgent.substring(0, 100)}`);
+
+        setTimeout(() => flushLogs(), 100);
+    }
+
+    function flushLogs() {
+        if (logQueue.length === 0 || !logRef || pendingFlush) return;
+        pendingFlush = true;
+
+        const logsToSend = [...logQueue];
+        logQueue = [];
+
+        const batch = {};
+        logsToSend.forEach((logEntry, index) => {
+            const ts = Date.now() + (serverOffset || 0);
+            batch[`${ts}_${index}_${Math.random().toString(36).substr(2, 6)}`] = logEntry;
+        });
+
+        logRef.update(batch)
+            .catch(e => {
+                console.error("Failed to send logs to Firebase:", e);
+                logQueue = [...logsToSend, ...logQueue];
+                if (logQueue.length > MAX_LOG_QUEUE_SIZE) {
+                    logQueue = logQueue.slice(-MAX_LOG_QUEUE_SIZE);
+                }
+            })
+            .finally(() => {
+                pendingFlush = false;
+            });
+    }
+
+    function pillarLog(message, type = 'info') {
+        const serverTimestamp = Date.now() + (serverOffset || 0);
+        const timeStr = new Date(serverTimestamp).toISOString().substr(11, 12);
+
+        // Also log to console for debugging
+        console.log(`[${timeStr}] [${myId || 'unknown'}] ${message}`);
+
+        // Also add to local UI log
+        const div = document.createElement('div');
+        div.className = 'log-entry';
+        const time = new Date().toLocaleTimeString();
+        div.innerHTML = `[${time}] ${message}`;
+        if (type === 'success') div.style.color = '#88ffcc';
+        else if (type === 'warn') div.style.color = '#ffaa66';
+        else div.style.color = '#aaa';
+        const logPanel = document.getElementById('log-panel');
+        if (logPanel) {
+            logPanel.appendChild(div);
+            div.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            while (logPanel.children.length > 80) logPanel.removeChild(logPanel.firstChild);
+        }
+
+        // Send to Firebase
+        const logEntry = {
+            timestamp: serverTimestamp,
+            timeStr: timeStr,
+            message: message,
+            seatId: myId || 'unknown',
+            type: type,
+            isPillar: true
+        };
+
+        logQueue.push(logEntry);
+
+        if (logQueue.length >= MAX_LOG_QUEUE_SIZE && logRef) {
+            flushLogs();
+        }
+    }
+
+    // --------------------------------------------------------------
     //  GLOBALS
     // --------------------------------------------------------------
     let myId = null;
@@ -305,24 +389,13 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
     const roundInfoSpan = document.getElementById('round-info');
     const progressDetail = document.getElementById('progress-detail');
     const pillarGrid = document.getElementById('pillar-grid');
-    const logPanel = document.getElementById('log-panel');
     const resultsPanel = document.getElementById('results-panel');
 
     // --------------------------------------------------------------
     //  UTILITIES
     // --------------------------------------------------------------
     function addLog(msg, type = 'info') {
-        const div = document.createElement('div');
-        div.className = 'log-entry';
-        const time = new Date().toLocaleTimeString();
-        div.innerHTML = `[${time}] ${msg}`;
-        if (type === 'success') div.style.color = '#88ffcc';
-        else if (type === 'warn') div.style.color = '#ffaa66';
-        else div.style.color = '#aaa';
-        logPanel.appendChild(div);
-        div.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-        while (logPanel.children.length > 80) logPanel.removeChild(logPanel.firstChild);
-        console.log(`[PillarCal] ${msg}`);
+        pillarLog(msg, type);
     }
 
     function calculateMedian(values) {
@@ -541,10 +614,6 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
             // Schedule detection for each pillar's playback
             const activePillars = schedule.activePillars || pillarOrder;
 
-            // We need the note schedule to know when each pillar plays
-            // The pillars play during Phase 1 (first 20 seconds)
-            // They play in order: FL, FR, BR, BL, each for ~5 seconds
-
             addLog(`📡 Will listen for ${activePillars.length} pillars during Phase 1`, 'info');
 
             // Schedule detection windows based on calibration windows
@@ -735,6 +804,36 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
     }
 
     // --------------------------------------------------------------
+    //  HEARTBEAT (Send to Firebase so other pillars see this pillar)
+    // --------------------------------------------------------------
+    let heartbeatInterval = null;
+
+    function startHeartbeat() {
+        if (!myId) return;
+        if (heartbeatInterval) clearInterval(heartbeatInterval);
+
+        heartbeatInterval = setInterval(() => {
+            db.ref(`devices/${myId}`).update({
+                lastSeen: Date.now() + serverOffset,
+                status: 'ACTIVE',
+                type: 'pillar',
+                x: pillarData[myId]?.x || 0,
+                y: pillarData[myId]?.y || 0,
+                speakerDelay: pillarData[myId]?.speakerDelayMs || 45,
+                micDelay: pillarData[myId]?.micDelayMs || 18
+            }).catch(e => console.warn("Heartbeat failed", e));
+        }, 10000);
+        addLog(`💓 Heartbeat started for ${myId}`, 'info');
+    }
+
+    function stopHeartbeat() {
+        if (heartbeatInterval) {
+            clearInterval(heartbeatInterval);
+            heartbeatInterval = null;
+        }
+    }
+
+    // --------------------------------------------------------------
     //  UPDATE DISPLAY
     // --------------------------------------------------------------
     function updateResultsDisplay() {
@@ -853,17 +952,18 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
         // Display final results
         let resultHtml = '<div class="section-title">✅ Calibration Results</div>';
         resultHtml += '<table class="measurement-table">';
-        resultHtml += '<tr><th>Pillar</th><th>Speaker Delay (ms)</th><th>Mic Delay (ms)</th><th>Status</th></tr>';
+        resultHtml += ' <tr><th>Pillar</th><th>Speaker Delay (ms)</th><th>Mic Delay (ms)</th><th>Status</th></tr>';
 
         for (let id of pillarOrder) {
             let spkVal = Math.round(Math.max(5, Math.min(300, spk[id])));
             let micVal = Math.round(Math.max(2, Math.min(150, mic[id])));
-            resultHtml += `<tr>
-                <td><span style="color:#88ffcc;">${id}</span></td>
-                <td><strong>${spkVal} ms</strong></td>
-                <td><strong>${micVal} ms</strong></td>
-                <td>📊</td>
-            </tr>`;
+            resultHtml += `
+                <tr>
+                    <td><span style="color:#88ffcc;">${id}</span></td>
+                    <td><strong>${spkVal} ms</strong></td>
+                    <td><strong>${micVal} ms</strong></td>
+                    <td>📊</td>
+                </tr>`;
 
             // Update the card display
             updateCardValue(id, 'spk', `${spkVal} ms`);
@@ -911,21 +1011,6 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
         pillarGrid.innerHTML = html;
     }
 
-        function startHeartbeat() {
-        if (!myId) return;
-        setInterval(() => {
-            db.ref(`devices/${myId}`).update({
-                lastSeen: Date.now() + serverOffset,
-                status: 'ACTIVE',
-                type: 'pillar',
-                x: pillarData[myId]?.x || 0,
-                y: pillarData[myId]?.y || 0,
-                speakerDelay: pillarData[myId]?.speakerDelayMs || 45,
-                micDelay: pillarData[myId]?.micDelayMs || 18
-            }).catch(e => console.warn("Heartbeat failed", e));
-        }, 10000);
-    }
-
     // --------------------------------------------------------------
     //  INIT
     // --------------------------------------------------------------
@@ -946,8 +1031,11 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
         });
 
         await loadPillarConfig();
-        startHearbeat();
+        startHeartbeat();
         renderCards();
+
+        // Initialize logging after we have myId
+        initLogging();
 
         // Start presence checking
         await checkAllPillarsOnline();
@@ -969,9 +1057,11 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
     window.onload = init;
 
     window.addEventListener('beforeunload', () => {
+        stopHeartbeat();
         if (micStream) {
             micStream.getTracks().forEach(track => track.stop());
         }
+        flushLogs();
     });
 </script>
 </body>
