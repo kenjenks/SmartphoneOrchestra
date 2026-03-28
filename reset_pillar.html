@@ -535,6 +535,12 @@
     //  DETECT OTHER PILLARS' PLAYBACK
     // --------------------------------------------------------------
     async function detectPillarPlayback(targetPillarId, expectedTimeServer, frequency) {
+        // Skip if listening to ourselves
+        if (targetPillarId === myId) {
+            addLog(`🔇 Skipping self-detection for ${targetPillarId}`, 'info');
+            return null;
+        }
+
         if (!analyser || !frequencyData) return null;
 
         const startTime = Date.now() + serverOffset;
@@ -620,6 +626,12 @@
             if (schedule.metadata && schedule.metadata.pillar_cal_windows) {
                 const windows = schedule.metadata.pillar_cal_windows;
 
+                // Log all windows for debugging
+                addLog(`📋 Pillar calibration windows:`);
+                for (const w of windows) {
+                    addLog(`   ${w.pillar_id}: ${w.start_ms}ms → ${w.end_ms}ms (${w.note_count} notes)`);
+                }
+
                 for (const window of windows) {
                     const pillarId = window.pillar_id;
                     const startMs = window.start_ms;
@@ -643,7 +655,6 @@
                         setTimeout(async () => {
                             addLog(`🎧 Listening for ${pillarId}...`);
 
-                            // Listen for the entire window
                             const detection = await detectPillarPlayback(pillarId, expectedStartServer, frequency);
 
                             if (detection) {
@@ -671,26 +682,56 @@
                                 updateResultsDisplay();
                             }
                         }, delayMs);
+                    } else {
+                        addLog(`⚠️ Detection window for ${pillarId} is too ${delayMs < 0 ? 'late' : 'far'} (${delayMs}ms), skipping`, 'warn');
                     }
                 }
             } else {
                 addLog('⚠️ No calibration windows found in tuning schedule', 'warn');
             }
 
-            // Also listen for when this pillar should play
-            // The pillar plays during its own window
+            // ============ SCHEDULE OWN PLAYBACK ============
+            // Find this pillar's window
             const myWindow = (schedule.metadata?.pillar_cal_windows || []).find(w => w.pillar_id === myId);
+
+            addLog(`📋 Checking playback for ${myId}:`);
+            addLog(`   myWindow found: ${myWindow ? 'YES' : 'NO'}`);
+            if (myWindow) {
+                addLog(`   myWindow.start_ms: ${myWindow.start_ms}ms`);
+                addLog(`   myWindow.end_ms: ${myWindow.end_ms}ms`);
+            }
+            addLog(`   pillarData[${myId}]?.audioUrl: ${pillarData[myId]?.audioUrl || 'MISSING'}`);
+
             if (myWindow && pillarData[myId]?.audioUrl) {
                 const myStartMs = myWindow.start_ms;
                 const myStartServer = tuningStartTime + myStartMs;
                 const nowServer = Date.now() + serverOffset;
                 const delayMs = myStartServer - nowServer - mySpeakerDelay;
 
+                addLog(`🎵 Scheduling playback for ${myId}:`);
+                addLog(`   myStartMs: ${myStartMs}ms`);
+                addLog(`   myStartServer: ${new Date(myStartServer).toLocaleTimeString()}`);
+                addLog(`   nowServer: ${new Date(nowServer).toLocaleTimeString()}`);
+                addLog(`   mySpeakerDelay: ${mySpeakerDelay}ms`);
+                addLog(`   delayMs: ${delayMs.toFixed(1)}ms`);
+
                 if (delayMs > 0 && delayMs < 10000) {
                     setTimeout(() => {
                         playMyPillarAudio(pillarData[myId].audioUrl, myStartServer);
                     }, delayMs);
                     addLog(`🎵 ${myId} will play at ${new Date(myStartServer).toLocaleTimeString()} (delay: ${Math.round(delayMs)}ms)`);
+                } else if (delayMs <= 0) {
+                    addLog(`⚠️ ${myId} playback window is ${Math.abs(delayMs)}ms late, playing immediately`, 'warn');
+                    playMyPillarAudio(pillarData[myId].audioUrl, myStartServer);
+                } else {
+                    addLog(`❌ ${myId} playback delay too large (${Math.round(delayMs)}ms > 10000ms), skipping`, 'warn');
+                }
+            } else {
+                if (!myWindow) {
+                    addLog(`❌ ${myId} has no calibration window in schedule`, 'warn');
+                }
+                if (!pillarData[myId]?.audioUrl) {
+                    addLog(`❌ ${myId} has no audioUrl in pillar config`, 'warn');
                 }
             }
 
@@ -1022,6 +1063,8 @@
             return;
         }
         myId = seatParam;
+        addLog(`🚀 ${myId} Loaded`);
+
         document.getElementById('pillar-id-badge').innerText = myId;
 
         // Clock sync
