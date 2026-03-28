@@ -185,6 +185,17 @@
             background: #1a1a1a;
             color: #88ffcc;
         }
+        .detection-flash {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #333;
+            transition: all 0.1s ease;
+            z-index: 1000;
+        }
     </style>
 </head>
 <body>
@@ -221,6 +232,8 @@
     </div>
 </div>
 
+<div id="detection-flash" class="detection-flash"></div>
+
 <script>
     // --------------------------------------------------------------
     //  FIREBASE CONFIG
@@ -238,14 +251,23 @@
     //  CONSTANTS
     // --------------------------------------------------------------
     const SILENT_WARMUP_MS = 100;
-    const WARMUP_ADVANCE_MS = 500;
     const LOG_FLUSH_INTERVAL_MS = 2000;
     const MAX_LOG_QUEUE_SIZE = 50;
     const FFT_SIZE = 2048;
     const MIN_DETECTION_ENERGY = 0.03;
+    const BASELINE_THRESHOLD_MULTIPLIER = 1.5;
+    const BASELINE_SAMPLES_MS = 200;
+    const PITCH_DETECTION_TOLERANCE_BINS = 6;
+    const PILLAR_ONSET_THRESHOLD = 2.0;
+    const PHASE1_SCHEDULE_WINDOW_MS = 200;
+    const SPEED_OF_SOUND = 343;
+
+    // Frequency bands
+    const PILLAR_MIN_FREQ = 183;
+    const PILLAR_MAX_FREQ = 499;
 
     // --------------------------------------------------------------
-    //  LOGGING SYSTEM (Sends logs to Firebase device_logs)
+    //  LOGGING SYSTEM
     // --------------------------------------------------------------
     let logQueue = [];
     let logFlushTimer = null;
@@ -357,10 +379,22 @@
     let frequencyData = null;
     let sampleRate = 48000;
 
+    // Baseline tracking for adaptive detection
+    let baselineSamples = [];
+    let baselineEnergy = 0;
+    let baselineComplete = false;
+    let baselineStartTime = 0;
+
     // Measurement storage
     let pillarMeasurements = {};
     let mySpeakerDelay = 45;
     let myMicDelay = 18;
+
+    // Processed measurements tracking (avoid duplicates)
+    let processedMeasurements = new Set();
+
+    // Detection windows tracking
+    let detectionWindows = new Map();
 
     // UI elements
     const calibrateBtn = document.getElementById('calibrate-btn');
@@ -384,30 +418,41 @@
         return sorted[mid];
     }
 
+    function calculateStdDev(values) {
+        if (values.length < 2) return 999;
+        const mean = values.reduce((a, b) => a + b, 0) / values.length;
+        const variance = values.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / values.length;
+        return Math.sqrt(variance);
+    }
+
+    function getFrequencyFromMidi(midiNote) {
+        return 440 * Math.pow(2, (midiNote - 69) / 12);
+    }
+
     function getBinForFrequency(frequency, sampleRate, fftSize) {
         const nyquist = sampleRate / 2;
         const bin = Math.floor(frequency / nyquist * (fftSize / 2));
         return Math.min(Math.max(0, bin), fftSize / 2 - 1);
     }
 
-    function calculateEnergyAtFrequency(frequency, sampleRate, fftSize, freqData) {
-        if (!freqData) return 0;
+    function calculateEnergyAtFrequency(frequency, sampleRate, fftSize) {
+        if (!frequencyData) return 0;
         const targetBin = getBinForFrequency(frequency, sampleRate, fftSize);
         const safeBin = Math.min(Math.max(0, targetBin), fftSize / 2 - 1);
 
         let energy = 0;
         let binsChecked = 0;
-        for (let i = Math.max(0, safeBin - 3); i <= Math.min(fftSize / 2 - 1, safeBin + 3); i++) {
-            if (freqData && i < freqData.length) {
-                energy += freqData[i] / 255;
+
+        for (let i = Math.max(0, safeBin - PITCH_DETECTION_TOLERANCE_BINS);
+             i <= Math.min(fftSize / 2 - 1, safeBin + PITCH_DETECTION_TOLERANCE_BINS);
+             i++) {
+            if (frequencyData && i < frequencyData.length) {
+                energy += frequencyData[i] / 255;
                 binsChecked++;
             }
         }
-        return binsChecked > 0 ? energy / binsChecked : 0;
-    }
 
-    function getFrequencyFromMidi(midiNote) {
-        return 440 * Math.pow(2, (midiNote - 69) / 12);
+        return binsChecked > 0 ? energy / binsChecked : 0;
     }
 
     // --------------------------------------------------------------
@@ -570,41 +615,121 @@
     }
 
     // --------------------------------------------------------------
-    //  DETECT OTHER PILLARS' PLAYBACK
+    //  IMPROVED DETECTION WITH WINDOW-BASED TRACKING
     // --------------------------------------------------------------
-    async function detectPillarPlayback(targetPillarId, expectedTimeServer, frequency) {
-        // Skip self-detection
-        if (targetPillarId === myId) {
-            return null;
-        }
+    function processPillarDetectionWindows(now, pillarNotes, pillarId, windowStartMs, windowEndMs) {
+        if (!analyser || !frequencyData) return;
+        if (!tuningStartTime) return;
 
-        if (!analyser || !frequencyData) return null;
+        const songPosition = now - tuningStartTime;
 
-        const startTime = Date.now() + serverOffset;
-        const timeoutMs = 2000;
-        let detectionTime = null;
-        let maxEnergy = 0;
+        // Only process within the detection window
+        if (songPosition < windowStartMs || songPosition > windowEndMs) return;
 
-        while ((Date.now() + serverOffset - startTime) < timeoutMs && !detectionTime) {
-            analyser.getByteFrequencyData(frequencyData);
+        // Find all notes that should be playing at this moment (within 200ms window)
+        const activeNotes = pillarNotes.filter(note => {
+            const timeDiff = Math.abs(songPosition - note.ms_offset);
+            return timeDiff <= PHASE1_SCHEDULE_WINDOW_MS;
+        });
 
-            const energy = calculateEnergyAtFrequency(frequency, sampleRate, FFT_SIZE, frequencyData);
+        for (const note of activeNotes) {
+            const noteKey = `${note.pillar_id}_${note.ms_offset}`;
 
-            if (energy > MIN_DETECTION_ENERGY && energy > maxEnergy) {
-                maxEnergy = energy;
-                detectionTime = Date.now() + serverOffset;
+            // Skip already processed notes
+            if (processedMeasurements.has(noteKey)) continue;
+
+            const expectedTimeAbs = tuningStartTime + note.ms_offset;
+            const frequency = getFrequencyFromMidi(note.midi);
+
+            // Get or create detection window data
+            if (!detectionWindows.has(noteKey)) {
+                detectionWindows.set(noteKey, {
+                    baselineStart: now,
+                    baselineSamples: [],
+                    baselineComplete: false,
+                    baselineEnergy: 0,
+                    expectedFreq: frequency,
+                    note: note
+                });
             }
-            await new Promise(r => setTimeout(r, 5));
-        }
 
-        if (detectionTime) {
-            const rawDelay = detectionTime - expectedTimeServer;
-            addLog(`🔍 Detected ${targetPillarId} → raw delay = ${rawDelay.toFixed(1)} ms (energy: ${maxEnergy.toFixed(3)})`);
-            return { rawDelay, detectionTime, energy: maxEnergy };
-        }
+            const windowData = detectionWindows.get(noteKey);
 
-        addLog(`⚠️ Could not detect ${targetPillarId} (timeout)`, 'warn');
-        return null;
+            // Calculate energy with harmonic detection (fundamental + 2nd harmonic)
+            const fundamentalEnergy = calculateEnergyAtFrequency(frequency, sampleRate, FFT_SIZE);
+            const harmonic2Energy = calculateEnergyAtFrequency(frequency * 2, sampleRate, FFT_SIZE);
+            const combinedEnergy = (fundamentalEnergy + harmonic2Energy * 0.5) / 1.5;
+
+            // Baseline establishment for this note
+            if (!windowData.baselineComplete) {
+                if (now - windowData.baselineStart < BASELINE_SAMPLES_MS) {
+                    windowData.baselineSamples.push(combinedEnergy);
+                } else if (windowData.baselineSamples.length > 0) {
+                    const sorted = [...windowData.baselineSamples].sort((a, b) => a - b);
+                    windowData.baselineEnergy = sorted[Math.floor(sorted.length / 2)];
+                    windowData.baselineComplete = true;
+                    addLog(`📊 Baseline established for ${pillarId} note at ${note.ms_offset}ms: ${windowData.baselineEnergy.toFixed(4)}`);
+                }
+                return;
+            }
+
+            // Dynamic threshold based on baseline
+            const dynamicThreshold = Math.max(
+                windowData.baselineEnergy * BASELINE_THRESHOLD_MULTIPLIER,
+                MIN_DETECTION_ENERGY
+            );
+
+            // Check if we have a detection
+            if (combinedEnergy > dynamicThreshold) {
+                const detectionTime = now;
+                const rawDelay = detectionTime - expectedTimeAbs;
+
+                // Sanity check - delay should be reasonable
+                if (Math.abs(rawDelay) < 500) {
+                    addLog(`🔍 Detected ${pillarId} note ${note.index} (${note.pitch}) → raw delay = ${rawDelay.toFixed(1)} ms (energy: ${combinedEnergy.toFixed(3)}, threshold: ${dynamicThreshold.toFixed(3)})`);
+
+                    // Visual feedback
+                    const flash = document.getElementById('detection-flash');
+                    if (flash) {
+                        flash.style.background = '#88ffcc';
+                        setTimeout(() => { flash.style.background = '#333'; }, 100);
+                    }
+
+                    // Store measurement
+                    if (!pillarMeasurements[pillarId]) {
+                        pillarMeasurements[pillarId] = [];
+                    }
+
+                    pillarMeasurements[pillarId].push({
+                        rawDelay: rawDelay,
+                        listenerId: myId,
+                        timestamp: detectionTime,
+                        energy: combinedEnergy,
+                        expectedTime: expectedTimeAbs,
+                        noteIndex: note.index,
+                        notePitch: note.pitch,
+                        noteMsOffset: note.ms_offset
+                    });
+
+                    // Store to Firebase
+                    const measurementRef = db.ref(`pillar_calibration/measurements/${pillarId}/${myId}`);
+                    await measurementRef.set({
+                        rawDelayMs: rawDelay,
+                        listenerId: myId,
+                        timestamp: detectionTime,
+                        expectedTime: expectedTimeAbs,
+                        noteIndex: note.index,
+                        notePitch: note.pitch,
+                        noteMsOffset: note.ms_offset,
+                        energy: combinedEnergy
+                    });
+
+                    processedMeasurements.add(noteKey);
+                    detectionWindows.delete(noteKey);
+                    updateResultsDisplay();
+                }
+            }
+        }
     }
 
     // --------------------------------------------------------------
@@ -683,16 +808,18 @@
         }
 
         let html = '<table class="measurement-table">';
-        html += '  <tr><th>Target Pillar</th><th>Raw Delays (ms)</th><th>Median (ms)</th><th>Samples</th></tr>';
+        html += '<tr><th>Target Pillar</th><th>Raw Delays (ms)</th><th>Median (ms)</th><th>StdDev (ms)</th><th>Samples</th></tr>';
 
         for (const [pillarId, measurements] of Object.entries(pillarMeasurements)) {
             const rawDelays = measurements.map(m => m.rawDelay);
             const median = calculateMedian(rawDelays);
+            const stdDev = calculateStdDev(rawDelays);
             html += `
                 <tr>
                     <td style="color:#88ffcc;">${pillarId}</td>
                     <td>${rawDelays.map(d => d.toFixed(1)).join(', ')}</td>
                     <td><strong>${median.toFixed(1)} ms</strong></td>
+                    <td>${stdDev.toFixed(1)} ms</td>
                     <td>${measurements.length}</td>
                 </tr>
             `;
@@ -703,9 +830,10 @@
     }
 
     // --------------------------------------------------------------
-    //  COMPUTE PILLAR DELAYS
+    //  COMPUTE PILLAR DELAYS (Improved with outlier rejection)
     // --------------------------------------------------------------
     async function computePillarDelays() {
+        // Also collect from Firebase in case we missed any
         const snap = await db.ref('pillar_calibration/measurements').once('value');
         const allMeasurements = snap.val() || {};
 
@@ -722,7 +850,9 @@
                         rawDelay: data.rawDelayMs,
                         listenerId: data.listenerId,
                         timestamp: data.timestamp,
-                        expectedTime: data.expectedTime
+                        expectedTime: data.expectedTime,
+                        noteIndex: data.noteIndex,
+                        notePitch: data.notePitch
                     });
                 }
             }
@@ -735,6 +865,7 @@
             return;
         }
 
+        // Calculate delays using iterative refinement
         let spk = {}, mic = {};
         for (let id of pillarOrder) {
             spk[id] = pillarData[id].speakerDelayMs;
@@ -743,6 +874,7 @@
 
         const iterations = 6;
         for (let iter = 0; iter < iterations; iter++) {
+            // Update speaker delays
             for (let player of pillarOrder) {
                 let values = [];
                 const measurements = pillarMeasurements[player] || [];
@@ -751,17 +883,31 @@
                     if (listener === player) continue;
                     const raw = meas.rawDelay;
                     if (raw === undefined) continue;
+
                     const dist = Math.sqrt(
                         Math.pow(pillarData[player]?.x - pillarData[listener]?.x, 2) +
                         Math.pow(pillarData[player]?.y - pillarData[listener]?.y, 2)
                     );
-                    const prop = (dist / 343) * 1000;
+                    const prop = (dist / SPEED_OF_SOUND) * 1000;
                     const est = raw - prop - mic[listener];
-                    if (isFinite(est) && Math.abs(est) < 300) values.push(est);
+
+                    // Outlier rejection
+                    if (isFinite(est) && Math.abs(est) < 300 && Math.abs(est) > 0) {
+                        values.push(est);
+                    }
                 }
-                if (values.length) spk[player] = calculateMedian(values);
+                if (values.length >= 3) {
+                    const median = calculateMedian(values);
+                    const stdDev = calculateStdDev(values);
+                    // Only accept if stdDev is reasonable
+                    if (stdDev < 100) {
+                        spk[player] = median;
+                        addLog(`📊 ${player} speaker delay: ${median.toFixed(1)}ms (σ=${stdDev.toFixed(1)}ms, n=${values.length})`);
+                    }
+                }
             }
 
+            // Update mic delays
             for (let listener of pillarOrder) {
                 let values = [];
                 for (let player of pillarOrder) {
@@ -771,32 +917,46 @@
                     if (!meas) continue;
                     const raw = meas.rawDelay;
                     if (raw === undefined) continue;
+
                     const dist = Math.sqrt(
                         Math.pow(pillarData[player]?.x - pillarData[listener]?.x, 2) +
                         Math.pow(pillarData[player]?.y - pillarData[listener]?.y, 2)
                     );
-                    const prop = (dist / 343) * 1000;
+                    const prop = (dist / SPEED_OF_SOUND) * 1000;
                     const est = raw - spk[player] - prop;
-                    if (isFinite(est) && Math.abs(est) < 150) values.push(est);
+
+                    if (isFinite(est) && Math.abs(est) < 150 && est > 0) {
+                        values.push(est);
+                    }
                 }
-                if (values.length) mic[listener] = calculateMedian(values);
+                if (values.length >= 3) {
+                    const median = calculateMedian(values);
+                    const stdDev = calculateStdDev(values);
+                    if (stdDev < 50) {
+                        mic[listener] = median;
+                        addLog(`📊 ${listener} mic delay: ${median.toFixed(1)}ms (σ=${stdDev.toFixed(1)}ms, n=${values.length})`);
+                    }
+                }
             }
         }
 
         let resultHtml = '<div class="section-title">✅ Calibration Results</div>';
         resultHtml += '<table class="measurement-table">';
-        resultHtml += '  <tr><th>Pillar</th><th>Speaker Delay (ms)</th><th>Mic Delay (ms)</th><th>Status</th></tr>';
+        resultHtml += '<tr><th>Pillar</th><th>Speaker Delay (ms)</th><th>Mic Delay (ms)</th><th>Samples</th><th>Status</th></tr>';
 
         for (let id of pillarOrder) {
             let spkVal = Math.round(Math.max(5, Math.min(300, spk[id])));
             let micVal = Math.round(Math.max(2, Math.min(150, mic[id])));
+            const sampleCount = pillarMeasurements[id]?.length || 0;
+
             resultHtml += `
                 <tr>
                     <td style="color:#88ffcc;">${id}</td>
                     <td><strong>${spkVal} ms</strong></td>
                     <td><strong>${micVal} ms</strong></td>
-                    <td>📊</td>
-                </tr>
+                    <td>${sampleCount}</td>
+                    <td>${sampleCount >= 4 ? '✅' : '⚠️'}</td>
+                 </tr>
             `;
             updateCardValue(id, 'spk', `${spkVal} ms`);
             updateCardValue(id, 'mic', `${micVal} ms`);
@@ -844,7 +1004,7 @@
     }
 
     // --------------------------------------------------------------
-    //  LISTEN TO TUNING MOVEMENT (with preload and warm-up)
+    //  LISTEN TO TUNING MOVEMENT (Improved with window-based detection)
     // --------------------------------------------------------------
     async function listenToTuningMovement() {
         if (isListening) {
@@ -874,7 +1034,7 @@
             return;
         }
 
-        // ============ PRELOAD AUDIO NOW (before waiting for conductor) ============
+        // Preload audio
         const myConfig = pillarData[myId];
         if (myConfig && myConfig.audioUrl) {
             addLog(`📦 Preloading audio for ${myId}...`, 'info');
@@ -882,11 +1042,11 @@
             if (preloadSuccess) {
                 addLog(`✅ Audio preloaded for ${myId}`, 'success');
             } else {
-                addLog(`⚠️ Failed to preload audio for ${myId}, will retry when tuning starts`, 'warn');
+                addLog(`⚠️ Failed to preload audio for ${myId}`, 'warn');
             }
         }
 
-        // ============ OPTIONAL: PRIME HARDWARE WITH SILENT WARM-UP ============
+        // Prime hardware with silent warm-up
         if (myConfig && myConfig.audioUrl && bufferCache[myConfig.audioUrl]) {
             addLog(`🔇 Priming audio hardware for ${myId}...`, 'info');
             await warmUpCalibrationMp3(myConfig.audioUrl, myId);
@@ -922,63 +1082,90 @@
             addLog(`🎵 Tuning movement detected! Start time: ${new Date(schedule.startTime).toLocaleTimeString()}`, 'success');
             tuningStartTime = schedule.startTime;
             pillarMeasurements = {};
+            processedMeasurements.clear();
+            detectionWindows.clear();
+            baselineComplete = false;
+            baselineSamples = [];
 
-            // Schedule detection windows
+            // Load pillar notes from schedule
+            let pillarNotes = [];
+            if (schedule.pillar_notes && schedule.pillar_notes.length > 0) {
+                pillarNotes = schedule.pillar_notes;
+                addLog(`📡 Loaded ${pillarNotes.length} pillar notes from tuning schedule`);
+            } else {
+                addLog(`⚠️ No pillar_notes in tuning schedule`, 'warn');
+            }
+
+            // Get calibration windows
+            let windows = [];
             if (schedule.metadata && schedule.metadata.pillar_cal_windows) {
-                const windows = schedule.metadata.pillar_cal_windows;
-
+                windows = schedule.metadata.pillar_cal_windows;
                 addLog(`📋 Pillar calibration windows:`);
                 for (const w of windows) {
                     addLog(`   ${w.pillar_id}: ${w.start_ms}ms → ${w.end_ms}ms (${w.note_count} notes)`);
                 }
+            } else {
+                addLog(`⚠️ No calibration windows in tuning schedule`, 'warn');
+            }
 
-                for (const window of windows) {
-                    const pillarId = window.pillar_id;
-                    const startMs = window.start_ms;
-                    const pillarNotes = (schedule.pillar_notes || []).filter(n => n.pillar_id === pillarId);
-                    const midiNote = pillarNotes.length > 0 ? pillarNotes[0].midi : 69;
-                    const frequency = getFrequencyFromMidi(midiNote);
-                    const expectedStartServer = tuningStartTime + startMs;
-                    const nowServer = Date.now() + serverOffset;
-                    const delayMs = expectedStartServer - nowServer;
+            // Filter notes for each window and set up continuous detection
+            for (const window of windows) {
+                const pillarId = window.pillar_id;
+                const startMs = window.start_ms;
+                const endMs = window.end_ms;
 
-                    addLog(`🎯 Will listen for ${pillarId} at ~${frequency.toFixed(0)}Hz between ${(startMs/1000).toFixed(1)}s-${(startMs/1000 + 5).toFixed(1)}s`);
+                // Get all notes for this pillar within this window
+                const pillarNotesForWindow = pillarNotes.filter(n =>
+                    n.pillar_id === pillarId &&
+                    n.ms_offset >= startMs &&
+                    n.ms_offset <= endMs
+                );
 
-                    if (delayMs > 0 && delayMs < 25000) {
-                        setTimeout(async () => {
-                            addLog(`🎧 Listening for ${pillarId}...`);
-                            const detection = await detectPillarPlayback(pillarId, expectedStartServer, frequency);
-                            if (detection) {
-                                if (!pillarMeasurements[pillarId]) {
-                                    pillarMeasurements[pillarId] = [];
-                                }
-                                pillarMeasurements[pillarId].push({
-                                    rawDelay: detection.rawDelay,
-                                    listenerId: myId,
-                                    timestamp: detection.detectionTime,
-                                    energy: detection.energy,
-                                    expectedTime: expectedStartServer
-                                });
-                                const measurementRef = db.ref(`pillar_calibration/measurements/${pillarId}/${myId}`);
-                                await measurementRef.set({
-                                    rawDelayMs: detection.rawDelay,
-                                    listenerId: myId,
-                                    timestamp: detection.detectionTime,
-                                    expectedTime: expectedStartServer,
-                                    energy: detection.energy
-                                });
-                                updateResultsDisplay();
+                if (pillarNotesForWindow.length === 0) {
+                    addLog(`⚠️ No pillar notes found for ${pillarId} in window ${startMs}-${endMs}ms`, 'warn');
+                    continue;
+                }
+
+                const expectedStartServer = tuningStartTime + startMs;
+                const nowServer = Date.now() + serverOffset;
+                const delayMs = expectedStartServer - nowServer;
+
+                addLog(`🎯 Will listen for ${pillarId} (${pillarNotesForWindow.length} notes) between ${(startMs/1000).toFixed(1)}s-${(endMs/1000).toFixed(1)}s`);
+
+                if (delayMs > 0 && delayMs < 25000) {
+                    // Start continuous detection loop for this window
+                    setTimeout(() => {
+                        addLog(`🎧 Listening for ${pillarId}...`);
+
+                        // Continuous detection loop
+                        const detectionInterval = setInterval(() => {
+                            const now = Date.now() + serverOffset;
+                            const songPosition = now - tuningStartTime;
+
+                            // Stop if we're past the window
+                            if (songPosition > endMs + 500) {
+                                clearInterval(detectionInterval);
+                                addLog(`⏹️ Stopped listening for ${pillarId} (window ended)`);
+                                return;
                             }
-                        }, delayMs);
-                    } else {
-                        addLog(`⚠️ Detection window for ${pillarId} is too ${delayMs < 0 ? 'late' : 'far'} (${delayMs}ms), skipping`, 'warn');
-                    }
+
+                            // Process detections for this pillar
+                            processPillarDetectionWindows(now, pillarNotesForWindow, pillarId, startMs, endMs);
+
+                        }, 20); // Check every 20ms for better timing resolution
+
+                        // Store interval ID to clear later
+                        if (!window.detectionIntervals) window.detectionIntervals = [];
+                        window.detectionIntervals.push(detectionInterval);
+
+                    }, delayMs);
+                } else {
+                    addLog(`⚠️ Detection window for ${pillarId} is too ${delayMs < 0 ? 'late' : 'far'} (${delayMs}ms), skipping`, 'warn');
                 }
             }
 
-            // Schedule own playback (audio already preloaded)
-            const myWindow = (schedule.metadata?.pillar_cal_windows || []).find(w => w.pillar_id === myId);
-
+            // Schedule own playback
+            const myWindow = (windows || []).find(w => w.pillar_id === myId);
             if (myWindow && pillarData[myId]?.audioUrl) {
                 const myStartMs = myWindow.start_ms;
                 const myStartServer = tuningStartTime + myStartMs;
@@ -998,7 +1185,7 @@
                 }
             }
 
-            // Set timeout to stop listening after Phase 1
+            // Timeout to stop listening after Phase 1 completes
             setTimeout(() => {
                 isListening = false;
                 hasStartedListening = false;
@@ -1015,7 +1202,7 @@
                     currentTuningListener = null;
                     addLog('🔇 Tuning listener removed', 'info');
                 }
-            }, 25000);
+            }, 30000); // 30 second timeout
         };
 
         currentTuningListener = tuningListener;
