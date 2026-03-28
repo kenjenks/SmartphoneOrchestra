@@ -372,6 +372,8 @@
     let seatData = {};
     let refinementTimer = null;
     let scheduledRecordings = new Set();
+    let correctionCount = 0;
+    const MAX_CORRECTIONS = 3;
 
     // ============================================================================
     // UTILITIES
@@ -954,7 +956,7 @@
         const newDelay = currentDelay + medianShift;
 
         // Sanity bounds - allow negative for early devices, up to 2000ms for high-latency devices
-        const MIN_DELAY = -100;
+        const MIN_DELAY = -500;
         const MAX_DELAY = 2000;
         const clampedDelay = Math.max(MIN_DELAY, Math.min(MAX_DELAY, newDelay));
 
@@ -1008,14 +1010,99 @@
     }
 
     function evaluateInRealTime() {
+        // Skip if already calibrated
         if (isHappy) return;
+
+        // Force completion after max corrections (fallback for when convergence never triggers)
+        if (correctionCount >= MAX_CORRECTIONS) {
+            log(`✅ Max corrections (${MAX_CORRECTIONS}) reached, completing calibration`, 'info');
+            completeCalibration();
+            return;
+        }
+
+        // Need enough samples for a reliable estimate
         if (rawTimeShifts.length < MIN_SAMPLES_FOR_CORRECTION) return;
+
         const medianShift = calculateMedian(rawTimeShifts);
         const stdDev = calculateStdDev(rawTimeShifts);
+        const currentDelay = currentSpeakerDelay;
+
+        // Update UI with current stats
         document.getElementById('debug-stddev').innerText = `${stdDev.toFixed(1)}ms`;
-        document.getElementById('debug-speaker-delay').innerText = `${currentSpeakerDelay.toFixed(1)}ms`;
-        if (Math.abs(medianShift) <= 15 && stdDev <= 15) { if (!isHappy) { log(`✅ Converged! error=${Math.abs(medianShift).toFixed(1)}ms, σ=${stdDev.toFixed(1)}ms`, 'success'); completeCalibration(); } return; }
-        if (shouldIterate(medianShift, stdDev, rawTimeShifts.length)) applyCorrection(medianShift);
+        document.getElementById('debug-speaker-delay').innerText = `${currentDelay.toFixed(1)}ms`;
+
+        // Log the current state
+        log(`📊 Real-time: median shift=${medianShift > 0 ? '+' : ''}${medianShift.toFixed(1)}ms, σ=${stdDev.toFixed(1)}ms, samples=${rawTimeShifts.length}, current delay=${currentDelay.toFixed(1)}ms, corrections=${correctionCount}`);
+
+        // ============================================================
+        // CONVERGENCE CHECK
+        // ============================================================
+        // Check if we're already converged (median shift and stdDev within threshold)
+        if (Math.abs(medianShift) <= convergenceStdDevMs && stdDev <= convergenceStdDevMs) {
+            if (!isHappy) {
+                log(`✅ Converged! Error ${Math.abs(medianShift).toFixed(1)}ms ≤ ${convergenceStdDevMs}ms, σ=${stdDev.toFixed(1)}ms`, 'success');
+                completeCalibration();
+            }
+            return;
+        }
+
+        // ============================================================
+        // LIMIT CHECKS
+        // ============================================================
+        const MIN_DELAY = -50;
+        const MAX_DELAY = 1000;
+
+        if (currentDelay <= MIN_DELAY && medianShift > 0) {
+            log(`⚠️ At minimum delay (${currentDelay.toFixed(1)}ms) but still ${medianShift > 0 ? 'early' : 'late'} by ${Math.abs(medianShift).toFixed(1)}ms`);
+            log(`   Device may have unusually low latency (${currentDelay - medianShift}ms theoretical)`);
+            // Force completion if we're at limit and have done at least one correction
+            if (correctionCount > 0) {
+                log(`   Forcing completion due to limit hit`, 'info');
+                completeCalibration();
+            }
+            return;
+        }
+
+        if (currentDelay >= MAX_DELAY && medianShift < 0) {
+            log(`⚠️ At maximum delay (${currentDelay.toFixed(1)}ms) but still late by ${Math.abs(medianShift).toFixed(1)}ms`);
+            log(`   Device may have unusually high latency (${currentDelay - medianShift}ms theoretical)`);
+            // Force completion if we're at limit and have done at least one correction
+            if (correctionCount > 0) {
+                log(`   Forcing completion due to limit hit`, 'info');
+                completeCalibration();
+            }
+            return;
+        }
+
+        // ============================================================
+        // SHOULD WE ITERATE?
+        // ============================================================
+        if (shouldIterate(medianShift, stdDev, rawTimeShifts.length)) {
+            // If the error is already within min correction threshold, we're done
+            if (Math.abs(medianShift) <= MIN_CORRECTION_MS) {
+                log(`✅ In sync: error ${Math.abs(medianShift).toFixed(1)}ms ≤ ${MIN_CORRECTION_MS}ms`);
+                if (!isHappy && stdDev < convergenceStdDevMs) {
+                    completeCalibration();
+                } else if (!isHappy && correctionCount >= 2) {
+                    // If we've done a couple corrections and error is small, force complete
+                    log(`   Forcing completion after ${correctionCount} corrections`, 'info');
+                    completeCalibration();
+                }
+                return;
+            }
+
+            // Apply the correction
+            applyCorrection(medianShift);
+            correctionCount++;
+
+            // Force a log flush after correction to ensure we capture it
+            flushLogs();
+        } else {
+            // Not enough samples or too inconsistent - just log that we're waiting
+            if (rawTimeShifts.length >= MIN_SAMPLES_FOR_CORRECTION && stdDev > 50) {
+                log(`⚠️ Waiting for more consistent data (σ=${stdDev.toFixed(1)}ms, samples=${rawTimeShifts.length})`);
+            }
+        }
     }
 
     function restartWithNewDelay(newSpeakerDelay) {
