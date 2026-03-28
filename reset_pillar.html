@@ -911,6 +911,21 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
         pillarGrid.innerHTML = html;
     }
 
+        function startHeartbeat() {
+        if (!myId) return;
+        setInterval(() => {
+            db.ref(`devices/${myId}`).update({
+                lastSeen: Date.now() + serverOffset,
+                status: 'ACTIVE',
+                type: 'pillar',
+                x: pillarData[myId]?.x || 0,
+                y: pillarData[myId]?.y || 0,
+                speakerDelay: pillarData[myId]?.speakerDelayMs || 45,
+                micDelay: pillarData[myId]?.micDelayMs || 18
+            }).catch(e => console.warn("Heartbeat failed", e));
+        }, 10000);
+    }
+
     // --------------------------------------------------------------
     //  INIT
     // --------------------------------------------------------------
@@ -931,6 +946,7 @@ Helps sound tech calibrate the four Samsung A9 Tablets forming the pillars at ea
         });
 
         await loadPillarConfig();
+        startHearbeat();
         renderCards();
 
         // Start presence checking
