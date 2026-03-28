@@ -160,10 +160,32 @@
         const HEARTBEAT_INTERVAL_MS = 10000;
 
         // ==================== UTILITY FUNCTIONS ====================
-        function log(message, type = 'info') {
-            const serverTimestamp = Date.now() + (serverOffset || 0);
-            const timeStr = new Date(serverTimestamp).toISOString().substr(11, 12);
-            console.log(`[${timeStr}] [${mySeat?.id || 'unknown'}] ${message}`);
+
+        let currentSessionId = null;
+
+        function log(message, eventType = "log", meta = {}) {
+            const timestamp = Date.now() + (serverOffset || 0);
+            const pillarId = mySeat?.id || myPillarId || 'unknown';
+
+            // Always send to Firebase
+            if (currentSessionId) {
+                const payload = {
+                    pillarId,
+                    type: eventType,
+                    message,
+                    t: timestamp,
+                    ...meta
+                };
+
+                db.ref(`tuningLogs/${currentSessionId}/${pillarId}`)
+                  .push(payload)
+                  .catch(() => {});
+            }
+
+            // Optional: still console log (helps during desktop testing)
+            console.log(`[${pillarId}] ${message}`);
+
+            // Optional: update on-screen debug UI (xplaypillar already has this)
         }
 
         // ==================== CLOCK SYNC ====================
