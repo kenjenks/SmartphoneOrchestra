@@ -1022,7 +1022,27 @@
                 return;
             }
 
-            addLog('✅ Microphone ready. Starting to listen for tuning movement...', 'success');
+            addLog('✅ Microphone ready. Waiting for all pillars to be online...', 'success');
+
+            // Wait up to 30 seconds for all pillars to be online
+            let retries = 0;
+            const maxRetries = 30;
+            while (!allPillarsPresent() && retries < maxRetries) {
+                await new Promise(r => setTimeout(r, 1000));
+                retries++;
+                if (retries % 5 === 0) {
+                    addLog(`⏳ Still waiting for all pillars... (${retries}s)`, 'info');
+                }
+            }
+
+            if (!allPillarsPresent()) {
+                addLog('❌ Timeout waiting for all pillars to be online', 'warn');
+                calibrateBtn.disabled = false;
+                calibrateBtn.innerText = '🎤 Grant Mic Permission & Start';
+                return;
+            }
+
+            addLog('✅ All pillars online. Starting to listen for tuning movement...', 'success');
             hasStartedListening = true;
             calibrateBtn.disabled = true;
             calibrateBtn.innerText = '🎧 Listening...';
