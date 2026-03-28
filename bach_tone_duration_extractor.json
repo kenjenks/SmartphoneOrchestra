@@ -39,25 +39,39 @@
     "PILLAR_FL": {
       "part_id": "Piccolo FL",
       "staff": 1,
+      "instrument": "Piccolo",
       "part_name": "Piccolo FL"
     },
     "PILLAR_FR": {
       "part_id": "Piccolo FR",
       "staff": 1,
+      "instrument": "Piccolo",
       "part_name": "Piccolo FR"
     },
     "PILLAR_BR": {
       "part_id": "Piccolo BR",
       "staff": 1,
+      "instrument": "Piccolo",
       "part_name": "Piccolo BR"
     },
     "PILLAR_BL": {
       "part_id": "Piccolo BL",
       "staff": 1,
+      "instrument": "Piccolo",
       "part_name": "Piccolo BL"
     }
   },
   "_pillar_musicxml_mapping_comment": "Maps pillar IDs to MusicXML part IDs and staff numbers. Staff 1 is the right hand (piccolo part), Staff 2 is left hand (piano part - ignore).",
+
+  "string_quartet_parts": [
+    "Violin",
+    "Viola",
+    "Violoncello",
+    "Cello",
+    "Contrabass",
+    "Bass"
+  ],
+  "_string_quartet_parts_comment": "Parts to treat as string quartet - pillar notes overlapping with these will be filtered out",
   
   "window_start_measures": [1, 3, 5, 7],
   "_window_start_measures_comment": "Starting measure numbers for each pillar's calibration window (2 measures each, in pillar_order sequence)",
