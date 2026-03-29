@@ -227,7 +227,13 @@
     let isListenOnlyMode = false;
     let audioCtx = null;
     let masterGain = null;
-    let mySeat = null;
+
+    let mySeat = { id: null, x: 0, y: 0 };
+    let assetsPreloaded = false;
+    let micPermissionGranted = false;
+    let micPermissionRequested = false;
+    let myNeighbors = [];
+
     let serverOffset = 0;
     let bufferCache = {};
     let activeAudioCues = [];
@@ -246,14 +252,11 @@
     let isMicActive = false;
     let frequencyData = null;
     let sampleRate = 48000;
-    let micPermissionGranted = false;
-    let micPermissionRequested = false;
     let currentAvgEnergy = 0;
     let baselineEnergy = 0;
     let baselineSamples = [];
     let baselineComplete = false;
     let baselineStartTime = 0;
-    let myNeighbors = [];
     let allListeningTargets = [];
     let noteTimings = [];
     let noteSchedule = [];
@@ -362,7 +365,7 @@
         const initBtn = document.getElementById('init-permissions-btn');
         if (initBtn) {
             // Only allow setup to start if we know the seat and assets are ready
-            const canStartSetup = mySeat && (typeof assetsPreloaded !== 'undefined' && assetsPreloaded);
+            const canStartSetup = mySeat && assetsPreloaded;
             initBtn.disabled = !canStartSetup;
 
             // Hide this button once the mic is granted (since we'll show the ready-btn)
@@ -376,9 +379,9 @@
         if (msgDisplay) {
             if (!mySeat) {
                 msgDisplay.innerText = "Identifying seat...";
-            } else if (typeof assetsPreloaded !== 'undefined' && !assetsPreloaded) {
+            } else if (!assetsPreloaded) {
                 msgDisplay.innerText = "Loading assets...";
-            } else if (typeof micPermissionGranted !== 'undefined' && !micPermissionGranted) {
+            } else if (!micPermissionGranted) {
                 msgDisplay.innerText = "Please grant microphone permission.";
             } else {
                 msgDisplay.innerText = "System Ready. Please Enter.";
@@ -397,8 +400,8 @@
         const readyBtn = document.getElementById('ready-btn');
         if (readyBtn) {
             const isReady = mySeat &&
-                            (typeof assetsPreloaded === 'undefined' || assetsPreloaded) &&
-                            micPermissionGranted; // Use the global let micPermissionGranted
+                            assetsPreloaded &&
+                            micPermissionGranted;
 
             readyBtn.disabled = !isReady;
         }
@@ -464,7 +467,14 @@
 
     db.ref(".info/serverTimeOffset").on("value", snap => {
         serverOffset = snap.val() || 0;
-        document.getElementById('sync-ind').className = 'indicator active';
+
+        const syncInd = document.getElementById('sync-ind');
+        if (syncInd) {
+            syncInd.className = 'indicator active';
+        } else {
+            // If the element is gone, we just update our general system message instead
+            updateDeviceStatusDisplay();
+        }
     });
 
     // ============================================================================
@@ -504,38 +514,44 @@
         const seatParam = urlParams.get('seat');
 
         if (seatParam) {
-            // 1. Assign local ID
+            // 1. Assign local ID to the pre-initialized mySeat object
             mySeat.id = seatParam;
 
-            // 2. Log to console/internal log
             log(`Identity found in URL: ${mySeat.id}`);
 
             try {
-                // 3. Fetch spatial coordinates (X, Y) from the seat_config in Firebase
-                // This allows the device to know its physical location for spatial audio
+                // 2. Fetch spatial coordinates from Firebase config
+                // Path: config/seats/[SeatID] (e.g., config/seats/C1)
                 const snap = await db.ref('config/seats/' + mySeat.id).once('value');
 
                 if (snap.exists()) {
                     const data = snap.val();
-                    mySeat.x = data.x;
-                    mySeat.y = data.y;
+                    // Store X/Y for spatial audio and visual calculations
+                    mySeat.x = data.x !== undefined ? data.x : 0;
+                    mySeat.y = data.y !== undefined ? data.y : 0;
                     log(`Spatial mapping resolved: [${mySeat.x}, ${mySeat.y}]`);
                 } else {
-                    log(`⚠️ Warning: Seat ${mySeat.id} not found in database config.`);
+                    log(`⚠️ Warning: Seat ${mySeat.id} not found in database config. Using defaults.`);
                 }
 
-                // 4. Update the UI to show the Seat ID and progress
+                // 3. Update the UI
+                // This fills the "Seat Location" span and updates the status message
                 updateDeviceStatusDisplay();
                 return true;
 
             } catch (error) {
                 log(`❌ Firebase Identity Error: ${error.message}`);
+                // Fallback: still allow the app to run with the ID from the URL
+                updateDeviceStatusDisplay();
                 return false;
             }
         } else {
             log('❌ Error: No ?seat= parameter found in URL.');
             const msg = document.getElementById('system-msg');
-            if (msg) msg.innerText = "Error: Invalid Seat Link";
+            if (msg) {
+                msg.innerText = "Error: Invalid Seat Link";
+                msg.style.color = "#ff4444";
+            }
             return false;
         }
     }
@@ -1189,7 +1205,7 @@
     // ============================================================================
     // ASSET PRELOAD
     // ============================================================================
-    let assetsPreloaded = false;
+
     async function preloadAssets() {
         document.getElementById('asset-progress').style.display = 'block';
         log("📦 Starting asset preload...");
