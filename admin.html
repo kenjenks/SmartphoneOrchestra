@@ -595,7 +595,7 @@ Operational SOP for Admin:
                     await db.ref('neighbor_map').set(neighborMap);
 
                     log("🎉 SUCCESS: Seat Config and Neighbor Map are live.");
-                    document.getElementById('seat-config-status').innerText = "Loaded";
+                    document.getElementById('seat-status').innerText = "Loaded";
 
                 } catch (err) {
                     log(`❌ Critical Upload Error: ${err.message}`);
