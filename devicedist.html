@@ -7,6 +7,7 @@
 
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/nosleep/0.12.0/NoSleep.min.js"></script>
 
     <style>
         body {
@@ -310,6 +311,7 @@
     // ============================================================================
     // GLOBAL STATE
     // ============================================================================
+    const noSleep = new NoSleep();
     let isListenOnlyMode = false;
     let audioCtx = null;
     let masterGain = null;
@@ -1363,26 +1365,34 @@
     if (micButton) { micButton.onclick = async () => { await window.requestMicrophonePermission(); if (micPermissionGranted && mySeat && myNeighbors && assetsPreloaded) document.getElementById('ready-btn').disabled = false; }; }
     document.getElementById('ready-btn').onclick = async () => {
         try {
-            log("🎯 ENTER THE ISLE button pressed");
-            if (!micPermissionGranted) { log("⚠️ Please grant microphone permission first"); return; }
-            if (!audioCtx) { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); masterGain = audioCtx.createGain(); masterGain.gain.value = MASTER_PLAYBACK_GAIN; masterGain.connect(audioCtx.destination); }
-            if (audioCtx.state === 'suspended') await audioCtx.resume();
-            document.getElementById('setup-screen').style.display = 'none';
-            document.getElementById('show-screen').style.display = 'block';
-            log("🎬 Entered show screen");
-            const canvas = document.getElementById('stage-canvas');
-            canvas.width = window.innerWidth;
-            canvas.height = window.innerHeight;
-            await requestWakeLock();
-            requestAnimationFrame(frame);
-            db.ref('show/currentCue').on('value', snap => { const cue = snap.val(); if (!cue) return; if (cue.action === 'KILL') { log("💀 KILL signal - reloading"); location.reload(); } else if (cue.action === 'GO') { handleMovementStart(cue); } });
-            initTuningListener();
-            await loadPillarData();
-            await db.ref(`devices/${mySeat.id}`).update({ lastSeen: Date.now() + serverOffset, status: 'ACTIVE', x: mySeat.x, y: mySeat.y, neighborCount: myNeighbors.length });
-            startHeartbeat();
-            log("✅ Device activated, waiting for tuning schedule...");
+            // 1. Enable NoSleep to prevent the CPU from throttling during the show
+            noSleep.enable();
+            log("🚀 NoSleep enabled (Keep-alive active)");
+
+            // 2. Resume AudioContext (Standard requirement for user gestures)
+            if (audioCtx.state === 'suspended') {
+                await audioCtx.resume();
+            }
+
+            // 3. Disable the button and signal activation to Firebase
             document.getElementById('ready-btn').disabled = true;
-        } catch (error) { log(`❌ Error: ${error.message}`); document.getElementById('ready-btn').disabled = false; }
+            document.getElementById('system-msg').innerText = "Activating...";
+
+            // Existing registration logic
+            await db.ref(`devices/${mySeat.id}`).update({
+                status: 'active',
+                lastCheckin: firebase.database.ServerValue.TIMESTAMP,
+                neighborCount: myNeighbors.length
+            });
+
+            startHeartbeat();
+            log("✅ Device activated and waiting for cues.");
+
+        } catch (error) {
+            log(`❌ Activation Error: ${error.message}`);
+            document.getElementById('ready-btn').disabled = false;
+            document.getElementById('system-msg').innerText = "System Error. Try again.";
+        }
     };
     window.onload = async () => {
         log(`🚀 onLoad`);
@@ -1399,7 +1409,12 @@
         updateCalibrationDisplay();
     };
     window.onresize = () => { const canvas = document.getElementById('stage-canvas'); canvas.width = window.innerWidth; canvas.height = window.innerHeight; };
-    window.addEventListener('beforeunload', () => { stopHeartbeat(); flushLogs(); });
+
+    window.addEventListener('beforeunload', () => {
+        noSleep.disable(); // Release the wake lock
+        stopHeartbeat();
+        flushLogs();
+    });
     </script>
 </body>
 </html>
