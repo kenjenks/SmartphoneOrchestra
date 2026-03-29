@@ -580,26 +580,57 @@
         }
     }
 
+    /**
+     * Fetches the list of nearby seats from Firebase.
+     * This is used for the distributed acoustic calibration (Phase 2).
+     */
     async function loadNeighborMap() {
-        if (!mySeat) return false;
         try {
-            const neighborSnap = await db.ref(`seat_config/neighborMap/${mySeat.id}`).once('value');
-            const neighborData = neighborSnap.val();
-            if (neighborData) {
-                myNeighbors = neighborData.neighbors || [];
-                allListeningTargets = [...myNeighbors];
-                log(`📍 Neighbor map loaded: ${myNeighbors.length} neighbors`);
-                document.getElementById('neighbor-ind').className = 'indicator active';
-                document.getElementById('debug-neighbors').innerText = myNeighbors.length;
-                return true;
-            } else {
-                log(`⚠️ No neighbor map for ${mySeat.id}`);
-                document.getElementById('neighbor-ind').className = 'indicator error';
+            // 1. Safety check: Ensure identity is resolved first
+            if (!mySeat || !mySeat.id) {
+                log("⚠️ Cannot load neighbors: Seat ID not resolved.");
                 return false;
             }
-        } catch (e) {
-            log(`❌ Failed to load neighbor map: ${e.message}`);
-            return false;
+
+            log(`🔍 Fetching neighbor map for seat ${mySeat.id}...`);
+
+            // 2. Fetch the specific array for this seat
+            const snap = await db.ref('config/neighbor_map/' + mySeat.id).once('value');
+
+            if (snap.exists()) {
+                myNeighbors = snap.val();
+                log(`📍 Neighbor map loaded: ${myNeighbors.length} neighbors found.`);
+
+                // 3. Update the UI Safely
+                // We check if the indicator exists before touching it to prevent null errors
+                const neighborInd = document.getElementById('neighbor-ind');
+                if (neighborInd) {
+                    neighborInd.className = 'indicator active';
+                }
+
+                // Trigger the general UI update to refresh the system message
+                updateDeviceStatusDisplay();
+                return true;
+            } else {
+                log(`⚠️ No neighbor data found for seat ${mySeat.id}.`);
+
+                const neighborInd = document.getElementById('neighbor-ind');
+                if (neighborInd) {
+                    neighborInd.className = 'indicator warning';
+                }
+                return false;
+            }
+
+        } catch (error) {
+            log(`❌ Failed to load neighbor map: ${error.message}`);
+
+            const neighborInd = document.getElementById('neighbor-ind');
+            if (neighborInd) {
+                neighborInd.className = 'indicator error';
+            }
+
+            // We throw the error so window.onload's try/catch can handle the global failure
+            throw error;
         }
     }
 
