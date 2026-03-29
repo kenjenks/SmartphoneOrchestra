@@ -525,7 +525,7 @@ Operational SOP for Admin:
                 try {
                     const text = e.target.result;
                     // Parse TSV
-                    const lines = text.split('\n').filter(line => line.trim());
+                    const lines = text.split(/\r?\n/).filter(line => line.trim());
                     const headers = lines[0].split('\t').map(h => h.trim());
 
                     // Find column indices

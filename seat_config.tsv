@@ -1,4 +1,4 @@
-id	section	row	x	y
+seat_id	section	row	x	y
 PILLAR_FL	Pillar	FL	0	0
 PILLAR_FR	Pillar	FR	1.55	0
 PILLAR_BL	Pillar	BL	0	2.5
