@@ -53,7 +53,7 @@
             min-height: 1.2em;
         }
 
-        /* --- BUTTONS --- */
+        /* --- BUTTON --- */
         .action-btn {
             padding: 18px 45px;
             font-size: 1.1rem;
@@ -71,7 +71,7 @@
             color: #000;
         }
 
-        #ready-btn {
+        #init-permissions-btn {
             background: #00ffcc;
             color: #000;
         }
@@ -153,32 +153,28 @@
 
     <div id="setup-screen">
         <h1>Isle of Noises</h1>
+        <div id="seat-display">Seat: <span id="seat-id">--</span></div>
 
         <div id="status-registry">
-            <div class="status-item">
-                <span>Seat Location:</span>
-                <span id="device-id-display">--</span>
-            </div>
-            <div id="system-msg">Initializing...</div>
-            <div id="status-registry">
-                <div class="status-item">
-                    <span>Assets:</span>
-                    <span id="assets-ind" class="indicator">--</span>
-                </div>
-                <div class="status-item">
-                    <span>Microphone:</span>
-                    <span id="mic-ind" class="indicator">--</span>
-                </div>
-                <div class="status-item">
-                    <span>Neighbors:</span>
-                    <span id="neighbor-ind" class="indicator">--</span>
-                </div>
-            </div>
+            <div class="status-item"><span>Assets:</span><span id="assets-ind" class="indicator">--</span></div>
+            <div class="status-item"><span>Microphone:</span><span id="mic-ind" class="indicator">--</span></div>
+            <div class="status-item"><span>Neighbors:</span><span id="neighbor-ind" class="indicator">--</span></div>
+            <div class="status-item"><span>Clock Sync:</span><span id="sync-ind" class="indicator">--</span></div>
         </div>
 
-        <button id="init-permissions-btn" class="action-btn">Start Setup</button>
+        <button id="init-permissions-btn" class="setup-btn" disabled>⌛ Loading Assets...</button>
 
-        <button id="ready-btn" class="action-btn" style="display:none;" disabled>Enter Experience</button>
+        <div id="system-msg" style="margin-top: 10px; min-height: 1.2em;"></div>
+
+        <div id="calibration-display" style="display:none">
+            <span id="display-speaker-delay"></span>
+            <span id="display-mic-delay"></span>
+            <span id="calibration-status-text"></span>
+        </div>
+
+        <div id="debug-panel">
+            <div id="log-display">Waiting for logs...</div>
+        </div>
     </div>
 
     <div id="show-screen">
@@ -369,55 +365,62 @@
     // STATUS DISPLAY
     // ============================================================================
     function updateDeviceStatusDisplay() {
-        // 1. Update Seat ID (e.g., "C1")
-        const seatDisplay = document.getElementById('device-id-display');
-        if (seatDisplay) {
-            seatDisplay.innerText = mySeat ? mySeat.id : "--";
-        }
-
-        // Update Init Button State
-        const initBtn = document.getElementById('init-permissions-btn');
-        if (initBtn) {
-            // Only allow setup to start if we know the seat and assets are ready
-            const canStartSetup = mySeat && assetsPreloaded;
-            initBtn.disabled = !canStartSetup;
-
-            // Hide this button once the mic is granted (since we'll show the ready-btn)
-            if (micPermissionGranted) {
-                initBtn.style.display = 'none';
+        // --- 1. Update Indicators (Assets, Mic, Neighbors, Sync) ---
+        const updateInd = (id, condition) => {
+            const el = document.getElementById(id);
+            if (el) {
+                el.className = condition ? 'indicator active' : 'indicator';
+                el.innerText = condition ? 'OK' : '--';
             }
-        }
+        };
 
-        // 2. Update System Status Message
-        const msgDisplay = document.getElementById('system-msg');
-        if (msgDisplay) {
-            if (!mySeat) {
-                msgDisplay.innerText = "Identifying seat...";
-            } else if (!assetsPreloaded) {
-                msgDisplay.innerText = "Loading assets...";
-            } else if (!micPermissionGranted) {
-                msgDisplay.innerText = "Please grant microphone permission.";
+        updateInd('assets-ind', assetsPreloaded);
+        updateInd('mic-ind', micPermissionGranted);
+        updateInd('neighbor-ind', myNeighbors && myNeighbors.length > 0);
+
+        const isSynced = (typeof offsetRef !== 'undefined' && offsetRef !== 0);
+        updateInd('sync-ind', isSynced);
+
+        // --- 2. Update Seat Display ---
+        const seatEl = document.getElementById('seat-id');
+        if (seatEl) seatEl.innerText = mySeat ? mySeat.id : '--';
+
+        // --- 3. The Action Button "Gatekeeper" ---
+        const actionBtn = document.getElementById('init-permissions-btn');
+        if (actionBtn) {
+            // Core requirement: Button stays disabled until we have a Seat AND Assets
+            const isDataReady = mySeat && assetsPreloaded;
+
+            if (!micPermissionGranted) {
+                // PHASE A: User needs to grant permission
+                if (isDataReady) {
+                    actionBtn.disabled = false;
+                    actionBtn.innerHTML = "Enable Microphone & Audio";
+                    actionBtn.style.background = "#444"; // Active color
+                } else {
+                    actionBtn.disabled = true;
+                    actionBtn.innerHTML = "⌛ Loading Assets...";
+                    actionBtn.style.background = "#222"; // Disabled color
+                }
             } else {
-                msgDisplay.innerText = "System Ready. Please Enter.";
+                // PHASE B: Permission granted, finalize entry
+                if (isDataReady) {
+                    actionBtn.disabled = false;
+                    actionBtn.innerHTML = "Enter Orchestra";
+                    actionBtn.style.background = "#1e4d1e"; // Success Green
+
+                    // Ensure clicking now enters the show
+                    actionBtn.onclick = () => {
+                        const setup = document.getElementById('setup-screen');
+                        if (setup) setup.style.display = 'none';
+                        log("🚀 Patron entered show mode.");
+                    };
+                } else {
+                    // This state is rare: mic granted but assets lost/loading
+                    actionBtn.disabled = true;
+                    actionBtn.innerHTML = "⌛ Finalizing Data...";
+                }
             }
-        }
-
-        // 3. Update Debug/Calibration Panel Visibility
-        const debugPanel = document.getElementById('calibration-debug');
-        if (debugPanel) {
-            // Only show the panel if the microphone is active or we are in a tuning phase
-            const isCalibrating = (typeof isMicActive !== 'undefined' && isMicActive);
-            debugPanel.style.display = isCalibrating ? 'block' : 'none';
-        }
-
-        // 4. Update Ready Button State
-        const readyBtn = document.getElementById('ready-btn');
-        if (readyBtn) {
-            const isReady = mySeat &&
-                            assetsPreloaded &&
-                            micPermissionGranted;
-
-            readyBtn.disabled = !isReady;
         }
     }
 
@@ -1274,7 +1277,7 @@
             document.getElementById('asset-progress').style.display = 'none';
             log(`✅ Asset preload complete (${loadedCount}/${totalAssets})`);
             assetsPreloaded = true;
-            if (micPermissionGranted && mySeat && myNeighbors) document.getElementById('ready-btn').disabled = false;
+            updateDeviceStatusDisplay();
             return true;
         } catch (e) { log(`❌ Asset Load Failure: ${e.message}`); document.getElementById('asset-ind').className = 'indicator error'; return false; }
     }
@@ -1398,61 +1401,46 @@
     // ============================================================================
     // INITIALIZATION
     // ============================================================================
-    const micButton = document.getElementById('request-mic-btn');
-    if (micButton) { micButton.onclick = async () => { await window.requestMicrophonePermission(); if (micPermissionGranted && mySeat && myNeighbors && assetsPreloaded) document.getElementById('ready-btn').disabled = false; }; }
+    const actionBtn = document.getElementById('init-permissions-btn');
 
-    document.getElementById('ready-btn').onclick = async () => {
-        // 1. Immediate UI feedback (prevent double-clicks)
-        document.getElementById('ready-btn').disabled = true;
-        document.getElementById('system-msg').innerText = "Activating keep-alive...";
-        log("🖱️ Activation button pressed.");
+    if (actionBtn) {
+        actionBtn.onclick = async () => {
+            // 1. Immediate UI feedback
+            actionBtn.disabled = true;
+            actionBtn.innerHTML = "⌛ Processing...";
+            log("🖱️ Activation button pressed.");
 
-        // 2. Library Safety Check
-        if (typeof NoSleep === 'undefined') {
-            log("❌ ERROR: NoSleep.js library not found!");
-            document.getElementById('system-msg').innerText = "Error: Library missing.";
-            document.getElementById('ready-btn').disabled = false;
-            return;
-        }
+            // 2. Request Microphone & Audio Context
+            const granted = await window.requestMicrophonePermission();
 
-        try {
-            // 3. ATOMIC MEDIA ACTIVATION
-            // We do these IMMEDIATELY. Browsers are most likely to allow them
-            // in the first few milliseconds of the click event loop.
-            await requestWakeLock();
-            startAudioHeartbeat();
+            if (granted) {
+                log("✅ Permissions secured. Finalizing setup...");
 
-            if (audioCtx && audioCtx.state === 'suspended') {
-                await audioCtx.resume();
-                log("🎵 AudioContext resumed.");
+                // Initialize mic stream so it's ready for the show
+                await setupMicrophone();
+
+                // 3. Final Readiness Check
+                // We check if the background tasks (Seat, Neighbors, Assets) finished
+                if (mySeat && assetsPreloaded) {
+                    log("🚀 ALL SYSTEMS GO. Entering Show Mode.");
+
+                    // Transition UI: Hide setup, show stage
+                    document.getElementById('setup-screen').style.display = 'none';
+
+                    // Refresh UI state
+                    updateDeviceStatusDisplay();
+                } else {
+                    // If assets are still downloading, wait and let updateDeviceStatusDisplay take over
+                    actionBtn.innerHTML = "⌛ Loading Assets...";
+                    updateDeviceStatusDisplay();
+                }
+            } else {
+                log("⚠️ Permission denied or failed.");
+                actionBtn.disabled = false;
+                actionBtn.innerHTML = "Enable Microphone";
             }
-
-            // 4. IDENTITY VALIDATION
-            if (!mySeat || !mySeat.id) {
-                throw new Error("Identity missing. Please refresh or re-scan QR.");
-            }
-
-            // 5. ASYNCHRONOUS NETWORK SYNC
-            // If the theater WiFi is spotty, this is where it might hang.
-            // By doing this last, your audio and keep-alive are already running.
-            log("🛰️ Syncing with stage...");
-            await db.ref(`devices/${mySeat.id}`).update({
-                status: 'active',
-                lastCheckin: firebase.database.ServerValue.TIMESTAMP,
-                neighborCount: (myNeighbors ? myNeighbors.length : 0)
-            });
-
-            startHeartbeat();
-            log("✅ System active. Waiting for cues.");
-            document.getElementById('system-msg').innerText = "Ready. Place phone in bag.";
-
-        } catch (error) {
-            log(`❌ Activation Failure: ${error.message}`);
-            console.error(error);
-            document.getElementById('system-msg').innerText = "System Error. Tap to retry.";
-            document.getElementById('ready-btn').disabled = false;
-        }
-    };
+        };
+    }
 
     window.onload = async () => {
         log(`🚀 System Initialization Started`);
@@ -1493,21 +1481,6 @@
                 canvas.width = window.innerWidth;
                 canvas.height = window.innerHeight;
             }
-
-            document.getElementById('init-permissions-btn').onclick = async () => {
-                const granted = await window.requestMicrophonePermission();
-                if (granted) {
-                    // Hide the first button and show the second
-                    document.getElementById('init-permissions-btn').style.display = 'none';
-                    document.getElementById('ready-btn').style.display = 'block';
-
-                    // Initialize the mic stream immediately so it's ready
-                    await setupMicrophone();
-
-                    // Refresh UI state
-                    updateDeviceStatusDisplay();
-                }
-            };
 
             log(`✅ Initialization complete. Waiting for user permissions.`);
 
