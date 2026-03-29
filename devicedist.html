@@ -1107,70 +1107,227 @@
 
     function restartWithNewDelay(newSpeakerDelay) {
         if (!audioCtx || audioCtx.state !== 'running') return;
+
+        const MIN_DELAY = -500;
+        const MAX_DELAY = 2000;
+        if (newSpeakerDelay < MIN_DELAY || newSpeakerDelay > MAX_DELAY) {
+            log(`⚠️ Refusing to restart with invalid delay: ${newSpeakerDelay.toFixed(1)}ms (outside ${MIN_DELAY}-${MAX_DELAY}ms)`);
+            return;
+        }
+
         const nowWall = Date.now() + serverOffset;
         const currentSongPosition = nowWall - tuningStartTime;
-        if (currentSongPosition > 182571 - 2000) return;
-        log(`🔄 Restarting with delay: ${newSpeakerDelay.toFixed(1)}ms`);
+        const totalDuration = 182571;
+        if (currentSongPosition > totalDuration - 2000) {
+            log(`⏸️ Near end of tuning (${currentSongPosition.toFixed(0)}ms), skipping restart`);
+            return;
+        }
+
+        log(`🔄 Restarting with new delay: ${newSpeakerDelay.toFixed(1)}ms`);
+        log(`   Current song position: ${currentSongPosition.toFixed(0)}ms`);
+
+        // Calculate new target start time for the new stream
         const newStartTime = nowWall - currentSongPosition + newSpeakerDelay;
-        startContinuousPlayback(newStartTime, newSpeakerDelay);
+
+        // Create a new stream with the corrected delay
+        createNewPlaybackStream(newStartTime, newSpeakerDelay);
+
         currentSpeakerDelay = newSpeakerDelay;
     }
 
     // ============================================================================
-    // CONTINUOUS PLAYBACK
+    // PARALLEL STREAMING PLAYBACK (No stop() calls)
+    // This program was crashing on Samsung A9 tablets
+    // when it tried to stop and restart MP3 files so
+    // now instead of stopping them, the MP3 files
+    // continue to play out at 0% volume.
     // ============================================================================
+
+    let activeStream = null;
+    let allStreams = [];
+
     function startContinuousPlayback(startTime, speakerDelay) {
-        if (isListenOnlyMode) { log(`🔇 Listen-only mode - no playback`); return; }
+        // Listen-only devices don't play anything
+        if (isListenOnlyMode) {
+            log(`🔇 Listen-only mode - no playback, listening for neighbors only`);
+            return;
+        }
+
         if (!PICCOLO_URL || !bufferCache[PICCOLO_URL]) return;
+
         const nowWall = Date.now() + serverOffset;
         const adjustedStartTime = startTime - speakerDelay;
         const delayMs = adjustedStartTime - nowWall;
+
         if (delayMs > 0) {
             setTimeout(() => {
-                if (continuousSource) fadeOutAndStop();
-                continuousSource = audioCtx.createBufferSource();
-                continuousSource.buffer = bufferCache[PICCOLO_URL];
-                continuousSource.loop = false;
-                continuousGain = audioCtx.createGain();
-                continuousGain.gain.setValueAtTime(0, audioCtx.currentTime);
-                continuousSource.connect(continuousGain);
-                continuousGain.connect(masterGain || audioCtx.destination);
-                continuousSource.start(0);
-                startEnvelopeScheduler(startTime);
-                currentSpeakerDelay = speakerDelay;
-                currentPlaybackStartTime = startTime;
-                log(`🔊 Playback started with delay ${speakerDelay.toFixed(1)}ms`);
+                createNewPlaybackStream(adjustedStartTime, speakerDelay);
             }, delayMs);
+        } else if (delayMs > -1000) {
+            log(`⚠️ Playback is ${Math.round(-delayMs)}ms late, starting immediately`, 'warn');
+            createNewPlaybackStream(adjustedStartTime, speakerDelay);
+        } else {
+            log(`❌ Playback too late (${Math.round(-delayMs)}ms), skipping`, 'warn');
         }
     }
 
-    function fadeOutAndStop() {
-        if (!continuousGain) return;
-        const now = audioCtx.currentTime;
-        continuousGain.gain.linearRampToValueAtTime(0, now + 0.1);
-        setTimeout(() => { if (continuousSource) try { continuousSource.stop(); } catch(e) {} continuousSource = null; continuousGain = null; }, 150);
+    function createNewPlaybackStream(targetWallTime, speakerDelay) {
+        if (!audioCtx || audioCtx.state !== 'running') {
+            log(`⚠️ Audio context not ready for playback`, 'warn');
+            return null;
+        }
+
+        if (!PICCOLO_URL || !bufferCache[PICCOLO_URL]) {
+            log(`⚠️ No audio buffer available for playback`, 'warn');
+            return null;
+        }
+
+        const nowAudio = audioCtx.currentTime;
+        const nowWall = Date.now() + serverOffset;
+        const delaySec = (targetWallTime - nowWall) / 1000;
+        const startAudioTime = nowAudio + Math.max(0, delaySec);
+
+        // Log the timing
+        const targetStr = new Date(targetWallTime).toISOString().substr(11, 12) + '.' + String(targetWallTime % 1000).padStart(3, '0');
+        const nowStr = new Date(nowWall).toISOString().substr(11, 12) + '.' + String(nowWall % 1000).padStart(3, '0');
+        log(`🎵 Creating new playback stream:`);
+        log(`   Target wall time: ${targetStr}`);
+        log(`   Current wall time: ${nowStr}`);
+        log(`   Delay: ${delaySec.toFixed(3)}s`);
+        log(`   Audio start time: ${startAudioTime.toFixed(3)}s`);
+        log(`   Speaker delay: ${speakerDelay.toFixed(1)}ms`);
+
+        // Create new buffer source
+        const source = audioCtx.createBufferSource();
+        source.buffer = bufferCache[PICCOLO_URL];
+        source.loop = false;  // Let it end naturally
+
+        // Create gain node for volume control
+        const gain = audioCtx.createGain();
+        gain.gain.setValueAtTime(0, startAudioTime);  // Start silent
+
+        // Connect: source -> gain -> master
+        source.connect(gain);
+        gain.connect(masterGain || audioCtx.destination);
+
+        // Start playback at the calculated time
+        source.start(startAudioTime);
+
+        // Store stream info
+        const streamId = allStreams.length + 1;
+        const newStream = {
+            id: streamId,
+            source,
+            gain,
+            targetWallTime,
+            startAudioTime,
+            speakerDelay: speakerDelay,
+            createdAt: nowWall,
+            isActive: false
+        };
+        allStreams.push(newStream);
+
+        log(`✅ Stream ${streamId} created (will end naturally at ~${new Date(targetWallTime + 182571).toISOString().substr(11, 12)})`);
+
+        // ============================================================
+        // CROSSFADE: Transition from old active stream to new one
+        // ============================================================
+        if (activeStream) {
+            const crossfadeDuration = 0.1; // 100ms smooth crossfade
+            const now = audioCtx.currentTime;
+
+            // Fade out old active stream (no stop!)
+            activeStream.gain.gain.linearRampToValueAtTime(0, now + crossfadeDuration);
+            log(`   🔉 Fading out stream ${activeStream.id} (will continue playing silently)`);
+
+            // Fade in new stream
+            gain.gain.linearRampToValueAtTime(1, startAudioTime + 0.01);
+            log(`   🔊 Fading in stream ${streamId}`);
+
+            // Mark old stream as inactive
+            activeStream.isActive = false;
+
+        } else {
+            // First stream - set volume to 1 immediately
+            gain.gain.setValueAtTime(1, startAudioTime);
+            log(`   🔊 First stream - setting volume to 1`);
+        }
+
+        // Mark new stream as active
+        newStream.isActive = true;
+        activeStream = newStream;
+
+        // Schedule the envelope scheduler for this stream's notes
+        startEnvelopeScheduler(targetWallTime, speakerDelay);
+
+        return newStream;
     }
 
-    function startEnvelopeScheduler(pieceStartTime) {
+    function cleanupAllStreams() {
+        log(`🧹 Cleaning up ${allStreams.length} streams (letting them end naturally)`);
+
+        // Just fade out active stream
+        if (activeStream?.gain) {
+            const now = audioCtx.currentTime;
+            activeStream.gain.gain.linearRampToValueAtTime(0, now + 0.1);
+        }
+
+        // Don't stop any sources - let them end naturally
+        // Just clear references so they can be garbage collected after they end
+        setTimeout(() => {
+            allStreams = [];
+            activeStream = null;
+            log(`🧹 Stream references cleared (streams will end naturally)`);
+        }, 500);
+    }
+
+    function startEnvelopeScheduler(pieceStartTime, speakerDelay) {
         envelopeTimeouts.forEach(t => clearTimeout(t));
         envelopeTimeouts = [];
-        if (isListenOnlyMode) return;
-        if (isSingleDeviceMode) { if (continuousGain) continuousGain.gain.setValueAtTime(MASTER_PLAYBACK_GAIN, audioCtx.currentTime); return; }
+
+        // Listen-only devices don't schedule envelopes
+        if (isListenOnlyMode) {
+            return;
+        }
+
+        if (isSingleDeviceMode) {
+            // Single device: full volume continuously, no envelopes needed
+            if (activeStream?.gain) {
+                activeStream.gain.gain.setValueAtTime(MASTER_PLAYBACK_GAIN, audioCtx.currentTime);
+            }
+            return;
+        }
+
+        // Normal mode: schedule volume envelopes for each note
         assignedNotes.forEach(note => {
             const noteStartWall = pieceStartTime + note.startMs;
             const nowWall = Date.now() + serverOffset;
-            const rampUpStart = noteStartWall - currentSpeakerDelay;
+
+            // Use the current speaker delay for envelope timing
+            const rampUpStart = noteStartWall - speakerDelay;
             const rampUpDelay = rampUpStart - nowWall;
+
             if (rampUpDelay > 0) {
                 const timeoutId = setTimeout(() => {
-                    if (!continuousGain) return;
+                    if (!activeStream?.gain) return;
                     const now = audioCtx.currentTime;
+                    const rampUpMs = 5;
+                    const rampDownMs = 10;
                     const durationMs = note.durationMs;
-                    continuousGain.gain.cancelScheduledValues(now);
-                    continuousGain.gain.setValueAtTime(0, now);
-                    continuousGain.gain.linearRampToValueAtTime(MASTER_PLAYBACK_GAIN, now + 0.005);
-                    continuousGain.gain.linearRampToValueAtTime(0, now + (durationMs - 10)/1000);
-                    continuousGain.gain.setValueAtTime(0, now + durationMs/1000);
+
+                    // Use the active stream's gain for envelope
+                    activeStream.gain.gain.cancelScheduledValues(now);
+                    activeStream.gain.gain.setValueAtTime(0, now);
+                    activeStream.gain.gain.linearRampToValueAtTime(MASTER_PLAYBACK_GAIN, now + rampUpMs/1000);
+                    activeStream.gain.gain.linearRampToValueAtTime(0, now + (durationMs - rampDownMs)/1000);
+                    activeStream.gain.gain.setValueAtTime(0, now + durationMs/1000);
+
+                    // Visual feedback
+                    const canvas = document.getElementById('stage-canvas');
+                    const ctx = canvas.getContext('2d');
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                    setTimeout(() => ctx.clearRect(0, 0, canvas.width, canvas.height), durationMs);
                 }, rampUpDelay);
                 envelopeTimeouts.push(timeoutId);
             }
@@ -1379,14 +1536,29 @@
 
     async function completeCalibration() {
         if (isHappy) return;
+
         isHappy = true;
         log(`✅✅✅ CALIBRATION COMPLETE ✅✅✅`);
         log(`   Speaker delay: ${currentSpeakerDelay.toFixed(1)}ms`);
         log(`   Mic delay: ${myMicDelayMs?.toFixed(1) || '0'}ms`);
+
         saveCalibration();
-        await db.ref(`devices/${mySeat.id}`).update({ status: 'HAPPY', calibrated: true, finalSpeakerDelay: Math.round(currentSpeakerDelay), finalMicDelay: Math.round(myMicDelayMs || 0), convergedAt: Date.now() + serverOffset });
+
+        await db.ref(`devices/${mySeat.id}`).update({
+            status: 'HAPPY',
+            calibrated: true,
+            finalSpeakerDelay: Math.round(currentSpeakerDelay),
+            finalMicDelay: Math.round(myMicDelayMs || 0),
+            convergedAt: Date.now() + serverOffset
+        });
+
         updateCalibrationDisplay();
         document.getElementById('debug-status').innerHTML = 'HAPPY ✓';
+
+        // Clean up old streams
+        cleanupAllStreams();
+
+        // Start Phase 3
         setTimeout(() => startPhase3(), 2000);
     }
 
@@ -1496,7 +1668,45 @@
     let wakeLock = null;
     async function requestWakeLock() { try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch (err) { console.warn('Wake lock failed:', err); } }
     function handleMovementStart(cue) { if (!cue.startTime || !cue.movement || !cue.cues) return; log(`🎬 MOVEMENT START: "${cue.movement}"`); clearAllScheduledCues(); currentMovement = cue.movement; movementStartTime = cue.startTime; document.getElementById('movement-indicator').innerText = `🎭 ${currentMovement}`; if (cue.cues) scheduleTimelineCues(cue.cues); }
-    function clearAllScheduledCues() { activeTimeouts.forEach(t => clearTimeout(t)); activeTimeouts = []; activeAudioCues.forEach(cue => { if (cue.source) try { cue.source.stop(); } catch(e) {} }); activeAudioCues = []; activeLightCues = []; document.getElementById('stage-canvas').getContext('2d').clearRect(0, 0, canvas.width, canvas.height); }
+
+    function clearAllScheduledCues() {
+        // Clear timeouts
+        activeTimeouts.forEach(t => clearTimeout(t));
+        activeTimeouts = [];
+
+        // Fade out and disconnect active audio cues (no stop() calls)
+        activeAudioCues.forEach(cue => {
+            if (cue.gainNode) {
+                const now = audioCtx.currentTime;
+                cue.gainNode.gain.linearRampToValueAtTime(0, now + 0.1);
+                setTimeout(() => {
+                    if (cue.gainNode) {
+                        cue.gainNode.disconnect();
+                    }
+                    // Let the source end naturally - don't call stop() cuz it crashes the A9 Tablet
+                    if (cue.source) {
+                        cue.source = null;
+                    }
+                }, 150);
+            } else if (cue.source) {
+                // No gain node - just disconnect directly
+                try {
+                    cue.source.disconnect();
+                } catch(e) {}
+                cue.source = null;
+            }
+        });
+
+        activeAudioCues = [];
+        activeLightCues = [];
+
+        // Clear canvas
+        const canvas = document.getElementById('stage-canvas');
+        if (canvas) {
+            canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+        }
+    }
+
     function scheduleTimelineCues(cues) { const now = Date.now() + serverOffset; cues.forEach(cue => { if (cue.type !== 'MASTER_MEDIA_SYNC') return; const cueOffsetMs = (cue.time || 0) * 1000; const absoluteStartTime = movementStartTime + cueOffsetMs; const startDelayMs = absoluteStartTime - now - (currentSpeakerDelay || 0) - (myMicDelayMs || 0); (cue.assets || []).forEach(asset => { if (asset.type === 'pillar') return; if (startDelayMs > 0) { const timeoutId = setTimeout(() => { playSpatialCue(asset); }, startDelayMs); activeTimeouts.push(timeoutId); } else if (startDelayMs > -1000) { playSpatialCue(asset); } }); }); }
     async function playSpatialCue(cue) { const url = cue.audio_url; if (!url || !bufferCache[url]) return; const source = audioCtx.createBufferSource(); source.buffer = bufferCache[url]; const gainNode = audioCtx.createGain(); gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime); source.connect(gainNode); gainNode.connect(masterGain || audioCtx.destination); source.start(0); activeAudioCues.push({ ...cue, source, gainNode }); }
     function frame(now) { const delta = now - lastFrameTime; if (delta < FRAME_DURATION) { requestAnimationFrame(frame); return; } lastFrameTime = now; const serverNow = Date.now() + serverOffset; if (currentMovement && movementStartTime > serverNow) { const secondsToStart = ((movementStartTime - serverNow) / 1000).toFixed(1); document.getElementById('movement-indicator').innerText = `🎭 ${currentMovement} (T-${secondsToStart}s)`; } else if (currentMovement) { document.getElementById('movement-indicator').innerText = `🎭 ${currentMovement} (Playing)`; } const fps = Math.round(1000 / delta); document.getElementById('performance-overlay').innerHTML = `FPS: ${fps} | Speaker: ${currentSpeakerDelay?.toFixed(0) || '--'}ms | Mic: ${myMicDelayMs?.toFixed(0) || '--'}ms | Neighbors: ${myNeighbors.length} | ${isHappy ? '✅' : (phase1Complete ? '🔄' : '🎤')}`; requestAnimationFrame(frame); }
