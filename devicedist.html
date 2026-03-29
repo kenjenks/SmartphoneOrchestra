@@ -1363,37 +1363,60 @@
     // ============================================================================
     const micButton = document.getElementById('request-mic-btn');
     if (micButton) { micButton.onclick = async () => { await window.requestMicrophonePermission(); if (micPermissionGranted && mySeat && myNeighbors && assetsPreloaded) document.getElementById('ready-btn').disabled = false; }; }
-    document.getElementById('ready-btn').onclick = async () => {
-        try {
-            // 1. Enable NoSleep to prevent the CPU from throttling during the show
-            noSleep.enable();
-            log("🚀 NoSleep enabled (Keep-alive active)");
 
-            // 2. Resume AudioContext (Standard requirement for user gestures)
-            if (audioCtx.state === 'suspended') {
+    document.getElementById('ready-btn').onclick = async () => {
+        // 1. Immediate UI feedback (prevent double-clicks)
+        document.getElementById('ready-btn').disabled = true;
+        document.getElementById('system-msg').innerText = "Activating keep-alive...";
+        log("🖱️ Activation button pressed.");
+
+        // 2. Library Safety Check
+        if (typeof NoSleep === 'undefined') {
+            log("❌ ERROR: NoSleep.js library not found!");
+            document.getElementById('system-msg').innerText = "Error: Library missing.";
+            document.getElementById('ready-btn').disabled = false;
+            return;
+        }
+
+        try {
+            // 3. ATOMIC MEDIA ACTIVATION
+            // We do these IMMEDIATELY. Browsers are most likely to allow them
+            // in the first few milliseconds of the click event loop.
+            noSleep.enable();
+            log("🎥 NoSleep enabled.");
+
+            if (audioCtx && audioCtx.state === 'suspended') {
                 await audioCtx.resume();
+                log("🎵 AudioContext resumed.");
             }
 
-            // 3. Disable the button and signal activation to Firebase
-            document.getElementById('ready-btn').disabled = true;
-            document.getElementById('system-msg').innerText = "Activating...";
+            // 4. IDENTITY VALIDATION
+            if (!mySeat || !mySeat.id) {
+                throw new Error("Identity missing. Please refresh or re-scan QR.");
+            }
 
-            // Existing registration logic
+            // 5. ASYNCHRONOUS NETWORK SYNC
+            // If the theater WiFi is spotty, this is where it might hang.
+            // By doing this last, your audio and keep-alive are already running.
+            log("🛰️ Syncing with stage...");
             await db.ref(`devices/${mySeat.id}`).update({
                 status: 'active',
                 lastCheckin: firebase.database.ServerValue.TIMESTAMP,
-                neighborCount: myNeighbors.length
+                neighborCount: (myNeighbors ? myNeighbors.length : 0)
             });
 
             startHeartbeat();
-            log("✅ Device activated and waiting for cues.");
+            log("✅ System active. Waiting for cues.");
+            document.getElementById('system-msg').innerText = "Ready. Place phone in bag.";
 
         } catch (error) {
-            log(`❌ Activation Error: ${error.message}`);
+            log(`❌ Activation Failure: ${error.message}`);
+            console.error(error);
+            document.getElementById('system-msg').innerText = "System Error. Tap to retry.";
             document.getElementById('ready-btn').disabled = false;
-            document.getElementById('system-msg').innerText = "System Error. Try again.";
         }
     };
+
     window.onload = async () => {
         log(`🚀 onLoad`);
         await resolveIdentity();
