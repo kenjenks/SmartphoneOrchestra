@@ -582,7 +582,7 @@ Operational SOP for Admin:
                         neighborMap[currentSeat.id] = neighbors;
                     });
 
-                    // 4. Firebase Upload to the /config/ path
+                    // 4. Firebase Upload
                     // Format seats as an object keyed by ID: { "A1": {x,y...}, "A2": {...} }
                     const seatDataObj = seats.reduce((acc, s) => {
                         acc[s.id] = s;
@@ -591,8 +591,8 @@ Operational SOP for Admin:
 
                     log("📡 Uploading to Firebase...");
 
-                    await db.ref('config/seats').set(seatDataObj);
-                    await db.ref('config/neighbor_map').set(neighborMap);
+                    await db.ref('seat_config').set(seatDataObj);
+                    await db.ref('neighbor_map').set(neighborMap);
 
                     log("🎉 SUCCESS: Seat Config and Neighbor Map are live.");
                     document.getElementById('seat-config-status').innerText = "Loaded";
