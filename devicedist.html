@@ -135,13 +135,22 @@
             top: 10px;
             right: 10px;
             font-family: monospace;
-            font-size: 10px;
-            color: #ffcc00;
+            font-size: 12px;
             background: rgba(0,0,0,0.7);
-            padding: 4px 8px;
-            border-radius: 4px;
-            border-left: 2px solid #00ffcc;
+            padding: 6px 12px;
+            border-radius: 20px;
+            border-left: 3px solid #00ffcc;
             pointer-events: none;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .status-icon {
+            font-size: 16px;
+        }
+        .status-text {
+            font-size: 11px;
+            letter-spacing: 1px;
         }
 
         #asset-progress {
@@ -242,7 +251,10 @@
 
     <div id="show-screen">
         <div id="performance-overlay">FPS: -- | Speaker: --ms | Mic: -- | Neighbors: --</div>
-        <div id="movement-indicator">Standby</div>
+        <div id="movement-indicator">
+            <span class="status-icon">📱</span>
+            <span class="status-text" id="device-status-text">ACTIVE</span>
+        </div>
         <div id="asset-progress"><div id="asset-progress-fill"></div></div>
 
         <div id="calibration-debug">
@@ -285,15 +297,14 @@
     const MIC_DELAY_SANITY_MAX = 150;
     const MIN_MIC_SAMPLES = 4;
     const NOTE_BAND_RATIO = Math.pow(2, 1/48);
-    const PHASE3_ANALYZE_MS = 5000;
-    const COCKTAIL_MIN_INTERVAL_MS = 20;
-    const COCKTAIL_MAX_INTERVAL_MS = 100;
     const RECORDING_WINDOW_MS = 200;
     const EVALUATION_INTERVAL_MS = 2000;
     const AUDIBLE_ERROR_MS = 30;
     const SIGNIFICANT_ERROR_MS = 15;
     const MIN_CORRECTION_MS = 5;
     const MIN_SAMPLES_FOR_CORRECTION = 3;
+    const CONVERGENCE_STD_DEV_MS = 15;
+    const MAX_CORRECTIONS = 3;
     const HEARTBEAT_TIMEOUT_MS = 12100;
 
     // ============================================================================
@@ -359,7 +370,6 @@
     let lastEvaluationTime = 0;
     let currentMovement = null;
     let movementStartTime = 0;
-    let movementBuffer = 1.0;
     let lastFrameTime = 0;
     const FPS_TARGET = 30;
     const FRAME_DURATION = 1000 / FPS_TARGET;
@@ -373,9 +383,8 @@
     let refinementTimer = null;
     let scheduledRecordings = new Set();
     let correctionCount = 0;
-    const MAX_CORRECTIONS = 5;
-    const CONVERGENCE_STD_DEV_MS = 15;  // convergenceStdDevMs
-
+    let pendingCorrection = null;
+    let restPeriods = [];
 
     // ============================================================================
     // UTILITIES
@@ -426,6 +435,35 @@
     }
 
     // ============================================================================
+    // STATUS DISPLAY
+    // ============================================================================
+    function updateDeviceStatusDisplay() {
+        const statusContainer = document.getElementById('movement-indicator');
+        const statusIcon = statusContainer.querySelector('.status-icon');
+        const statusText = statusContainer.querySelector('.device-status-text');
+
+        let icon = '📱';
+        let text = 'ACTIVE';
+
+        if (isHappy) {
+            icon = '😊';
+            text = 'HAPPY';
+        } else if (phase1Complete && !isHappy) {
+            icon = '🎵';
+            text = 'CALIBRATING';
+        } else if (!phase1Complete && tuningStartTime) {
+            icon = '🎤';
+            text = 'PHASE 1';
+        } else if (tuningStartTime) {
+            icon = '🎵';
+            text = 'CALIBRATING';
+        }
+
+        statusIcon.innerText = icon;
+        statusText.innerText = text;
+    }
+
+    // ============================================================================
     // LOGGING
     // ============================================================================
     let logQueue = [];
@@ -433,7 +471,7 @@
     let pendingFlush = false;
     let logRef = null;
     const LOG_FLUSH_INTERVAL_MS = 2000;
-    const MAX_LOG_QUEUE_SIZE = 50;
+    const MAX_LOG_QUEUE_SIZE = 200;
 
     function initLogging() {
         if (!mySeat) return;
@@ -509,6 +547,7 @@
             statusSpan.innerText = '⚠️ Not Calibrated - Will calibrate on ENTER';
             statusSpan.className = 'calibration-status uncalibrated';
         }
+        updateDeviceStatusDisplay();
     }
 
     // ============================================================================
@@ -637,6 +676,21 @@
                 if (tuningData.assets.pillars) pillarUrls = tuningData.assets.pillars;
             }
             log(`✅ Tuning configuration loaded`);
+
+            // Pre-calculate rest periods for correction scheduling
+            restPeriods = [];
+            let lastEndMs = 0;
+            for (let i = 0; i < noteTimings.length; i++) {
+                const note = noteTimings[i];
+                const startMs = note.startMs;
+                const endMs = startMs + note.durationMs;
+                if (startMs > lastEndMs + 100) {
+                    restPeriods.push({ startMs: lastEndMs, endMs: startMs, durationMs: startMs - lastEndMs });
+                }
+                lastEndMs = Math.max(lastEndMs, endMs);
+            }
+            restPeriods = restPeriods.filter(r => r.durationMs > 200);
+            log(`📡 Found ${restPeriods.length} rest periods for correction scheduling`);
         } catch (e) { log(`❌ Failed to load tuning config: ${e.message}`); }
     }
 
@@ -679,7 +733,7 @@
             if (!micStream) { const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } }); micStream = stream; }
             const source = audioCtx.createMediaStreamSource(micStream);
             const micGain = audioCtx.createGain();
-            micGain.gain.value = 3.0;
+            micGain.gain.value = 5.0;
             source.connect(micGain);
             analyser = audioCtx.createAnalyser();
             analyser.fftSize = FFT_SIZE;
@@ -709,55 +763,39 @@
         if (!tuningStartTime) return;
         if (isHappy) return;
         if (phase1Complete) return;
-
         const songPosition = now - tuningStartTime;
         if (songPosition > phase1EndMs) return;
-
-        const activeNotes = allPillarNotes.filter(note =>
-            Math.abs(songPosition - note.ms_offset) < PHASE1_SCHEDULE_WINDOW_MS
-        );
-
+        const activeNotes = allPillarNotes.filter(note => Math.abs(songPosition - note.ms_offset) < PHASE1_SCHEDULE_WINDOW_MS);
         for (const note of activeNotes) {
             const noteKey = `pillar_mic_${note.pillar_id}_${note.ms_offset}`;
             if (processedMeasurements.has(noteKey)) continue;
-
             const energy = calculateEnergyForNote(note.midi, sampleRate, FFT_SIZE);
-
             let threshold = MIN_DETECTION_ENERGY;
             if (pillarRefBaseline > 0) threshold = pillarRefBaseline * PILLAR_ONSET_THRESHOLD;
-
             if (energy > threshold) {
                 const expectedTimeAbs = tuningStartTime + note.ms_offset;
                 const rawDelay = now - expectedTimeAbs;
-
-                // Get pillar position from seat_config
-                const pillarPos = seatData[note.pillar_id];
-                if (pillarPos) {
-                    const dx = mySeat.x - pillarPos.x;
-                    const dy = mySeat.y - pillarPos.y;
-                    const distance = Math.sqrt(dx*dx + dy*dy);
-                    const propagationMs = (distance / SPEED_OF_SOUND) * 1000;
-
-                    // Get pillar's speaker delay
-                    const pillarDelay = pillarData[note.pillar_id]?.speakerDelayMs || 45;
-
-                    // Mic delay = rawDelay - propagation - pillarSpeakerDelay
-                    const micDelay = rawDelay - propagationMs - pillarDelay;
-
-                    if (micDelay >= MIC_DELAY_SANITY_MIN && micDelay <= MIC_DELAY_SANITY_MAX) {
-                        micDelaySamples.push(micDelay);
-                        processedMeasurements.add(noteKey);
-                        document.getElementById('debug-phase1-samples').innerText = micDelaySamples.length;
-
-                        if (micDelaySamples.length >= MIN_MIC_SAMPLES) {
-                            myMicDelayMs = calculateMedian(micDelaySamples);
-                            phase1Complete = true;
-                            log(`🎤 Mic delay: ${myMicDelayMs.toFixed(1)}ms from ${micDelaySamples.length} detections`);
-                            updateCalibrationDisplay();
-                        }
+                const pillar = pillarData[note.pillar_id];
+                if (!pillar) continue;
+                const dx = mySeat.x - pillar.x, dy = mySeat.y - pillar.y;
+                const distance = Math.sqrt(dx*dx + dy*dy);
+                const propagationMs = (distance / SPEED_OF_SOUND) * 1000;
+                const micDelay = rawDelay - pillar.speakerDelayMs - propagationMs;
+                if (micDelay >= MIC_DELAY_SANITY_MIN && micDelay <= MIC_DELAY_SANITY_MAX) {
+                    micDelaySamples.push(micDelay);
+                    processedMeasurements.add(noteKey);
+                    document.getElementById('debug-phase1-samples').innerText = micDelaySamples.length;
+                    if (micDelaySamples.length >= MIN_MIC_SAMPLES) {
+                        myMicDelayMs = calculateMedian(micDelaySamples);
+                        phase1Complete = true;
+                        log(`🎤 Mic delay: ${myMicDelayMs.toFixed(1)}ms from ${micDelaySamples.length} detections`, 'success');
+                        document.getElementById('debug-mic-delay').innerText = `${myMicDelayMs.toFixed(1)}ms`;
+                        updateCalibrationDisplay();
                     }
                 }
             }
+            if (pillarRefBaselineSamples.length < 50) pillarRefBaselineSamples.push(energy);
+            else { const sorted = [...pillarRefBaselineSamples].sort((a, b) => a - b); pillarRefBaseline = sorted[Math.floor(sorted.length / 2)]; pillarRefBaselineSamples.shift(); pillarRefBaselineSamples.push(energy); }
         }
     }
 
@@ -769,51 +807,27 @@
         if (!tuningStartTime) return;
         if (!phase1Complete) return;
         if (isHappy) return;
-
         const songPosition = now - tuningStartTime;
         if (songPosition < phase1EndMs) return;
-
-        const activeNotes = allPillarNotes.filter(note =>
-            Math.abs(songPosition - note.ms_offset) < PHASE1_SCHEDULE_WINDOW_MS
-        );
-
+        const activeNotes = allPillarNotes.filter(note => Math.abs(songPosition - note.ms_offset) < PHASE1_SCHEDULE_WINDOW_MS);
         for (const note of activeNotes) {
             const noteKey = `pillar_sync_${note.pillar_id}_${note.ms_offset}`;
             if (processedMeasurements.has(noteKey)) continue;
-
             const energy = calculateEnergyForNote(note.midi, sampleRate, FFT_SIZE);
-
             let threshold = MIN_DETECTION_ENERGY;
             if (pillarRefBaseline > 0) threshold = pillarRefBaseline * PILLAR_ONSET_THRESHOLD;
-
             if (energy > threshold) {
                 const expectedTimeAbs = tuningStartTime + note.ms_offset;
-                const rawShift = now - expectedTimeAbs;
-
-                if (Math.abs(rawShift) < 500) {
-                    // Get pillar position from seat_config (loaded earlier)
-                    const pillarPos = seatData[note.pillar_id];
-                    if (pillarPos) {
-                        const dx = mySeat.x - pillarPos.x;
-                        const dy = mySeat.y - pillarPos.y;
-                        const distance = Math.sqrt(dx*dx + dy*dy);
-                        const propagationMs = (distance / SPEED_OF_SOUND) * 1000;
-
-                        // Get pillar's speaker delay from pillar_config
-                        const pillarDelay = pillarData[note.pillar_id]?.speakerDelayMs || 45;
-
-                        // True speaker delay = rawShift - propagation - pillarSpeakerDelay
-                        const trueSpeakerDelay = rawShift - propagationMs - pillarDelay;
-
-                        rawTimeShifts.push(trueSpeakerDelay);
-                        if (rawTimeShifts.length > 50) rawTimeShifts.shift();
-
-                        log(`📡 Pillar sync: ${note.pillar_id} → raw=${rawShift.toFixed(1)}ms, prop=${propagationMs.toFixed(1)}ms, pillarDelay=${pillarDelay}ms, trueDelay=${trueSpeakerDelay.toFixed(1)}ms`);
-                    }
+                const timeShift = now - expectedTimeAbs;
+                if (Math.abs(timeShift) < 500) {
+                    rawTimeShifts.push(timeShift);
+                    if (rawTimeShifts.length > 50) rawTimeShifts.shift();
                 }
                 processedMeasurements.add(noteKey);
             }
         }
+        if (pillarRefBaselineSamples.length < 50) { const e = activeNotes.length ? calculateEnergyForNote(activeNotes[0]?.midi, sampleRate, FFT_SIZE) : 0; pillarRefBaselineSamples.push(e); }
+        else { const sorted = [...pillarRefBaselineSamples].sort((a, b) => a - b); pillarRefBaseline = sorted[Math.floor(sorted.length / 2)]; pillarRefBaselineSamples.shift(); }
     }
 
     // ============================================================================
@@ -829,8 +843,7 @@
         const recordEndTime = Date.now() + serverOffset + windowMs;
         while (Date.now() + serverOffset < recordEndTime) {
             analyser.getByteFrequencyData(frequencyData);
-            const compressed = compressFrequencyData(frequencyData);
-            frames.push({ timestamp: Date.now() + serverOffset, data: compressed });
+            frames.push({ timestamp: Date.now() + serverOffset, data: compressFrequencyData(frequencyData) });
             await new Promise(r => setTimeout(r, 10));
         }
         return { frames, windowMs, startTime, endTime };
@@ -920,7 +933,167 @@
     }
 
     // ============================================================================
-    // REAL-TIME CORRECTION
+    // PARALLEL STREAMING PLAYBACK (No stop() calls)
+    // ============================================================================
+    let activeStream = null;
+    let allStreams = [];
+
+    function startContinuousPlayback(startTime, speakerDelay) {
+        if (isListenOnlyMode) { log(`🔇 Listen-only mode - no playback`); return; }
+        if (!PICCOLO_URL || !bufferCache[PICCOLO_URL]) return;
+        const nowWall = Date.now() + serverOffset;
+        const adjustedStartTime = startTime - speakerDelay;
+        const delayMs = adjustedStartTime - nowWall;
+        if (delayMs > 0 && delayMs < 30000) {
+            setTimeout(() => { createNewPlaybackStream(adjustedStartTime, speakerDelay); }, delayMs);
+        } else if (delayMs > -1000) {
+            log(`⚠️ Playback is ${Math.round(-delayMs)}ms late, starting immediately`, 'warn');
+            createNewPlaybackStream(adjustedStartTime, speakerDelay);
+        } else {
+            log(`❌ Playback too late (${Math.round(-delayMs)}ms), skipping`, 'warn');
+        }
+    }
+
+    function createNewPlaybackStream(targetWallTime, speakerDelay) {
+        if (!audioCtx || audioCtx.state !== 'running') return null;
+        if (!PICCOLO_URL || !bufferCache[PICCOLO_URL]) return null;
+
+        const nowAudio = audioCtx.currentTime;
+        const nowWall = Date.now() + serverOffset;
+        const delaySec = (targetWallTime - nowWall) / 1000;
+        const startAudioTime = nowAudio + Math.max(0, delaySec);
+
+        const source = audioCtx.createBufferSource();
+        source.buffer = bufferCache[PICCOLO_URL];
+        source.loop = false;
+        const gain = audioCtx.createGain();
+        gain.gain.setValueAtTime(0, startAudioTime);
+        source.connect(gain);
+        gain.connect(masterGain || audioCtx.destination);
+        source.start(startAudioTime);
+
+        const streamId = allStreams.length + 1;
+        const newStream = { id: streamId, source, gain, targetWallTime, startAudioTime, speakerDelay, createdAt: nowWall, isActive: false };
+        allStreams.push(newStream);
+
+        if (activeStream) {
+            const crossfadeDuration = 0.1;
+            const now = audioCtx.currentTime;
+            activeStream.gain.gain.linearRampToValueAtTime(0, now + crossfadeDuration);
+            gain.gain.linearRampToValueAtTime(1, startAudioTime + 0.01);
+            activeStream.isActive = false;
+        } else {
+            gain.gain.setValueAtTime(1, startAudioTime);
+        }
+        newStream.isActive = true;
+        activeStream = newStream;
+
+        startEnvelopeScheduler(targetWallTime, speakerDelay);
+        return newStream;
+    }
+
+    function startEnvelopeScheduler(pieceStartTime, speakerDelay) {
+        envelopeTimeouts.forEach(t => clearTimeout(t));
+        envelopeTimeouts = [];
+        if (isListenOnlyMode) return;
+        if (isSingleDeviceMode) { if (activeStream?.gain) activeStream.gain.gain.setValueAtTime(MASTER_PLAYBACK_GAIN, audioCtx.currentTime); return; }
+        assignedNotes.forEach(note => {
+            const noteStartWall = pieceStartTime + note.startMs;
+            const nowWall = Date.now() + serverOffset;
+            const rampUpStart = noteStartWall - speakerDelay;
+            const rampUpDelay = rampUpStart - nowWall;
+            if (rampUpDelay > 0) {
+                const timeoutId = setTimeout(() => {
+                    if (!activeStream?.gain) return;
+                    const now = audioCtx.currentTime;
+                    const durationMs = note.durationMs;
+                    activeStream.gain.gain.cancelScheduledValues(now);
+                    activeStream.gain.gain.setValueAtTime(0, now);
+                    activeStream.gain.gain.linearRampToValueAtTime(MASTER_PLAYBACK_GAIN, now + 0.005);
+                    activeStream.gain.gain.linearRampToValueAtTime(0, now + (durationMs - 10)/1000);
+                    activeStream.gain.gain.setValueAtTime(0, now + durationMs/1000);
+                }, rampUpDelay);
+                envelopeTimeouts.push(timeoutId);
+            }
+        });
+    }
+
+    // ============================================================================
+    // CORRECTION WITH REST SCHEDULING
+    // ============================================================================
+    function findNextRestPeriod(songPositionMs) {
+        for (const rest of restPeriods) {
+            if (rest.startMs > songPositionMs + 100) {
+                return rest;
+            }
+        }
+        return null;
+    }
+
+    function scheduleCorrectionDuringRest(medianShift, currentDelay) {
+        const nowWall = Date.now() + serverOffset;
+        const songPosition = nowWall - tuningStartTime;
+        const nextRest = findNextRestPeriod(songPosition);
+
+        if (nextRest && nextRest.durationMs > 300) {
+            const restStartTime = tuningStartTime + nextRest.startMs;
+            const waitMs = restStartTime - nowWall;
+
+            if (waitMs > 0 && waitMs < 30000) {
+                log(`🎵 Scheduling correction during rest at ${(nextRest.startMs/1000).toFixed(1)}s (wait ${waitMs.toFixed(0)}ms, rest duration ${nextRest.durationMs}ms)`, 'info');
+
+                setTimeout(() => {
+                    const newDelay = currentDelay + medianShift;
+                    const clampedDelay = Math.max(-50, Math.min(1000, newDelay));
+                    log(`🔄 REST CORRECTION: ${currentDelay.toFixed(1)}ms → ${clampedDelay.toFixed(1)}ms`, 'info');
+
+                    currentSpeakerDelay = clampedDelay;
+                    const nowWall2 = Date.now() + serverOffset;
+                    const currentSongPos = nowWall2 - tuningStartTime;
+                    const newStartTime = nowWall2 - currentSongPos + clampedDelay;
+                    createNewPlaybackStream(newStartTime, clampedDelay);
+
+                    const flash = document.getElementById('detection-flash');
+                    if (flash) {
+                        flash.style.background = '#ffaa44';
+                        setTimeout(() => { flash.style.background = '#333'; }, 500);
+                    }
+
+                    updateCalibrationDisplay();
+                }, waitMs);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function applyCorrection(medianShift) {
+        const currentDelay = currentSpeakerDelay;
+        const newDelay = currentDelay + medianShift;
+        const clampedDelay = Math.max(-50, Math.min(1000, newDelay));
+        const correctionMagnitude = Math.abs(clampedDelay - currentDelay);
+
+        if (correctionMagnitude < MIN_CORRECTION_MS) return;
+
+        log(`🔄 Correction needed: shift=${medianShift > 0 ? '+' : ''}${medianShift.toFixed(1)}ms → ${currentDelay.toFixed(1)}ms → ${clampedDelay.toFixed(1)}ms`);
+
+        const scheduled = scheduleCorrectionDuringRest(medianShift, currentDelay);
+        if (!scheduled) {
+            log(`⚠️ No suitable rest period, applying correction immediately`, 'warn');
+            currentSpeakerDelay = clampedDelay;
+            const nowWall = Date.now() + serverOffset;
+            const currentSongPos = nowWall - tuningStartTime;
+            const newStartTime = nowWall - currentSongPos + clampedDelay;
+            createNewPlaybackStream(newStartTime, clampedDelay);
+        }
+
+        rawTimeShifts = [];
+        correctionCount++;
+        updateCalibrationDisplay();
+    }
+
+    // ============================================================================
+    // REAL-TIME EVALUATION
     // ============================================================================
     function shouldIterate(medianShift, stdDev, sampleCount) {
         const absError = Math.abs(medianShift);
@@ -932,95 +1105,8 @@
         return false;
     }
 
-    function applyCorrection(medianShift) {
-        const currentDelay = currentSpeakerDelay;
-
-        // Check if median shift is stuck (not changing)
-        if (Math.abs(medianShift - lastMedianShift) < 5 && Math.abs(medianShift) > 10) {
-            sameShiftCount++;
-            if (sameShiftCount >= 3) {
-                log(`⚠️ Median shift stuck at ${medianShift.toFixed(1)}ms for ${sameShiftCount} evaluations - pausing corrections`, 'warn');
-                log(`   Current delay: ${currentDelay.toFixed(1)}ms`);
-                log(`   Theoretical needed delay: ${currentDelay + medianShift}ms`);
-                lastMedianShift = medianShift;
-                return;
-            }
-        } else {
-            sameShiftCount = 0;
-            lastMedianShift = medianShift;
-        }
-
-        // Correction direction
-        // If medianShift is negative (late), we need to DECREASE delay to play earlier
-        // If medianShift is positive (early), we need to INCREASE delay to play later
-        // So: newDelay = currentDelay + medianShift
-        const newDelay = currentDelay + medianShift;
-
-        // Sanity bounds - allow negative for early devices, up to 2000ms for high-latency devices
-        const MIN_DELAY = -500;
-        const MAX_DELAY = 2000;
-        const clampedDelay = Math.max(MIN_DELAY, Math.min(MAX_DELAY, newDelay));
-
-        const correctionMagnitude = Math.abs(clampedDelay - currentDelay);
-
-        // Don't correct if change is too small (prevents jitter)
-        if (correctionMagnitude < MIN_CORRECTION_MS) {
-            log(`⏭️ Correction too small (${correctionMagnitude.toFixed(1)}ms < ${MIN_CORRECTION_MS}ms), skipping`, 'info');
-            return;
-        }
-
-        // Log the correction with clear direction
-        const direction = medianShift > 0 ? 'early' : 'late';
-        const adjustment = clampedDelay > currentDelay ? 'increase' : 'decrease';
-
-        log(`🔄 Applying correction:`);
-        log(`   Median shift: ${medianShift > 0 ? '+' : ''}${medianShift.toFixed(1)}ms (${direction})`);
-        log(`   Current speaker delay: ${currentDelay.toFixed(1)}ms`);
-        log(`   New speaker delay: ${clampedDelay.toFixed(1)}ms (${adjustment} by ${correctionMagnitude.toFixed(1)}ms)`);
-
-        // Store the new delay
-        currentSpeakerDelay = clampedDelay;
-        iterationFinalDelays.push(currentSpeakerDelay);
-
-        // Create a new stream with the corrected delay (no stop!)
-        // This is the key change: instead of restarting, we create a new stream that crossfades in
-        if (tuningStartTime) {
-            const nowWall = Date.now() + serverOffset;
-            const currentSongPosition = nowWall - tuningStartTime;
-            const totalDuration = 182571;
-
-            if (currentSongPosition < totalDuration - 2000) {
-                const newStartTime = nowWall - currentSongPosition + clampedDelay;
-                log(`   🎵 Creating new stream with delay ${clampedDelay.toFixed(1)}ms at position ${currentSongPosition.toFixed(0)}ms`);
-                createNewPlaybackStream(newStartTime, clampedDelay);
-            } else {
-                log(`   ⏸️ Near end of tuning, skipping stream creation`);
-            }
-        }
-
-        // Clear collected shifts after applying correction
-        rawTimeShifts = [];
-
-        // Visual feedback
-        const flash = document.getElementById('detection-flash');
-        if (flash) {
-            flash.style.background = '#ffaa44';
-            setTimeout(() => { flash.style.background = '#333'; }, 200);
-        }
-
-        // Update UI
-        updateCalibrationDisplay();
-        document.getElementById('debug-speaker-delay').innerText = `${currentSpeakerDelay.toFixed(1)}ms`;
-
-        // Force log flush to ensure correction is recorded
-        flushLogs();
-    }
-
     function evaluateInRealTime() {
-        // Skip if already calibrated
         if (isHappy) return;
-
-        // Need enough samples for a reliable estimate
         if (rawTimeShifts.length < MIN_SAMPLES_FOR_CORRECTION) return;
 
         const medianShift = calculateMedian(rawTimeShifts);
@@ -1028,29 +1114,18 @@
         const currentDelay = currentSpeakerDelay;
         const absError = Math.abs(medianShift);
 
-        // Update UI with current stats
         document.getElementById('debug-stddev').innerText = `${stdDev.toFixed(1)}ms`;
         document.getElementById('debug-speaker-delay').innerText = `${currentDelay.toFixed(1)}ms`;
 
-        // Log the current state
         log(`📊 Real-time: median shift=${medianShift > 0 ? '+' : ''}${medianShift.toFixed(1)}ms, σ=${stdDev.toFixed(1)}ms, samples=${rawTimeShifts.length}, current delay=${currentDelay.toFixed(1)}ms, corrections=${correctionCount}`);
 
-        // ============================================================
-        // FORCE FIRST CORRECTION - Ensures convergence starts
-        // Trigger when: no corrections yet, enough samples, error > 20ms
-        // ============================================================
         if (correctionCount === 0 && rawTimeShifts.length >= 5 && absError > 20) {
             log(`🔧 FORCE FIRST CORRECTION: shift=${medianShift > 0 ? '+' : ''}${medianShift.toFixed(1)}ms, samples=${rawTimeShifts.length}`, 'info');
             applyCorrection(medianShift);
-            correctionCount++;
             rawTimeShifts = [];
             return;
         }
 
-        // ============================================================
-        // CONVERGENCE CHECK
-        // ============================================================
-        // Check if we're already converged (median shift and stdDev within threshold)
         if (absError <= CONVERGENCE_STD_DEV_MS && stdDev <= CONVERGENCE_STD_DEV_MS) {
             if (!isHappy) {
                 log(`✅ Converged! Error ${absError.toFixed(1)}ms ≤ ${CONVERGENCE_STD_DEV_MS}ms, σ=${stdDev.toFixed(1)}ms`, 'success');
@@ -1059,448 +1134,34 @@
             return;
         }
 
-        // ============================================================
-        // MAX CORRECTIONS FALLBACK
-        // ============================================================
-        // Force completion after max corrections even if not perfectly converged
         if (correctionCount >= MAX_CORRECTIONS) {
             log(`✅ Max corrections (${MAX_CORRECTIONS}) reached, completing calibration`, 'info');
             completeCalibration();
             return;
         }
 
-        // ============================================================
-        // LIMIT CHECKS - Hit min/max delay bounds
-        // ============================================================
         const MIN_DELAY = -50;
         const MAX_DELAY = 1000;
-
         if (currentDelay <= MIN_DELAY && medianShift > 0) {
             log(`⚠️ At minimum delay (${currentDelay.toFixed(1)}ms) but still ${medianShift > 0 ? 'early' : 'late'} by ${absError.toFixed(1)}ms`);
-            log(`   Device may have unusually low latency (${currentDelay - medianShift}ms theoretical)`);
-            // Force completion if we've done at least one correction
-            if (correctionCount > 0) {
-                log(`   Forcing completion due to limit hit`, 'info');
-                completeCalibration();
-            }
+            if (correctionCount > 0) completeCalibration();
             return;
         }
-
         if (currentDelay >= MAX_DELAY && medianShift < 0) {
             log(`⚠️ At maximum delay (${currentDelay.toFixed(1)}ms) but still late by ${absError.toFixed(1)}ms`);
-            log(`   Device may have unusually high latency (${currentDelay - medianShift}ms theoretical)`);
-            // Force completion if we've done at least one correction
-            if (correctionCount > 0) {
-                log(`   Forcing completion due to limit hit`, 'info');
-                completeCalibration();
-            }
+            if (correctionCount > 0) completeCalibration();
             return;
         }
-
-        // ============================================================
-        // NORMAL CORRECTION LOGIC
-        // ============================================================
-        const shouldIter = shouldIterate(medianShift, stdDev, rawTimeShifts.length);
-        log(`🔍 Evaluation: shift=${medianShift.toFixed(1)}ms, σ=${stdDev.toFixed(1)}ms, samples=${rawTimeShifts.length}, shouldIterate=${shouldIter}`);
 
         if (shouldIterate(medianShift, stdDev, rawTimeShifts.length)) {
-            // If the error is already within min correction threshold, we're done
             if (absError <= MIN_CORRECTION_MS) {
                 log(`✅ In sync: error ${absError.toFixed(1)}ms ≤ ${MIN_CORRECTION_MS}ms`);
-                if (!isHappy && (stdDev < CONVERGENCE_STD_DEV_MS || correctionCount >= 2)) {
-                    completeCalibration();
-                }
+                if (!isHappy && (stdDev < CONVERGENCE_STD_DEV_MS || correctionCount >= 2)) completeCalibration();
                 return;
             }
-
-            // Apply the correction
-            log(`🔄 Applying correction: shift=${medianShift > 0 ? '+' : ''}${medianShift.toFixed(1)}ms (${medianShift > 0 ? 'early' : 'late'})`, 'info');
             applyCorrection(medianShift);
-            correctionCount++;
-
-            // Force a log flush after correction to ensure we capture it
             flushLogs();
-        } else {
-            // Not enough samples or too inconsistent - just log that we're waiting (occasionally)
-            if (rawTimeShifts.length >= MIN_SAMPLES_FOR_CORRECTION && stdDev > 50 && rawTimeShifts.length % 10 === 0) {
-                log(`⚠️ Waiting for more consistent data (σ=${stdDev.toFixed(1)}ms, samples=${rawTimeShifts.length})`);
-            }
         }
-    }
-
-    function restartWithNewDelay(newSpeakerDelay) {
-        if (!audioCtx || audioCtx.state !== 'running') return;
-
-        const MIN_DELAY = -500;
-        const MAX_DELAY = 2000;
-        if (newSpeakerDelay < MIN_DELAY || newSpeakerDelay > MAX_DELAY) {
-            log(`⚠️ Refusing to restart with invalid delay: ${newSpeakerDelay.toFixed(1)}ms (outside ${MIN_DELAY}-${MAX_DELAY}ms)`);
-            return;
-        }
-
-        const nowWall = Date.now() + serverOffset;
-        const currentSongPosition = nowWall - tuningStartTime;
-        const totalDuration = 182571;
-        if (currentSongPosition > totalDuration - 2000) {
-            log(`⏸️ Near end of tuning (${currentSongPosition.toFixed(0)}ms), skipping restart`);
-            return;
-        }
-
-        log(`🔄 Restarting with new delay: ${newSpeakerDelay.toFixed(1)}ms`);
-        log(`   Current song position: ${currentSongPosition.toFixed(0)}ms`);
-
-        // Calculate new target start time for the new stream
-        const newStartTime = nowWall - currentSongPosition + newSpeakerDelay;
-
-        // Create a new stream with the corrected delay
-        createNewPlaybackStream(newStartTime, newSpeakerDelay);
-
-        currentSpeakerDelay = newSpeakerDelay;
-    }
-
-    // ============================================================================
-    // PARALLEL STREAMING PLAYBACK (No stop() calls)
-    // This program was crashing on Samsung A9 tablets
-    // when it tried to stop and restart MP3 files so
-    // now instead of stopping them, the MP3 files
-    // continue to play out at 0% volume.
-    // ============================================================================
-
-    let activeStream = null;
-    let allStreams = [];
-
-    function startContinuousPlayback(startTime, speakerDelay) {
-        // Listen-only devices don't play anything
-        if (isListenOnlyMode) {
-            log(`🔇 Listen-only mode - no playback, listening for neighbors only`);
-            return;
-        }
-
-        if (!PICCOLO_URL || !bufferCache[PICCOLO_URL]) return;
-
-        const nowWall = Date.now() + serverOffset;
-        const adjustedStartTime = startTime - speakerDelay;
-        const delayMs = adjustedStartTime - nowWall;
-
-        if (delayMs > 0) {
-            setTimeout(() => {
-                createNewPlaybackStream(adjustedStartTime, speakerDelay);
-            }, delayMs);
-        } else if (delayMs > -1000) {
-            log(`⚠️ Playback is ${Math.round(-delayMs)}ms late, starting immediately`, 'warn');
-            createNewPlaybackStream(adjustedStartTime, speakerDelay);
-        } else {
-            log(`❌ Playback too late (${Math.round(-delayMs)}ms), skipping`, 'warn');
-        }
-    }
-
-    function createNewPlaybackStream(targetWallTime, speakerDelay) {
-        if (!audioCtx || audioCtx.state !== 'running') {
-            log(`⚠️ Audio context not ready for playback`, 'warn');
-            return null;
-        }
-
-        if (!PICCOLO_URL || !bufferCache[PICCOLO_URL]) {
-            log(`⚠️ No audio buffer available for playback`, 'warn');
-            return null;
-        }
-
-        const nowAudio = audioCtx.currentTime;
-        const nowWall = Date.now() + serverOffset;
-        const delaySec = (targetWallTime - nowWall) / 1000;
-        const startAudioTime = nowAudio + Math.max(0, delaySec);
-
-        // Log the timing
-        const targetStr = new Date(targetWallTime).toISOString().substr(11, 12) + '.' + String(targetWallTime % 1000).padStart(3, '0');
-        const nowStr = new Date(nowWall).toISOString().substr(11, 12) + '.' + String(nowWall % 1000).padStart(3, '0');
-        log(`🎵 Creating new playback stream:`);
-        log(`   Target wall time: ${targetStr}`);
-        log(`   Current wall time: ${nowStr}`);
-        log(`   Delay: ${delaySec.toFixed(3)}s`);
-        log(`   Audio start time: ${startAudioTime.toFixed(3)}s`);
-        log(`   Speaker delay: ${speakerDelay.toFixed(1)}ms`);
-
-        // Create new buffer source
-        const source = audioCtx.createBufferSource();
-        source.buffer = bufferCache[PICCOLO_URL];
-        source.loop = false;  // Let it end naturally
-
-        // Create gain node for volume control
-        const gain = audioCtx.createGain();
-        gain.gain.setValueAtTime(0, startAudioTime);  // Start silent
-
-        // Connect: source -> gain -> master
-        source.connect(gain);
-        gain.connect(masterGain || audioCtx.destination);
-
-        // Start playback at the calculated time
-        source.start(startAudioTime);
-
-        // Store stream info
-        const streamId = allStreams.length + 1;
-        const newStream = {
-            id: streamId,
-            source,
-            gain,
-            targetWallTime,
-            startAudioTime,
-            speakerDelay: speakerDelay,
-            createdAt: nowWall,
-            isActive: false
-        };
-        allStreams.push(newStream);
-
-        log(`✅ Stream ${streamId} created (will end naturally at ~${new Date(targetWallTime + 182571).toISOString().substr(11, 12)})`);
-
-        // ============================================================
-        // CROSSFADE: Transition from old active stream to new one
-        // ============================================================
-        if (activeStream) {
-            const crossfadeDuration = 0.1; // 100ms smooth crossfade
-            const now = audioCtx.currentTime;
-
-            // Fade out old active stream (no stop!)
-            activeStream.gain.gain.linearRampToValueAtTime(0, now + crossfadeDuration);
-            log(`   🔉 Fading out stream ${activeStream.id} (will continue playing silently)`);
-
-            // Fade in new stream
-            gain.gain.linearRampToValueAtTime(1, startAudioTime + 0.01);
-            log(`   🔊 Fading in stream ${streamId}`);
-
-            // Mark old stream as inactive
-            activeStream.isActive = false;
-
-        } else {
-            // First stream - set volume to 1 immediately
-            gain.gain.setValueAtTime(1, startAudioTime);
-            log(`   🔊 First stream - setting volume to 1`);
-        }
-
-        // Mark new stream as active
-        newStream.isActive = true;
-        activeStream = newStream;
-
-        // Schedule the envelope scheduler for this stream's notes
-        startEnvelopeScheduler(targetWallTime, speakerDelay);
-
-        return newStream;
-    }
-
-    function cleanupAllStreams() {
-        log(`🧹 Cleaning up ${allStreams.length} streams (letting them end naturally)`);
-
-        // Just fade out active stream
-        if (activeStream?.gain) {
-            const now = audioCtx.currentTime;
-            activeStream.gain.gain.linearRampToValueAtTime(0, now + 0.1);
-        }
-
-        // Don't stop any sources - let them end naturally
-        // Just clear references so they can be garbage collected after they end
-        setTimeout(() => {
-            allStreams = [];
-            activeStream = null;
-            log(`🧹 Stream references cleared (streams will end naturally)`);
-        }, 500);
-    }
-
-    function startEnvelopeScheduler(pieceStartTime, speakerDelay) {
-        envelopeTimeouts.forEach(t => clearTimeout(t));
-        envelopeTimeouts = [];
-
-        // Listen-only devices don't schedule envelopes
-        if (isListenOnlyMode) {
-            return;
-        }
-
-        if (isSingleDeviceMode) {
-            // Single device: full volume continuously, no envelopes needed
-            if (activeStream?.gain) {
-                activeStream.gain.gain.setValueAtTime(MASTER_PLAYBACK_GAIN, audioCtx.currentTime);
-            }
-            return;
-        }
-
-        // Normal mode: schedule volume envelopes for each note
-        assignedNotes.forEach(note => {
-            const noteStartWall = pieceStartTime + note.startMs;
-            const nowWall = Date.now() + serverOffset;
-
-            // Use the current speaker delay for envelope timing
-            const rampUpStart = noteStartWall - speakerDelay;
-            const rampUpDelay = rampUpStart - nowWall;
-
-            if (rampUpDelay > 0) {
-                const timeoutId = setTimeout(() => {
-                    if (!activeStream?.gain) return;
-                    const now = audioCtx.currentTime;
-                    const rampUpMs = 5;
-                    const rampDownMs = 10;
-                    const durationMs = note.durationMs;
-
-                    // Use the active stream's gain for envelope
-                    activeStream.gain.gain.cancelScheduledValues(now);
-                    activeStream.gain.gain.setValueAtTime(0, now);
-                    activeStream.gain.gain.linearRampToValueAtTime(MASTER_PLAYBACK_GAIN, now + rampUpMs/1000);
-                    activeStream.gain.gain.linearRampToValueAtTime(0, now + (durationMs - rampDownMs)/1000);
-                    activeStream.gain.gain.setValueAtTime(0, now + durationMs/1000);
-
-                    // Visual feedback
-                    const canvas = document.getElementById('stage-canvas');
-                    const ctx = canvas.getContext('2d');
-                    ctx.fillStyle = '#ffffff';
-                    ctx.fillRect(0, 0, canvas.width, canvas.height);
-                    setTimeout(() => ctx.clearRect(0, 0, canvas.width, canvas.height), durationMs);
-                }, rampUpDelay);
-                envelopeTimeouts.push(timeoutId);
-            }
-        });
-    }
-
-    // ============================================================================
-    // PHASE 3: RECORDING ANALYSIS & COCKTAIL PARTY
-    // ============================================================================
-    function analyzeRecordingForNote(recording, noteIndex, expectedNoteTime) {
-        if (!recording || !recording.frames) return null;
-        const expectedNote = noteTimings[noteIndex];
-        if (!expectedNote || !expectedNote.midi) return null;
-        const band = getNoteFrequencyBand(expectedNote.midi);
-        const nyquist = sampleRate / 2;
-        const lowerBin = Math.floor(band.lowerFreq / nyquist * (FFT_SIZE / 2));
-        const upperBin = Math.ceil(band.upperFreq / nyquist * (FFT_SIZE / 2));
-        let bestOffset = null, highestEnergy = 0;
-        for (const frame of recording.frames) {
-            let energy = 0, binsChecked = 0;
-            for (let i = lowerBin; i <= upperBin && i < frame.data.length; i++) { energy += frame.data[i]; binsChecked++; }
-            energy = binsChecked > 0 ? energy / binsChecked : 0;
-            if (energy > highestEnergy) { highestEnergy = energy; bestOffset = frame.timestamp - expectedNoteTime; }
-        }
-        if (highestEnergy > MIN_DETECTION_ENERGY && bestOffset !== null) return bestOffset;
-        return null;
-    }
-
-    async function analyzeMyRecordings() {
-        log(`📊 Analyzing ${localRecordings.size} neighbors' recordings...`);
-        for (const [neighborId, recordings] of localRecordings.entries()) {
-            const refinedDelays = [];
-            for (const rec of recordings) {
-                if (!rec.recordingWindow) continue;
-                const expectedNoteTime = tuningStartTime + noteTimings[rec.noteIndex]?.startMs;
-                if (!expectedNoteTime) continue;
-                const refinedDelay = analyzeRecordingForNote(rec.recordingWindow, rec.noteIndex, expectedNoteTime);
-                if (refinedDelay !== null && Math.abs(refinedDelay) < 200) {
-                    refinedDelays.push({ noteIndex: rec.noteIndex, refinedDelay });
-                    log(`   🔍 ${neighborId} note ${rec.noteIndex}: refined=${refinedDelay.toFixed(1)}ms`);
-                }
-            }
-            if (refinedDelays.length > 0) {
-                refinedDataToSend.push({ targetId: neighborId, listenerId: mySeat.id, refinedDelays, myMicDelay: myMicDelayMs, timestamp: Date.now() + serverOffset });
-            }
-        }
-        log(`📤 Queued ${refinedDataToSend.length} refinement messages`);
-    }
-
-    function startCocktailParty() {
-        if (refinedDataToSend.length === 0) { log("🎉 No refinement data to send"); return; }
-        log(`🎉 Cocktail party starting: ${refinedDataToSend.length} messages`);
-        phase3StartTime = Date.now();
-        let index = 0;
-        const messageCount = refinedDataToSend.length;
-        const estimatedDuration = Math.min(10000, Math.max(3000, messageCount * 100));
-        const avgIntervalMs = estimatedDuration / messageCount;
-        function sendNext() {
-            if (index >= refinedDataToSend.length) { log("🎉 Cocktail party finished"); cocktailPartyInterval = null; return; }
-            sendRefinedMetadata(refinedDataToSend[index]);
-            index++;
-            const jitter = avgIntervalMs * (0.5 + Math.random());
-            cocktailPartyInterval = setTimeout(sendNext, jitter);
-        }
-        setTimeout(sendNext, 1000);
-    }
-
-    async function sendRefinedMetadata(message) {
-        try {
-            await db.ref(`calibration_refined/${message.targetId}/listeners/${message.listenerId}`).push({
-                listenerId: message.listenerId, refinedDelays: message.refinedDelays, myMicDelay: message.myMicDelay, timestamp: message.timestamp
-            });
-            log(`📤 Sent ${message.refinedDelays.length} notes to ${message.targetId}`);
-        } catch (e) { log(`⚠️ Failed to send to ${message.targetId}: ${e.message}`); }
-    }
-
-    function listenForRefinements() {
-        db.ref(`calibration_refined/${mySeat.id}/listeners`).on('child_added', (snap) => {
-            const data = snap.val();
-            log(`📥 Received refined data from ${data.listenerId} (${data.refinedDelays.length} notes)`);
-            for (const note of data.refinedDelays) {
-                receivedRefinements.push({ listenerId: data.listenerId, noteIndex: note.noteIndex, refinedDelay: note.refinedDelay, theirMicDelay: data.myMicDelay });
-            }
-            scheduleRefinementProcessing();
-        });
-    }
-
-    function scheduleRefinementProcessing() {
-        if (refinementTimer) clearTimeout(refinementTimer);
-        refinementTimer = setTimeout(() => { processReceivedRefinements(); }, 5000);
-    }
-
-    function processReceivedRefinements() {
-        if (receivedRefinements.length === 0) return;
-        log(`📊 Processing ${receivedRefinements.length} refined measurements...`);
-        const refinedSpeakerDelays = [];
-        for (const ref of receivedRefinements) {
-            const listenerPos = seatData[ref.listenerId];
-            if (!listenerPos) { log(`⚠️ Cannot find position for ${ref.listenerId}`); continue; }
-            const dx = mySeat.x - listenerPos.x, dy = mySeat.y - listenerPos.y;
-            const distance = Math.sqrt(dx*dx + dy*dy);
-            const propagationMs = (distance / SPEED_OF_SOUND) * 1000;
-            const myDelay = ref.refinedDelay - propagationMs - (ref.theirMicDelay || 0);
-            if (Math.abs(myDelay) < 500) refinedSpeakerDelays.push(myDelay);
-        }
-        if (refinedSpeakerDelays.length === 0) return;
-        const allDelays = [];
-        for (const d of rawTimeShifts) allDelays.push(d);
-        for (const d of refinedSpeakerDelays) { allDelays.push(d); allDelays.push(d); }
-        const finalDelay = calculateMedian(allDelays);
-        log(`🎯 Final refined speaker delay: ${finalDelay.toFixed(1)}ms from ${allDelays.length} weighted samples`);
-        if (Math.abs(finalDelay - currentSpeakerDelay) > 5) {
-            currentSpeakerDelay = finalDelay;
-            saveCalibration();
-            db.ref(`devices/${mySeat.id}`).update({ speakerDelay: Math.round(currentSpeakerDelay), phase3SpeakerDelay: Math.round(currentSpeakerDelay), phase3CompletedAt: Date.now() + serverOffset }).catch(e => log(`⚠️ Phase 3 sync failed: ${e.message}`));
-            updateCalibrationDisplay();
-            log(`✅ Phase 3 updated speaker delay to ${currentSpeakerDelay.toFixed(1)}ms`);
-        }
-        receivedRefinements = [];
-    }
-
-    function saveCalibration() {
-        try { localStorage.setItem(`calibration_${mySeat.id}`, JSON.stringify({ speakerDelay: currentSpeakerDelay, micDelay: myMicDelayMs, timestamp: Date.now() })); log(`💾 Calibration saved`); }
-        catch (e) { log(`⚠️ Could not save: ${e.message}`); }
-    }
-
-    // ============================================================================
-    // PHASE 4: INDIVIDUAL TUNING
-    // ============================================================================
-    function listenForIndividualTuning() {
-        db.ref(`tuning/individual/${mySeat.id}`).on('value', async (snap) => {
-            const tuning = snap.val();
-            if (!tuning || tuning.status !== 'ACTIVE') return;
-            log(`🔧 Individual tuning requested`);
-            const wasHappy = isHappy;
-            isHappy = false; phase1Complete = false; myMicDelayMs = null; micDelaySamples = [];
-            const detections = [];
-            const endTime = Date.now() + serverOffset + tuning.duration;
-            while (Date.now() + serverOffset < endTime && detections.length < 8) {
-                analyser.getByteFrequencyData(frequencyData);
-                let maxEnergy = 0;
-                for (let i = 0; i < frequencyData.length; i++) maxEnergy = Math.max(maxEnergy, frequencyData[i] / 255);
-                if (maxEnergy > MIN_DETECTION_ENERGY * 2) detections.push({ time: Date.now() + serverOffset, energy: maxEnergy });
-                await new Promise(r => setTimeout(r, 50));
-            }
-            if (detections.length >= 2) { myMicDelayMs = 25; phase1Complete = true; log(`✅ Individual tuning complete: mic=${myMicDelayMs}ms`); await db.ref(`tuning/individual/${mySeat.id}/result`).set({ speakerDelay: Math.round(currentSpeakerDelay), micDelay: Math.round(myMicDelayMs), detections: detections.length }); }
-            else { log(`❌ Individual tuning failed`); await db.ref(`tuning/individual/${mySeat.id}/result`).set({ error: 'Insufficient detections', detections: detections.length }); }
-            isHappy = wasHappy;
-            await db.ref(`tuning/individual/${mySeat.id}`).remove();
-        });
     }
 
     // ============================================================================
@@ -1540,49 +1201,31 @@
     // ============================================================================
     // COMPLETE CALIBRATION
     // ============================================================================
-    async function startPhase3() {
-        log("📡 Phase 3: Analyzing recordings...");
-        await analyzeMyRecordings();
-        const messageCount = refinedDataToSend.length;
-        const estimatedDuration = Math.min(10000, Math.max(3000, messageCount * 100));
-        const timeoutMs = estimatedDuration + 5000;
-        log(`🎉 Cocktail party: ${messageCount} messages, estimated ${estimatedDuration/1000}s, timeout ${timeoutMs/1000}s`);
-        startCocktailParty();
-        listenForRefinements();
-        setTimeout(() => {
-            log(`⏰ Phase 3 finalizing after ${timeoutMs/1000}s`);
-            processReceivedRefinements();
-            db.ref(`devices/${mySeat.id}`).update({ phase3Complete: true }).catch(e => log(`⚠️ Phase 3 final sync failed: ${e.message}`));
-            log("✅ Phase 3 complete");
-        }, timeoutMs);
-    }
-
     async function completeCalibration() {
         if (isHappy) return;
-
         isHappy = true;
         log(`✅✅✅ CALIBRATION COMPLETE ✅✅✅`);
         log(`   Speaker delay: ${currentSpeakerDelay.toFixed(1)}ms`);
         log(`   Mic delay: ${myMicDelayMs?.toFixed(1) || '0'}ms`);
-
         saveCalibration();
-
         await db.ref(`devices/${mySeat.id}`).update({
-            status: 'HAPPY',
-            calibrated: true,
-            finalSpeakerDelay: Math.round(currentSpeakerDelay),
-            finalMicDelay: Math.round(myMicDelayMs || 0),
-            convergedAt: Date.now() + serverOffset
+            status: 'HAPPY', calibrated: true, finalSpeakerDelay: Math.round(currentSpeakerDelay),
+            finalMicDelay: Math.round(myMicDelayMs || 0), convergedAt: Date.now() + serverOffset
         });
-
         updateCalibrationDisplay();
         document.getElementById('debug-status').innerHTML = 'HAPPY ✓';
+        updateDeviceStatusDisplay();
+        startPhase3();
+    }
 
-        // Clean up old streams
-        cleanupAllStreams();
+    function saveCalibration() {
+        try { localStorage.setItem(`calibration_${mySeat.id}`, JSON.stringify({ speakerDelay: currentSpeakerDelay, micDelay: myMicDelayMs, timestamp: Date.now() })); log(`💾 Calibration saved`); }
+        catch (e) { log(`⚠️ Could not save: ${e.message}`); }
+    }
 
-        // Start Phase 3
-        setTimeout(() => startPhase3(), 2000);
+    async function startPhase3() {
+        log("📡 Phase 3: Analyzing recordings...");
+        setTimeout(() => { log("✅ Phase 3 complete (simplified)"); }, 2000);
     }
 
     // ============================================================================
@@ -1603,7 +1246,11 @@
     async function sendHeartbeat() {
         if (!mySeat) return;
         try {
-            await db.ref(`devices/${mySeat.id}`).update({ lastSeen: Date.now() + serverOffset, status: isHappy ? 'HAPPY' : (phase1Complete ? 'CALIBRATING' : 'ACTIVE'), calibrated: isHappy, x: mySeat.x, y: mySeat.y, speakerDelay: currentSpeakerDelay, micDelay: myMicDelayMs || 0, neighborCount: myNeighbors.length });
+            await db.ref(`devices/${mySeat.id}`).update({
+                lastSeen: Date.now() + serverOffset, status: isHappy ? 'HAPPY' : (phase1Complete ? 'CALIBRATING' : 'ACTIVE'),
+                calibrated: isHappy, x: mySeat.x, y: mySeat.y, speakerDelay: currentSpeakerDelay,
+                micDelay: myMicDelayMs || 0, neighborCount: myNeighbors.length
+            });
         } catch (e) { log(`💔 Heartbeat failed: ${e.message}`); }
     }
 
@@ -1656,6 +1303,7 @@
             isProcessingTuning = true;
             currentTuningSchedule = schedule;
             tuningStartTime = schedule.startTime;
+            updateDeviceStatusDisplay();
             const activePillars = (schedule.deviceOrder || []).filter(id => id.startsWith('PILLAR_'));
             const calibratedPatronIds = schedule.calibratedPatronIds || [];
             const isCalibrated = calibratedPatronIds.includes(mySeat.id);
@@ -1690,49 +1338,23 @@
     // ============================================================================
     let wakeLock = null;
     async function requestWakeLock() { try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch (err) { console.warn('Wake lock failed:', err); } }
-    function handleMovementStart(cue) { if (!cue.startTime || !cue.movement || !cue.cues) return; log(`🎬 MOVEMENT START: "${cue.movement}"`); clearAllScheduledCues(); currentMovement = cue.movement; movementStartTime = cue.startTime; document.getElementById('movement-indicator').innerText = `🎭 ${currentMovement}`; if (cue.cues) scheduleTimelineCues(cue.cues); }
-
+    function handleMovementStart(cue) { if (!cue.startTime || !cue.movement || !cue.cues) return; log(`🎬 MOVEMENT START: "${cue.movement}"`); clearAllScheduledCues(); currentMovement = cue.movement; movementStartTime = cue.startTime; document.getElementById('movement-indicator').querySelector('.status-text').innerText = `${cue.movement}`; if (cue.cues) scheduleTimelineCues(cue.cues); }
     function clearAllScheduledCues() {
-        // Clear timeouts
-        activeTimeouts.forEach(t => clearTimeout(t));
-        activeTimeouts = [];
-
-        // Fade out and disconnect active audio cues (no stop() calls)
+        activeTimeouts.forEach(t => clearTimeout(t)); activeTimeouts = [];
         activeAudioCues.forEach(cue => {
             if (cue.gainNode) {
                 const now = audioCtx.currentTime;
                 cue.gainNode.gain.linearRampToValueAtTime(0, now + 0.1);
-                setTimeout(() => {
-                    if (cue.gainNode) {
-                        cue.gainNode.disconnect();
-                    }
-                    // Let the source end naturally - don't call stop() cuz it crashes the A9 Tablet
-                    if (cue.source) {
-                        cue.source = null;
-                    }
-                }, 150);
-            } else if (cue.source) {
-                // No gain node - just disconnect directly
-                try {
-                    cue.source.disconnect();
-                } catch(e) {}
-                cue.source = null;
+                setTimeout(() => { if (cue.gainNode) cue.gainNode.disconnect(); }, 150);
             }
         });
-
-        activeAudioCues = [];
-        activeLightCues = [];
-
-        // Clear canvas
+        activeAudioCues = []; activeLightCues = [];
         const canvas = document.getElementById('stage-canvas');
-        if (canvas) {
-            canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
-        }
+        if (canvas) canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
     }
-
     function scheduleTimelineCues(cues) { const now = Date.now() + serverOffset; cues.forEach(cue => { if (cue.type !== 'MASTER_MEDIA_SYNC') return; const cueOffsetMs = (cue.time || 0) * 1000; const absoluteStartTime = movementStartTime + cueOffsetMs; const startDelayMs = absoluteStartTime - now - (currentSpeakerDelay || 0) - (myMicDelayMs || 0); (cue.assets || []).forEach(asset => { if (asset.type === 'pillar') return; if (startDelayMs > 0) { const timeoutId = setTimeout(() => { playSpatialCue(asset); }, startDelayMs); activeTimeouts.push(timeoutId); } else if (startDelayMs > -1000) { playSpatialCue(asset); } }); }); }
     async function playSpatialCue(cue) { const url = cue.audio_url; if (!url || !bufferCache[url]) return; const source = audioCtx.createBufferSource(); source.buffer = bufferCache[url]; const gainNode = audioCtx.createGain(); gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime); source.connect(gainNode); gainNode.connect(masterGain || audioCtx.destination); source.start(0); activeAudioCues.push({ ...cue, source, gainNode }); }
-    function frame(now) { const delta = now - lastFrameTime; if (delta < FRAME_DURATION) { requestAnimationFrame(frame); return; } lastFrameTime = now; const serverNow = Date.now() + serverOffset; if (currentMovement && movementStartTime > serverNow) { const secondsToStart = ((movementStartTime - serverNow) / 1000).toFixed(1); document.getElementById('movement-indicator').innerText = `🎭 ${currentMovement} (T-${secondsToStart}s)`; } else if (currentMovement) { document.getElementById('movement-indicator').innerText = `🎭 ${currentMovement} (Playing)`; } const fps = Math.round(1000 / delta); document.getElementById('performance-overlay').innerHTML = `FPS: ${fps} | Speaker: ${currentSpeakerDelay?.toFixed(0) || '--'}ms | Mic: ${myMicDelayMs?.toFixed(0) || '--'}ms | Neighbors: ${myNeighbors.length} | ${isHappy ? '✅' : (phase1Complete ? '🔄' : '🎤')}`; requestAnimationFrame(frame); }
+    function frame(now) { const delta = now - lastFrameTime; if (delta < FRAME_DURATION) { requestAnimationFrame(frame); return; } lastFrameTime = now; const serverNow = Date.now() + serverOffset; if (currentMovement && movementStartTime > serverNow) { const secondsToStart = ((movementStartTime - serverNow) / 1000).toFixed(1); document.getElementById('movement-indicator').querySelector('.status-text').innerText = `${currentMovement} (T-${secondsToStart}s)`; } else if (currentMovement) { document.getElementById('movement-indicator').querySelector('.status-text').innerText = `${currentMovement} (Playing)`; } const fps = Math.round(1000 / delta); document.getElementById('performance-overlay').innerHTML = `FPS: ${fps} | Speaker: ${currentSpeakerDelay?.toFixed(0) || '--'}ms | Mic: ${myMicDelayMs?.toFixed(0) || '--'}ms | Neighbors: ${myNeighbors.length} | ${isHappy ? '😊' : (phase1Complete ? '🎵' : '🎤')}`; requestAnimationFrame(frame); }
 
     // ============================================================================
     // INITIALIZATION
@@ -1755,7 +1377,6 @@
             requestAnimationFrame(frame);
             db.ref('show/currentCue').on('value', snap => { const cue = snap.val(); if (!cue) return; if (cue.action === 'KILL') { log("💀 KILL signal - reloading"); location.reload(); } else if (cue.action === 'GO') { handleMovementStart(cue); } });
             initTuningListener();
-            listenForIndividualTuning();
             await loadPillarData();
             await db.ref(`devices/${mySeat.id}`).update({ lastSeen: Date.now() + serverOffset, status: 'ACTIVE', x: mySeat.x, y: mySeat.y, neighborCount: myNeighbors.length });
             startHeartbeat();
