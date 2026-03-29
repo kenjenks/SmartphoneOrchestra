@@ -532,7 +532,7 @@ Operational SOP for Admin:
                     const idIdx = headers.findIndex(h => h.toLowerCase().includes('id') || h.toLowerCase().includes('seat'));
                     const xIdx = headers.findIndex(h => h.toLowerCase() === 'x');
                     const yIdx = headers.findIndex(h => h.toLowerCase() === 'y');
-                    const sectionIdx = headers.findIndex(h => h.toLowerCase() === 'section');
+                    const sectionIdx = headers.findIndex(h => h.toLowerCase().includes('section'));
 
                     if (idIdx === -1 || xIdx === -1 || yIdx === -1) {
                         throw new Error("TSV must have 'seat_id' (or 'id'), 'x', and 'y' columns");
