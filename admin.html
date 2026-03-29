@@ -526,7 +526,7 @@ Operational SOP for Admin:
                     const text = e.target.result;
                     // Parse TSV
                     const lines = text.split('\n').filter(line => line.trim());
-                    const headers = lines[0].split('\t');
+                    const headers = lines[0].split('\t').map(h => h.trim());
 
                     // Find column indices
                     const idIdx = headers.findIndex(h => h.toLowerCase().includes('id') || h.toLowerCase().includes('seat'));
