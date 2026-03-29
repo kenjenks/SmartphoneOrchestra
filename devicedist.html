@@ -934,6 +934,12 @@
 
     function applyCorrection(medianShift) {
         const currentDelay = currentSpeakerDelay;
+        const newDelay = currentDelay + medianShift;  // Corrected formula
+        const clampedDelay = Math.max(-50, Math.min(1000, newDelay));
+
+        log(`🔄 Applying correction: shift=${medianShift > 0 ? '+' : ''}${medianShift.toFixed(1)}ms → ${currentDelay.toFixed(1)}ms → ${clampedDelay.toFixed(1)}ms`);
+
+        currentSpeakerDelay = clampedDelay;
 
         // Check if median shift is stuck (not changing)
         if (Math.abs(medianShift - lastMedianShift) < 5 && Math.abs(medianShift) > 10) {
@@ -1095,6 +1101,9 @@
         // ============================================================
         // NORMAL CORRECTION LOGIC
         // ============================================================
+        const shouldIter = shouldIterate(medianShift, stdDev, rawTimeShifts.length);
+        log(`🔍 Evaluation: shift=${medianShift.toFixed(1)}ms, σ=${stdDev.toFixed(1)}ms, samples=${rawTimeShifts.length}, shouldIterate=${shouldIter}`);
+
         if (shouldIterate(medianShift, stdDev, rawTimeShifts.length)) {
             // If the error is already within min correction threshold, we're done
             if (absError <= MIN_CORRECTION_MS) {
