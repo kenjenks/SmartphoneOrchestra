@@ -373,7 +373,9 @@
     let refinementTimer = null;
     let scheduledRecordings = new Set();
     let correctionCount = 0;
-    const MAX_CORRECTIONS = 3;
+    const MAX_CORRECTIONS = 5;
+    const CONVERGENCE_STD_DEV_MS = 15;  // convergenceStdDevMs
+
 
     // ============================================================================
     // UTILITIES
@@ -1013,19 +1015,13 @@
         // Skip if already calibrated
         if (isHappy) return;
 
-        // Force completion after max corrections (fallback for when convergence never triggers)
-        if (correctionCount >= MAX_CORRECTIONS) {
-            log(`✅ Max corrections (${MAX_CORRECTIONS}) reached, completing calibration`, 'info');
-            completeCalibration();
-            return;
-        }
-
         // Need enough samples for a reliable estimate
         if (rawTimeShifts.length < MIN_SAMPLES_FOR_CORRECTION) return;
 
         const medianShift = calculateMedian(rawTimeShifts);
         const stdDev = calculateStdDev(rawTimeShifts);
         const currentDelay = currentSpeakerDelay;
+        const absError = Math.abs(medianShift);
 
         // Update UI with current stats
         document.getElementById('debug-stddev').innerText = `${stdDev.toFixed(1)}ms`;
@@ -1035,27 +1031,49 @@
         log(`📊 Real-time: median shift=${medianShift > 0 ? '+' : ''}${medianShift.toFixed(1)}ms, σ=${stdDev.toFixed(1)}ms, samples=${rawTimeShifts.length}, current delay=${currentDelay.toFixed(1)}ms, corrections=${correctionCount}`);
 
         // ============================================================
+        // FORCE FIRST CORRECTION - Ensures convergence starts
+        // Trigger when: no corrections yet, enough samples, error > 20ms
+        // ============================================================
+        if (correctionCount === 0 && rawTimeShifts.length >= 5 && absError > 20) {
+            log(`🔧 FORCE FIRST CORRECTION: shift=${medianShift > 0 ? '+' : ''}${medianShift.toFixed(1)}ms, samples=${rawTimeShifts.length}`, 'info');
+            applyCorrection(medianShift);
+            correctionCount++;
+            rawTimeShifts = [];
+            return;
+        }
+
+        // ============================================================
         // CONVERGENCE CHECK
         // ============================================================
         // Check if we're already converged (median shift and stdDev within threshold)
-        if (Math.abs(medianShift) <= convergenceStdDevMs && stdDev <= convergenceStdDevMs) {
+        if (absError <= CONVERGENCE_STD_DEV_MS && stdDev <= CONVERGENCE_STD_DEV_MS) {
             if (!isHappy) {
-                log(`✅ Converged! Error ${Math.abs(medianShift).toFixed(1)}ms ≤ ${convergenceStdDevMs}ms, σ=${stdDev.toFixed(1)}ms`, 'success');
+                log(`✅ Converged! Error ${absError.toFixed(1)}ms ≤ ${CONVERGENCE_STD_DEV_MS}ms, σ=${stdDev.toFixed(1)}ms`, 'success');
                 completeCalibration();
             }
             return;
         }
 
         // ============================================================
-        // LIMIT CHECKS
+        // MAX CORRECTIONS FALLBACK
+        // ============================================================
+        // Force completion after max corrections even if not perfectly converged
+        if (correctionCount >= MAX_CORRECTIONS) {
+            log(`✅ Max corrections (${MAX_CORRECTIONS}) reached, completing calibration`, 'info');
+            completeCalibration();
+            return;
+        }
+
+        // ============================================================
+        // LIMIT CHECKS - Hit min/max delay bounds
         // ============================================================
         const MIN_DELAY = -50;
         const MAX_DELAY = 1000;
 
         if (currentDelay <= MIN_DELAY && medianShift > 0) {
-            log(`⚠️ At minimum delay (${currentDelay.toFixed(1)}ms) but still ${medianShift > 0 ? 'early' : 'late'} by ${Math.abs(medianShift).toFixed(1)}ms`);
+            log(`⚠️ At minimum delay (${currentDelay.toFixed(1)}ms) but still ${medianShift > 0 ? 'early' : 'late'} by ${absError.toFixed(1)}ms`);
             log(`   Device may have unusually low latency (${currentDelay - medianShift}ms theoretical)`);
-            // Force completion if we're at limit and have done at least one correction
+            // Force completion if we've done at least one correction
             if (correctionCount > 0) {
                 log(`   Forcing completion due to limit hit`, 'info');
                 completeCalibration();
@@ -1064,9 +1082,9 @@
         }
 
         if (currentDelay >= MAX_DELAY && medianShift < 0) {
-            log(`⚠️ At maximum delay (${currentDelay.toFixed(1)}ms) but still late by ${Math.abs(medianShift).toFixed(1)}ms`);
+            log(`⚠️ At maximum delay (${currentDelay.toFixed(1)}ms) but still late by ${absError.toFixed(1)}ms`);
             log(`   Device may have unusually high latency (${currentDelay - medianShift}ms theoretical)`);
-            // Force completion if we're at limit and have done at least one correction
+            // Force completion if we've done at least one correction
             if (correctionCount > 0) {
                 log(`   Forcing completion due to limit hit`, 'info');
                 completeCalibration();
@@ -1075,31 +1093,28 @@
         }
 
         // ============================================================
-        // SHOULD WE ITERATE?
+        // NORMAL CORRECTION LOGIC
         // ============================================================
         if (shouldIterate(medianShift, stdDev, rawTimeShifts.length)) {
             // If the error is already within min correction threshold, we're done
-            if (Math.abs(medianShift) <= MIN_CORRECTION_MS) {
-                log(`✅ In sync: error ${Math.abs(medianShift).toFixed(1)}ms ≤ ${MIN_CORRECTION_MS}ms`);
-                if (!isHappy && stdDev < convergenceStdDevMs) {
-                    completeCalibration();
-                } else if (!isHappy && correctionCount >= 2) {
-                    // If we've done a couple corrections and error is small, force complete
-                    log(`   Forcing completion after ${correctionCount} corrections`, 'info');
+            if (absError <= MIN_CORRECTION_MS) {
+                log(`✅ In sync: error ${absError.toFixed(1)}ms ≤ ${MIN_CORRECTION_MS}ms`);
+                if (!isHappy && (stdDev < CONVERGENCE_STD_DEV_MS || correctionCount >= 2)) {
                     completeCalibration();
                 }
                 return;
             }
 
             // Apply the correction
+            log(`🔄 Applying correction: shift=${medianShift > 0 ? '+' : ''}${medianShift.toFixed(1)}ms (${medianShift > 0 ? 'early' : 'late'})`, 'info');
             applyCorrection(medianShift);
             correctionCount++;
 
             // Force a log flush after correction to ensure we capture it
             flushLogs();
         } else {
-            // Not enough samples or too inconsistent - just log that we're waiting
-            if (rawTimeShifts.length >= MIN_SAMPLES_FOR_CORRECTION && stdDev > 50) {
+            // Not enough samples or too inconsistent - just log that we're waiting (occasionally)
+            if (rawTimeShifts.length >= MIN_SAMPLES_FOR_CORRECTION && stdDev > 50 && rawTimeShifts.length % 10 === 0) {
                 log(`⚠️ Waiting for more consistent data (σ=${stdDev.toFixed(1)}ms, samples=${rawTimeShifts.length})`);
             }
         }
