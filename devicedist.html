@@ -227,13 +227,7 @@
     let isListenOnlyMode = false;
     let audioCtx = null;
     let masterGain = null;
-
-    let mySeat = { id: null, x: 0, y: 0 };
-    let assetsPreloaded = false;
-    let micPermissionGranted = false;
-    let micPermissionRequested = false;
-    let myNeighbors = [];
-
+    let mySeat = null;
     let serverOffset = 0;
     let bufferCache = {};
     let activeAudioCues = [];
@@ -252,11 +246,14 @@
     let isMicActive = false;
     let frequencyData = null;
     let sampleRate = 48000;
+    let micPermissionGranted = false;
+    let micPermissionRequested = false;
     let currentAvgEnergy = 0;
     let baselineEnergy = 0;
     let baselineSamples = [];
     let baselineComplete = false;
     let baselineStartTime = 0;
+    let myNeighbors = [];
     let allListeningTargets = [];
     let noteTimings = [];
     let noteSchedule = [];
@@ -361,27 +358,14 @@
             seatDisplay.innerText = mySeat ? mySeat.id : "--";
         }
 
-        // Update Init Button State
-        const initBtn = document.getElementById('init-permissions-btn');
-        if (initBtn) {
-            // Only allow setup to start if we know the seat and assets are ready
-            const canStartSetup = mySeat && assetsPreloaded;
-            initBtn.disabled = !canStartSetup;
-
-            // Hide this button once the mic is granted (since we'll show the ready-btn)
-            if (micPermissionGranted) {
-                initBtn.style.display = 'none';
-            }
-        }
-
         // 2. Update System Status Message
         const msgDisplay = document.getElementById('system-msg');
         if (msgDisplay) {
             if (!mySeat) {
                 msgDisplay.innerText = "Identifying seat...";
-            } else if (!assetsPreloaded) {
+            } else if (typeof assetsPreloaded !== 'undefined' && !assetsPreloaded) {
                 msgDisplay.innerText = "Loading assets...";
-            } else if (!micPermissionGranted) {
+            } else if (typeof micPermissionGranted !== 'undefined' && !micPermissionGranted) {
                 msgDisplay.innerText = "Please grant microphone permission.";
             } else {
                 msgDisplay.innerText = "System Ready. Please Enter.";
@@ -400,8 +384,8 @@
         const readyBtn = document.getElementById('ready-btn');
         if (readyBtn) {
             const isReady = mySeat &&
-                            assetsPreloaded &&
-                            micPermissionGranted;
+                            (typeof assetsPreloaded === 'undefined' || assetsPreloaded) &&
+                            micPermissionGranted; // Use the global let micPermissionGranted
 
             readyBtn.disabled = !isReady;
         }
@@ -467,14 +451,7 @@
 
     db.ref(".info/serverTimeOffset").on("value", snap => {
         serverOffset = snap.val() || 0;
-
-        const syncInd = document.getElementById('sync-ind');
-        if (syncInd) {
-            syncInd.className = 'indicator active';
-        } else {
-            // If the element is gone, we just update our general system message instead
-            updateDeviceStatusDisplay();
-        }
+        document.getElementById('sync-ind').className = 'indicator active';
     });
 
     // ============================================================================
@@ -514,43 +491,38 @@
         const seatParam = urlParams.get('seat');
 
         if (seatParam) {
-            // 1. Assign local ID to the pre-initialized mySeat object
+            // 1. Assign local ID
             mySeat.id = seatParam;
 
+            // 2. Log to console/internal log
             log(`Identity found in URL: ${mySeat.id}`);
 
             try {
-                // 2. Fetch spatial coordinates from Firebase config
-                const snap = await db.ref('seat_config/' + mySeat.id).once('value');
+                // 3. Fetch spatial coordinates (X, Y) from the seat_config in Firebase
+                // This allows the device to know its physical location for spatial audio
+                const snap = await db.ref('config/seats/' + mySeat.id).once('value');
 
                 if (snap.exists()) {
                     const data = snap.val();
-                    // Store X/Y for spatial audio and visual calculations
-                    mySeat.x = data.x !== undefined ? data.x : 0;
-                    mySeat.y = data.y !== undefined ? data.y : 0;
+                    mySeat.x = data.x;
+                    mySeat.y = data.y;
                     log(`Spatial mapping resolved: [${mySeat.x}, ${mySeat.y}]`);
                 } else {
-                    log(`⚠️ Warning: Seat ${mySeat.id} not found in database config. Using defaults.`);
+                    log(`⚠️ Warning: Seat ${mySeat.id} not found in database config.`);
                 }
 
-                // 3. Update the UI
-                // This fills the "Seat Location" span and updates the status message
+                // 4. Update the UI to show the Seat ID and progress
                 updateDeviceStatusDisplay();
                 return true;
 
             } catch (error) {
                 log(`❌ Firebase Identity Error: ${error.message}`);
-                // Fallback: still allow the app to run with the ID from the URL
-                updateDeviceStatusDisplay();
                 return false;
             }
         } else {
             log('❌ Error: No ?seat= parameter found in URL.');
             const msg = document.getElementById('system-msg');
-            if (msg) {
-                msg.innerText = "Error: Invalid Seat Link";
-                msg.style.color = "#ff4444";
-            }
+            if (msg) msg.innerText = "Error: Invalid Seat Link";
             return false;
         }
     }
@@ -579,57 +551,26 @@
         }
     }
 
-    /**
-     * Fetches the list of nearby seats from Firebase.
-     * This is used for the distributed acoustic calibration (Phase 2).
-     */
     async function loadNeighborMap() {
+        if (!mySeat) return false;
         try {
-            // 1. Safety check: Ensure identity is resolved first
-            if (!mySeat || !mySeat.id) {
-                log("⚠️ Cannot load neighbors: Seat ID not resolved.");
-                return false;
-            }
-
-            log(`🔍 Fetching neighbor map for seat ${mySeat.id}...`);
-
-            // 2. Fetch the specific array for this seat
-            const snap = await db.ref('neighbor_map/' + mySeat.id).once('value');
-
-            if (snap.exists()) {
-                myNeighbors = snap.val();
-                log(`📍 Neighbor map loaded: ${myNeighbors.length} neighbors found.`);
-
-                // 3. Update the UI Safely
-                // We check if the indicator exists before touching it to prevent null errors
-                const neighborInd = document.getElementById('neighbor-ind');
-                if (neighborInd) {
-                    neighborInd.className = 'indicator active';
-                }
-
-                // Trigger the general UI update to refresh the system message
-                updateDeviceStatusDisplay();
+            const neighborSnap = await db.ref(`seat_config/neighborMap/${mySeat.id}`).once('value');
+            const neighborData = neighborSnap.val();
+            if (neighborData) {
+                myNeighbors = neighborData.neighbors || [];
+                allListeningTargets = [...myNeighbors];
+                log(`📍 Neighbor map loaded: ${myNeighbors.length} neighbors`);
+                document.getElementById('neighbor-ind').className = 'indicator active';
+                document.getElementById('debug-neighbors').innerText = myNeighbors.length;
                 return true;
             } else {
-                log(`⚠️ No neighbor data found for seat ${mySeat.id}.`);
-
-                const neighborInd = document.getElementById('neighbor-ind');
-                if (neighborInd) {
-                    neighborInd.className = 'indicator warning';
-                }
+                log(`⚠️ No neighbor map for ${mySeat.id}`);
+                document.getElementById('neighbor-ind').className = 'indicator error';
                 return false;
             }
-
-        } catch (error) {
-            log(`❌ Failed to load neighbor map: ${error.message}`);
-
-            const neighborInd = document.getElementById('neighbor-ind');
-            if (neighborInd) {
-                neighborInd.className = 'indicator error';
-            }
-
-            // We throw the error so window.onload's try/catch can handle the global failure
-            throw error;
+        } catch (e) {
+            log(`❌ Failed to load neighbor map: ${e.message}`);
+            return false;
         }
     }
 
@@ -691,8 +632,7 @@
             micStream = stream;
             micPermissionGranted = true;
             log("✅ Microphone permission GRANTED");
-            const oldBtn = document.getElementById('request-mic-btn');
-            if (initBtn) initBtn.style.display = 'block';
+            const micBtn = document.getElementById('request-mic-btn');
             if (micBtn) { micBtn.style.background = "#1e4d1e"; micBtn.innerHTML = "✅ Mic Ready"; micBtn.disabled = true; }
             return true;
         } catch (e) {
@@ -1236,7 +1176,7 @@
     // ============================================================================
     // ASSET PRELOAD
     // ============================================================================
-
+    let assetsPreloaded = false;
     async function preloadAssets() {
         document.getElementById('asset-progress').style.display = 'block';
         log("📦 Starting asset preload...");
