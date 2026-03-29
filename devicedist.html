@@ -7,7 +7,6 @@
 
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/nosleep/0.12.0/NoSleep.min.js"></script>
 
     <style>
         body {
@@ -311,7 +310,8 @@
     // ============================================================================
     // GLOBAL STATE
     // ============================================================================
-    const noSleep = new NoSleep();
+    let wakeLock = null;
+    let heartbeatOsc = null;
     let isListenOnlyMode = false;
     let audioCtx = null;
     let masterGain = null;
@@ -1358,6 +1358,55 @@
     async function playSpatialCue(cue) { const url = cue.audio_url; if (!url || !bufferCache[url]) return; const source = audioCtx.createBufferSource(); source.buffer = bufferCache[url]; const gainNode = audioCtx.createGain(); gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime); source.connect(gainNode); gainNode.connect(masterGain || audioCtx.destination); source.start(0); activeAudioCues.push({ ...cue, source, gainNode }); }
     function frame(now) { const delta = now - lastFrameTime; if (delta < FRAME_DURATION) { requestAnimationFrame(frame); return; } lastFrameTime = now; const serverNow = Date.now() + serverOffset; if (currentMovement && movementStartTime > serverNow) { const secondsToStart = ((movementStartTime - serverNow) / 1000).toFixed(1); document.getElementById('movement-indicator').querySelector('.status-text').innerText = `${currentMovement} (T-${secondsToStart}s)`; } else if (currentMovement) { document.getElementById('movement-indicator').querySelector('.status-text').innerText = `${currentMovement} (Playing)`; } const fps = Math.round(1000 / delta); document.getElementById('performance-overlay').innerHTML = `FPS: ${fps} | Speaker: ${currentSpeakerDelay?.toFixed(0) || '--'}ms | Mic: ${myMicDelayMs?.toFixed(0) || '--'}ms | Neighbors: ${myNeighbors.length} | ${isHappy ? '😊' : (phase1Complete ? '🎵' : '🎤')}`; requestAnimationFrame(frame); }
 
+    // Native Screen Wake Lock
+    async function requestWakeLock() {
+        try {
+            if ('wakeLock' in navigator) {
+                wakeLock = await navigator.wakeLock.request('screen');
+                console.log("✅ Screen Wake Lock active");
+
+                wakeLock.addEventListener('release', () => {
+                    console.log("⚠️ Wake Lock released");
+                });
+            }
+        } catch (err) {
+            console.error(`${err.name}, ${err.message}`);
+        }
+    }
+
+    // Audio Heartbeat to prevent thread deprioritization
+    //
+    // By keeping a low-level audio process running,
+    // the browser's power manager treats this tab
+    // as an "active media player" and keeps the
+    // JavaScript thread running at full speed
+    // rather than throttling it to save battery.
+
+    function startAudioHeartbeat() {
+        if (!audioCtx) return;
+
+        // Create a silent gain node
+        const silentGain = audioCtx.createGain();
+        silentGain.gain.value = 0.001; // Effectively silent
+        silentGain.connect(audioCtx.destination);
+
+        // Create a continuous oscillator to keep the audio thread active
+        heartbeatOsc = audioCtx.createOscillator();
+        heartbeatOsc.type = 'sine';
+        heartbeatOsc.frequency.setValueAtTime(440, audioCtx.currentTime);
+
+        heartbeatOsc.connect(silentGain);
+        heartbeatOsc.start();
+        console.log("💓 Audio Heartbeat started: Thread priority elevated.");
+    }
+
+    // Re-request the lock if the user tabs away and returns
+    document.addEventListener('visibilitychange', async () => {
+        if (wakeLock !== null && document.visibilityState === 'visible') {
+            await requestWakeLock();
+        }
+    });
+
     // ============================================================================
     // INITIALIZATION
     // ============================================================================
@@ -1382,8 +1431,8 @@
             // 3. ATOMIC MEDIA ACTIVATION
             // We do these IMMEDIATELY. Browsers are most likely to allow them
             // in the first few milliseconds of the click event loop.
-            noSleep.enable();
-            log("🎥 NoSleep enabled.");
+            await requestWakeLock();
+            startAudioHeartbeat();
 
             if (audioCtx && audioCtx.state === 'suspended') {
                 await audioCtx.resume();
@@ -1434,7 +1483,6 @@
     window.onresize = () => { const canvas = document.getElementById('stage-canvas'); canvas.width = window.innerWidth; canvas.height = window.innerHeight; };
 
     window.addEventListener('beforeunload', () => {
-        noSleep.disable(); // Release the wake lock
         stopHeartbeat();
         flushLogs();
     });
