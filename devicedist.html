@@ -71,7 +71,7 @@
             color: #000;
         }
 
-        #ready-btn {
+        #init-permissions-btn {
             background: #00ffcc;
             color: #000;
         }
@@ -163,8 +163,6 @@
         </div>
 
         <button id="init-permissions-btn" class="action-btn">Start Setup</button>
-
-        <button id="ready-btn" class="action-btn" style="display:none;" disabled>Enter Experience</button>
     </div>
 
     <div id="show-screen">
@@ -368,7 +366,7 @@
             const canStartSetup = mySeat && assetsPreloaded;
             initBtn.disabled = !canStartSetup;
 
-            // Hide this button once the mic is granted (since we'll show the ready-btn)
+            // Hide this button once the mic is granted (since we'll show the init-permissions-btn)
             if (micPermissionGranted) {
                 initBtn.style.display = 'none';
             }
@@ -394,16 +392,6 @@
             // Only show the panel if the microphone is active or we are in a tuning phase
             const isCalibrating = (typeof isMicActive !== 'undefined' && isMicActive);
             debugPanel.style.display = isCalibrating ? 'block' : 'none';
-        }
-
-        // 4. Update Ready Button State
-        const readyBtn = document.getElementById('ready-btn');
-        if (readyBtn) {
-            const isReady = mySeat &&
-                            assetsPreloaded &&
-                            micPermissionGranted;
-
-            readyBtn.disabled = !isReady;
         }
     }
 
@@ -1253,7 +1241,7 @@
             document.getElementById('asset-progress').style.display = 'none';
             log(`✅ Asset preload complete (${loadedCount}/${totalAssets})`);
             assetsPreloaded = true;
-            if (micPermissionGranted && mySeat && myNeighbors) document.getElementById('ready-btn').disabled = false;
+            if (micPermissionGranted && mySeat && myNeighbors) document.getElementById('init-permissions-btn').disabled = false;
             return true;
         } catch (e) { log(`❌ Asset Load Failure: ${e.message}`); document.getElementById('asset-ind').className = 'indicator error'; return false; }
     }
@@ -1378,24 +1366,16 @@
     // INITIALIZATION
     // ============================================================================
     const micButton = document.getElementById('request-mic-btn');
-    if (micButton) { micButton.onclick = async () => { await window.requestMicrophonePermission(); if (micPermissionGranted && mySeat && myNeighbors && assetsPreloaded) document.getElementById('ready-btn').disabled = false; }; }
+    if (micButton) { micButton.onclick = async () => { await window.requestMicrophonePermission(); if (micPermissionGranted && mySeat && myNeighbors && assetsPreloaded) document.getElementById('init-permissions-btn').disabled = false; }; }
 
-    document.getElementById('ready-btn').onclick = async () => {
+    document.getElementById('init-permissions-btn').onclick = async () => {
         // 1. Immediate UI feedback (prevent double-clicks)
-        document.getElementById('ready-btn').disabled = true;
+        document.getElementById('init-permissions-btn').disabled = true;
         document.getElementById('system-msg').innerText = "Activating keep-alive...";
         log("🖱️ Activation button pressed.");
 
-        // 2. Library Safety Check
-        if (typeof NoSleep === 'undefined') {
-            log("❌ ERROR: NoSleep.js library not found!");
-            document.getElementById('system-msg').innerText = "Error: Library missing.";
-            document.getElementById('ready-btn').disabled = false;
-            return;
-        }
-
         try {
-            // 3. ATOMIC MEDIA ACTIVATION
+            // 2. ATOMIC MEDIA ACTIVATION
             // We do these IMMEDIATELY. Browsers are most likely to allow them
             // in the first few milliseconds of the click event loop.
             await requestWakeLock();
@@ -1406,12 +1386,12 @@
                 log("🎵 AudioContext resumed.");
             }
 
-            // 4. IDENTITY VALIDATION
+            // 3. IDENTITY VALIDATION
             if (!mySeat || !mySeat.id) {
                 throw new Error("Identity missing. Please refresh or re-scan QR.");
             }
 
-            // 5. ASYNCHRONOUS NETWORK SYNC
+            // 4. ASYNCHRONOUS NETWORK SYNC
             // If the theater WiFi is spotty, this is where it might hang.
             // By doing this last, your audio and keep-alive are already running.
             log("🛰️ Syncing with stage...");
@@ -1429,7 +1409,7 @@
             log(`❌ Activation Failure: ${error.message}`);
             console.error(error);
             document.getElementById('system-msg').innerText = "System Error. Tap to retry.";
-            document.getElementById('ready-btn').disabled = false;
+            document.getElementById('init-permissions-btn').disabled = false;
         }
     };
 
@@ -1476,9 +1456,8 @@
             document.getElementById('init-permissions-btn').onclick = async () => {
                 const granted = await window.requestMicrophonePermission();
                 if (granted) {
-                    // Hide the first button and show the second
+                    // Disable the button
                     document.getElementById('init-permissions-btn').style.display = 'none';
-                    document.getElementById('ready-btn').style.display = 'block';
 
                     // Initialize the mic stream immediately so it's ready
                     await setupMicrophone();
