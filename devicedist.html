@@ -934,12 +934,6 @@
 
     function applyCorrection(medianShift) {
         const currentDelay = currentSpeakerDelay;
-        const newDelay = currentDelay + medianShift;  // Corrected formula
-        const clampedDelay = Math.max(-50, Math.min(1000, newDelay));
-
-        log(`🔄 Applying correction: shift=${medianShift > 0 ? '+' : ''}${medianShift.toFixed(1)}ms → ${currentDelay.toFixed(1)}ms → ${clampedDelay.toFixed(1)}ms`);
-
-        currentSpeakerDelay = clampedDelay;
 
         // Check if median shift is stuck (not changing)
         if (Math.abs(medianShift - lastMedianShift) < 5 && Math.abs(medianShift) > 10) {
@@ -947,9 +941,7 @@
             if (sameShiftCount >= 3) {
                 log(`⚠️ Median shift stuck at ${medianShift.toFixed(1)}ms for ${sameShiftCount} evaluations - pausing corrections`, 'warn');
                 log(`   Current delay: ${currentDelay.toFixed(1)}ms`);
-                // Calculate what the theoretical needed delay would be
-                const theoreticalDelay = currentDelay + medianShift;
-                log(`   Theoretical needed delay: ${theoreticalDelay.toFixed(1)}ms (${theoreticalDelay > currentDelay ? 'increase' : 'decrease'} by ${Math.abs(medianShift).toFixed(1)}ms)`);
+                log(`   Theoretical needed delay: ${currentDelay + medianShift}ms`);
                 lastMedianShift = medianShift;
                 return;
             }
@@ -958,6 +950,7 @@
             lastMedianShift = medianShift;
         }
 
+        // Correction direction
         // If medianShift is negative (late), we need to DECREASE delay to play earlier
         // If medianShift is positive (early), we need to INCREASE delay to play later
         // So: newDelay = currentDelay + medianShift
@@ -989,16 +982,19 @@
         currentSpeakerDelay = clampedDelay;
         iterationFinalDelays.push(currentSpeakerDelay);
 
-        // Only restart playback if correction is significant enough to be audible
-        const RESTART_THRESHOLD = 20;
-        if (correctionMagnitude >= RESTART_THRESHOLD) {
-            log(`   🔄 Restarting playback with new delay`);
-            restartWithNewDelay(currentSpeakerDelay);
-        } else {
-            log(`   ⏸️ Small correction, updating delay without restart`);
-            // Just update the envelope scheduler if playback is active
-            if (tuningStartTime && continuousGain && !isSingleDeviceMode && !isListenOnlyMode) {
-                setTimeout(() => startEnvelopeScheduler(tuningStartTime), 10);
+        // Create a new stream with the corrected delay (no stop!)
+        // This is the key change: instead of restarting, we create a new stream that crossfades in
+        if (tuningStartTime) {
+            const nowWall = Date.now() + serverOffset;
+            const currentSongPosition = nowWall - tuningStartTime;
+            const totalDuration = 182571;
+
+            if (currentSongPosition < totalDuration - 2000) {
+                const newStartTime = nowWall - currentSongPosition + clampedDelay;
+                log(`   🎵 Creating new stream with delay ${clampedDelay.toFixed(1)}ms at position ${currentSongPosition.toFixed(0)}ms`);
+                createNewPlaybackStream(newStartTime, clampedDelay);
+            } else {
+                log(`   ⏸️ Near end of tuning, skipping stream creation`);
             }
         }
 
@@ -1015,6 +1011,9 @@
         // Update UI
         updateCalibrationDisplay();
         document.getElementById('debug-speaker-delay').innerText = `${currentSpeakerDelay.toFixed(1)}ms`;
+
+        // Force log flush to ensure correction is recorded
+        flushLogs();
     }
 
     function evaluateInRealTime() {
