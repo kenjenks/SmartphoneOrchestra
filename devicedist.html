@@ -1338,7 +1338,6 @@
     // ============================================================================
     // SHOW PLAYBACK
     // ============================================================================
-    let wakeLock = null;
     async function requestWakeLock() { try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch (err) { console.warn('Wake lock failed:', err); } }
     function handleMovementStart(cue) { if (!cue.startTime || !cue.movement || !cue.cues) return; log(`🎬 MOVEMENT START: "${cue.movement}"`); clearAllScheduledCues(); currentMovement = cue.movement; movementStartTime = cue.startTime; document.getElementById('movement-indicator').querySelector('.status-text').innerText = `${cue.movement}`; if (cue.cues) scheduleTimelineCues(cue.cues); }
     function clearAllScheduledCues() {
