@@ -578,15 +578,6 @@
                 myNeighbors = snap.val();
                 log(`📍 Neighbor map loaded: ${myNeighbors.length} neighbors found.`);
 
-                // 3. Update the UI Safely
-                // We check if the indicator exists before touching it to prevent null errors
-                const neighborInd = document.getElementById('neighbor-ind');
-                if (neighborInd) {
-                    neighborInd.className = 'indicator active';
-                }
-
-                // Trigger the general UI update to refresh the system message
-                updateDeviceStatusDisplay();
                 return true;
             } else {
                 log(`⚠️ No neighbor data found for seat ${mySeat.id}.`);
