@@ -592,7 +592,7 @@ Operational SOP for Admin:
                     log("📡 Uploading to Firebase...");
 
                     await db.ref('seat_config').set(seatDataObj);
-                    await db.ref('seat_config/neighborMap').set(neighborMap);
+                    await db.ref('neighbor_map').set(neighborMap);
 
                     log("🎉 SUCCESS: Seat Config and Neighbor Map are live.");
                     document.getElementById('seat-config-status').innerText = "Loaded";
