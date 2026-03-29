@@ -104,7 +104,7 @@ Operational SOP for Admin:
                 <span id="pillar-status" class="status-badge badge-missing">Not Loaded</span>
 
                 <button class="btn" onclick="document.getElementById('seat-config-input').click()">Upload seat_config.tsv</button>
-                <input type="file" id="seat-config-input" style="display:none" onchange="uploadSeatConfig(this)">
+                <input type="file" id="seat-config-input" style="display:none" onchange="uploadSeatConfig()">
                 <span id="seat-status" class="status-badge badge-missing">Not Loaded</span>
 
                 <button class="btn" onclick="document.getElementById('tuning-input').click()">Upload tuning_mode.json</button>
@@ -517,123 +517,90 @@ Operational SOP for Admin:
             reader.readAsText(file);
         }
 
-        async function uploadSeatConfig(input) {
-            const file = input.files[0];
+        async function uploadSeatConfig() {
+            const file = document.getElementById('seat-config-upload').files[0];
             if (!file) return;
+
             const reader = new FileReader();
             reader.onload = async (e) => {
                 try {
                     const text = e.target.result;
-                    // Parse TSV
-                    const lines = text.split(/\r?\n/).filter(line => line.trim());
-                    const headers = lines[0].split('\t').map(h => h.trim());
+                    const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
 
-                    // Find column indices
-                    const idIdx = headers.findIndex(h => h.toLowerCase().includes('id') || h.toLowerCase().includes('seat'));
-                    const xIdx = headers.findIndex(h => h.toLowerCase() === 'x');
-                    const yIdx = headers.findIndex(h => h.toLowerCase() === 'y');
-                    const sectionIdx = headers.findIndex(h => h.toLowerCase().includes('section'));
+                    // 1. Header Parsing with .trim() to remove hidden \r characters
+                    const headers = lines[0].split('\t').map(h => h.trim().toLowerCase());
+                    log(`Parsing headers: [${headers.join(', ')}]`);
+
+                    const idIdx = headers.findIndex(h => h.includes('id') || h.includes('seat'));
+                    const xIdx = headers.indexOf('x');
+                    const yIdx = headers.indexOf('y');
+                    const sectionIdx = headers.findIndex(h => h.includes('section'));
 
                     if (idIdx === -1 || xIdx === -1 || yIdx === -1) {
-                        throw new Error("TSV must have 'seat_id' (or 'id'), 'x', and 'y' columns");
+                        log("ERROR: TSV must have 'id' (or 'seat_id'), 'x', and 'y' columns.");
+                        return;
                     }
 
+                    // 2. Data Parsing
                     const seats = [];
                     for (let i = 1; i < lines.length; i++) {
-                        const cols = lines[i].split('\t');
-                        if (cols.length <= Math.max(idIdx, xIdx, yIdx, sectionIdx)) continue;
+                        const cols = lines[i].split('\t').map(c => c.trim());
 
-                        const id = cols[idIdx].trim();
+                        const id = cols[idIdx];
                         const x = parseFloat(cols[xIdx]);
                         const y = parseFloat(cols[yIdx]);
-                        const section = sectionIdx !== -1 ? cols[sectionIdx].trim() : 'Orchestra';
+                        const section = sectionIdx !== -1 ? cols[sectionIdx] : 'Orchestra';
 
-                        if (id && !isNaN(x) && !isNaN(y)) {
-                            seats.push({ id, x, y, section });
+                        if (!id || isNaN(x) || isNaN(y)) {
+                            log(`⚠️ Skipping row ${i+1}: Invalid data (${id}, ${x}, ${y})`);
+                            continue;
                         }
+
+                        seats.push({ id, x, y, section });
                     }
 
                     if (seats.length === 0) {
-                        throw new Error("No valid seat data found in TSV");
+                        log("ERROR: No valid seats found in file.");
+                        return;
                     }
 
-                    log(`Parsed ${seats.length} seats from TSV`);
+                    log(`✅ Parsed ${seats.length} seats. Generating neighbor map...`);
 
-                    // Log section distribution
-                    const sections = [...new Set(seats.map(s => s.section))];
-                    log(`📊 Sections found: ${sections.join(', ')}`);
-
-                    // Compute neighbor map for distributed calibration
-                    log("🗺️ Computing neighbor map (2m radius, same section only)...");
+                    // 3. Neighbor Map Calculation (6 closest in same section)
                     const neighborMap = {};
+                    seats.forEach(currentSeat => {
+                        const neighbors = seats
+                            .filter(other => other.id !== currentSeat.id && other.section === currentSeat.section)
+                            .map(other => ({
+                                id: other.id,
+                                dist: Math.sqrt(Math.pow(currentSeat.x - other.x, 2) + Math.pow(currentSeat.y - other.y, 2))
+                            }))
+                            .sort((a, b) => a.dist - b.dist)
+                            .slice(0, 6)
+                            .map(n => n.id);
 
-                    // First, separate pillars from patron seats
-                    const pillars = seats.filter(s => s.id.startsWith('PILLAR_'));
-                    const patronSeats = seats.filter(s => !s.id.startsWith('PILLAR_'));
-
-                    for (const seat of patronSeats) {
-                        // Find neighbors within 2m that are in the same section
-                        const neighbors = patronSeats
-                            .filter(other => {
-                                if (other.id === seat.id) return false; // Skip self
-
-                                // CRITICAL FIX: Use section from TSV, not hardcoded Y threshold
-                                if (other.section !== seat.section) return false;
-
-                                const dx = seat.x - other.x;
-                                const dy = seat.y - other.y;
-                                const dist = Math.sqrt(dx*dx + dy*dy);
-                                return dist <= 2.0; // 2 meter radius
-                            })
-                            .map(s => s.id);
-
-                        // Get all pillar IDs (all 4 pillars always included)
-                        const pillarIds = pillars.map(p => p.id);
-
-                        neighborMap[seat.id] = {
-                            neighbors: neighbors,
-                            pillars: pillarIds
-                        };
-                    }
-
-                    // Also create entries for pillars
-                    for (const pillar of pillars) {
-                        // Pillars can have patron neighbors (but not other pillars in neighbor list)
-                        const patronNeighbors = patronSeats
-                            .filter(patron => {
-                                const dx = pillar.x - patron.x;
-                                const dy = pillar.y - patron.y;
-                                const dist = Math.sqrt(dx*dx + dy*dy);
-                                return dist <= 2.0;
-                            })
-                            .map(s => s.id);
-
-                        // Log if pillars have no neighbors (expected in this venue)
-                        if (patronNeighbors.length === 0) {
-                            log(`ℹ️ Pillar ${pillar.id} has no patrons within 2m - this is expected as pillars are at corners`);
-                        }
-
-                        neighborMap[pillar.id] = {
-                            neighbors: patronNeighbors,
-                            pillars: pillars.filter(p => p.id !== pillar.id).map(p => p.id)
-                        };
-                    }
-
-                    log(`✅ Generated neighbor map for ${Object.keys(neighborMap).length} seats`);
-
-                    // Show sample
-                    const sampleSeat = patronSeats[Math.floor(patronSeats.length / 2)];
-                    if (sampleSeat) {
-                        log(`   Sample: ${sampleSeat.id} (${sampleSeat.section}) has ${neighborMap[sampleSeat.id]?.neighbors?.length || 0} neighbors`);
-                    }
-
-                    await db.ref('seat_config').set({
-                        seats,
-                        neighborMap,
-                        uploadedAt: Date.now()
+                        neighborMap[currentSeat.id] = neighbors;
                     });
-                    log("SUCCESS: Seat configuration with neighbor map uploaded.");
-                } catch (err) { log(`ERROR: ${err.message}`); }
+
+                    // 4. Firebase Upload to the /config/ path
+                    // Format seats as an object keyed by ID: { "A1": {x,y...}, "A2": {...} }
+                    const seatDataObj = seats.reduce((acc, s) => {
+                        acc[s.id] = s;
+                        return acc;
+                    }, {});
+
+                    log("📡 Uploading to Firebase...");
+
+                    await db.ref('config/seats').set(seatDataObj);
+                    await db.ref('config/neighbor_map').set(neighborMap);
+
+                    log("🎉 SUCCESS: Seat Config and Neighbor Map are live.");
+                    document.getElementById('seat-config-status').innerText = "Loaded";
+
+                } catch (err) {
+                    log(`❌ Critical Upload Error: ${err.message}`);
+                    console.error(err);
+                }
             };
             reader.readAsText(file);
         }

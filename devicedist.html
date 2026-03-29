@@ -467,14 +467,7 @@
 
     db.ref(".info/serverTimeOffset").on("value", snap => {
         serverOffset = snap.val() || 0;
-
-        const syncInd = document.getElementById('sync-ind');
-        if (syncInd) {
-            syncInd.className = 'indicator active';
-        } else {
-            // If the element is gone, we just update our general system message instead
-            updateDeviceStatusDisplay();
-        }
+        updateDeviceStatusDisplay();
     });
 
     // ============================================================================
@@ -521,8 +514,7 @@
 
             try {
                 // 2. Fetch spatial coordinates from Firebase config
-                // Path: config/seats/[SeatID] (e.g., config/seats/C1)
-                const snap = await db.ref('config/seats/' + mySeat.id).once('value');
+                const snap = await db.ref('seat_config/' + mySeat.id).once('value');
 
                 if (snap.exists()) {
                     const data = snap.val();
@@ -595,7 +587,7 @@
             log(`🔍 Fetching neighbor map for seat ${mySeat.id}...`);
 
             // 2. Fetch the specific array for this seat
-            const snap = await db.ref('config/neighbor_map/' + mySeat.id).once('value');
+            const snap = await db.ref('neighbor_map/' + mySeat.id).once('value');
 
             if (snap.exists()) {
                 myNeighbors = snap.val();
@@ -692,7 +684,8 @@
             micStream = stream;
             micPermissionGranted = true;
             log("✅ Microphone permission GRANTED");
-            const micBtn = document.getElementById('request-mic-btn');
+            const oldBtn = document.getElementById('request-mic-btn');
+            if (initBtn) initBtn.style.display = 'block';
             if (micBtn) { micBtn.style.background = "#1e4d1e"; micBtn.innerHTML = "✅ Mic Ready"; micBtn.disabled = true; }
             return true;
         } catch (e) {
