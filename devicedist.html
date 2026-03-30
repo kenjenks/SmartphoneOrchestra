@@ -202,6 +202,7 @@
     const PICCOLO_MIN_FREQ = 500;
     const PICCOLO_MAX_FREQ = 2100;
     const FFT_SIZE = 2048;
+    const BASELINE_SAMPLES_MS = 200;       // legacy, not used in rolling baseline
     const BASELINE_THRESHOLD_MULTIPLIER = 1.1;
     const MIN_DETECTION_ENERGY = 0.03;
     const PILLAR_ONSET_THRESHOLD = 2.0;
@@ -220,6 +221,7 @@
     const MAX_CORRECTIONS = 3;
     const HEARTBEAT_TIMEOUT_MS = 12100;
     const BASELINE_WINDOW_SAMPLES = 50;   // rolling window size
+    const FADE_MS = 5;                    // fade in/out duration in milliseconds
 
     // ============================================================================
     // GLOBAL STATE
@@ -305,6 +307,9 @@
     let correctionCount = 0;
     let pendingCorrection = null;
     let restPeriods = [];
+
+    // Device‑specific buffer (built after tuning schedule)
+    let deviceBuffer = null;
 
     // ============================================================================
     // PERIODIC LOGGING
@@ -756,7 +761,6 @@
                 const expTime = tuningStartTime + note.ms_offset;
                 const shift = now - expTime;
                 if (Math.abs(shift) < 500) {
-                    // Store in separate array for validation only – not used for speaker delay correction
                     pillarSyncShifts.push(shift);
                     if (pillarSyncShifts.length > 50) pillarSyncShifts.shift();
                     pillarDetectionsCount++;
@@ -879,20 +883,61 @@
     }
 
     // ============================================================================
-    // PARALLEL STREAMING PLAYBACK (audio‑context scheduling)
+    // DEVICE‑SPECIFIC BUFFER CREATION (pre‑process once)
+    // ============================================================================
+    function createDeviceBuffer(originalBuffer, assignedNotes) {
+        const sampleRate = originalBuffer.sampleRate;
+        const length = originalBuffer.length;
+        const channels = originalBuffer.numberOfChannels;
+
+        const deviceBuffer = new AudioBuffer({
+            numberOfChannels: channels,
+            length: length,
+            sampleRate: sampleRate
+        });
+
+        // Copy original channel data and fill with silence
+        for (let ch = 0; ch < channels; ch++) {
+            const srcData = originalBuffer.getChannelData(ch);
+            const dstData = deviceBuffer.getChannelData(ch);
+            dstData.fill(0);
+
+            for (const note of assignedNotes) {
+                const startSample = Math.floor(note.startMs / 1000 * sampleRate);
+                const endSample = Math.floor((note.startMs + note.durationMs) / 1000 * sampleRate);
+                const fadeSamples = Math.floor(FADE_MS / 1000 * sampleRate);
+
+                for (let s = startSample; s < endSample && s < length; s++) {
+                    let gain = 1.0;
+                    // Linear fade‑in
+                    if (s - startSample < fadeSamples) {
+                        gain = (s - startSample) / fadeSamples;
+                    }
+                    // Linear fade‑out
+                    if (endSample - s < fadeSamples) {
+                        gain = (endSample - s) / fadeSamples;
+                    }
+                    dstData[s] += srcData[s] * gain;
+                }
+            }
+        }
+        return deviceBuffer;
+    }
+
+    // ============================================================================
+    // PLAYBACK (constant gain, no envelope)
     // ============================================================================
     let activeStream = null;
     let allStreams = [];
 
     function startContinuousPlayback(startTime, speakerDelay) {
-        log(`🔍 startContinuousPlayback called: isListenOnlyMode=${isListenOnlyMode}, PICCOLO_URL=${PICCOLO_URL}, hasBuffer=${!!bufferCache[PICCOLO_URL]}`);
+        log(`🔍 startContinuousPlayback called: isListenOnlyMode=${isListenOnlyMode}, hasDeviceBuffer=${!!deviceBuffer}`);
         if (isListenOnlyMode) { log(`🔇 Listen‑only mode`); return; }
-        if (!PICCOLO_URL) { log(`❌ PICCOLO_URL not set`); return; }
-        if (!bufferCache[PICCOLO_URL]) { log(`❌ Piccolo audio not loaded`); return; }
+        if (!deviceBuffer) { log(`❌ Device buffer not ready`); return; }
         const nowWall = Date.now() + serverOffset;
         const adjStart = startTime - speakerDelay;
         const delayMs = adjStart - nowWall;
-        log(`🔍 startContinuousPlayback: isListenOnlyMode=${isListenOnlyMode}, PICCOLO_URL=${PICCOLO_URL}, hasBuffer=${!!bufferCache[PICCOLO_URL]}, delayMs=${delayMs.toFixed(1)}`);
+        log(`🔍 startContinuousPlayback: delayMs=${delayMs.toFixed(1)}`);
         if (delayMs > 0 && delayMs < 30000) {
             setTimeout(() => createNewPlaybackStream(adjStart, speakerDelay), delayMs);
         } else if (delayMs > -1000) {
@@ -904,13 +949,13 @@
     }
 
     function createNewPlaybackStream(targetWallTime, speakerDelay) {
-        log(`🔍 createNewPlaybackStream: audioCtx.state=${audioCtx?.state}, buffer=${!!bufferCache[PICCOLO_URL]}, isSingleDeviceMode=${isSingleDeviceMode}`);
+        log(`🔍 createNewPlaybackStream: audioCtx.state=${audioCtx?.state}, hasDeviceBuffer=${!!deviceBuffer}`);
         if (!audioCtx || audioCtx.state !== 'running') {
             log(`⚠️ Audio context not running (state=${audioCtx?.state})`);
             return null;
         }
-        if (!PICCOLO_URL || !bufferCache[PICCOLO_URL]) {
-            log(`⚠️ Missing audio buffer`);
+        if (!deviceBuffer) {
+            log(`⚠️ Device buffer missing`);
             return null;
         }
 
@@ -920,20 +965,11 @@
         const startAudio = nowAudio + Math.max(0, delaySec);
 
         const source = audioCtx.createBufferSource();
-        source.buffer = bufferCache[PICCOLO_URL];
+        source.buffer = deviceBuffer;
         source.loop = false;
 
         const gain = audioCtx.createGain();
-
-        if (isSingleDeviceMode) {
-            // Single device: constant full volume from the start
-            log(`🔊 Single‑device mode: setting gain to ${MASTER_PLAYBACK_GAIN} at startAudio=${startAudio.toFixed(3)}`);
-            gain.gain.setValueAtTime(MASTER_PLAYBACK_GAIN, startAudio);
-        } else {
-            // Multi‑device: start at zero, envelope scheduler will shape notes
-            gain.gain.setValueAtTime(0, startAudio);
-        }
-
+        gain.gain.setValueAtTime(MASTER_PLAYBACK_GAIN, startAudio);
         source.connect(gain);
         gain.connect(masterGain || audioCtx.destination);
         source.start(startAudio);
@@ -962,42 +998,8 @@
         newStream.isActive = true;
         activeStream = newStream;
 
-        startEnvelopeScheduler(targetWallTime, speakerDelay);
-
         log(`✅ Playback stream ${streamId} created, startAudio=${startAudio.toFixed(3)}`);
         return newStream;
-    }
-
-    function startEnvelopeScheduler(pieceStartWallTime, speakerDelay) {
-        envelopeTimeouts.forEach(t => clearTimeout(t));
-        envelopeTimeouts = [];
-
-        const stream = activeStream;
-        if (!stream || !stream.gain) return;
-
-        if (isSingleDeviceMode) {
-            log(`🎧 Single‑device mode: skipping envelope scheduling`);
-            return;
-        }
-
-        const nowWall = Date.now() + serverOffset;
-        const nowAudio = audioCtx.currentTime;
-        const gain = stream.gain.gain;
-
-        assignedNotes.forEach(note => {
-            const noteStartWall = pieceStartWallTime + note.startMs;
-            const noteEndWall = noteStartWall + note.durationMs;
-
-            const startAudio = nowAudio + (noteStartWall - nowWall) / 1000;
-            const endAudio = nowAudio + (noteEndWall - nowWall) / 1000;
-
-            if (startAudio > nowAudio - 0.01) {
-                gain.cancelScheduledValues(startAudio - 0.01);
-                gain.setValueAtTime(0, startAudio);
-                gain.linearRampToValueAtTime(MASTER_PLAYBACK_GAIN, startAudio + 0.005);
-                gain.linearRampToValueAtTime(0, endAudio);
-            }
-        });
     }
 
     // ============================================================================
@@ -1011,7 +1013,6 @@
     }
 
     function scheduleCorrectionDuringRest(medianShift, currentDelay) {
-        // Disable corrections in single‑device mode
         if (isSingleDeviceMode) {
             log(`🎧 Single‑device mode: skipping correction scheduling`);
             return false;
@@ -1058,9 +1059,8 @@
 
         log(`🔄 Correction needed: shift=${medianShift.toFixed(1)}ms → ${currentDelay.toFixed(1)}ms → ${clamped.toFixed(1)}ms`);
 
-        // In single‑device mode, we just store the delay and do not restart playback
         if (isSingleDeviceMode) {
-            log(`🔧 Single‑device mode: storing delay ${clamped.toFixed(1)}ms, not correcting stream`);
+            log(`🔧 Single‑device mode: storing delay ${clamped.toFixed(1)}ms, keeping current stream`);
             currentSpeakerDelay = clamped;
             rawTimeShifts = [];
             correctionCount++;
@@ -1102,7 +1102,6 @@
 
     function evaluateInRealTime() {
         if (isHappy) return;
-        // Use only neighbor-reported delays (rawTimeShifts) for correction
         if (rawTimeShifts.length < MIN_SAMPLES_FOR_CORRECTION) return;
         const median = calculateMedian(rawTimeShifts);
         const stdDev = calculateStdDev(rawTimeShifts);
@@ -1156,7 +1155,6 @@
         const now = Date.now() + serverOffset;
         analyser.getByteFrequencyData(frequencyData);
 
-        // Rolling baseline (same as xmusiclistener)
         const nyquist = sampleRate/2;
         const startBin = Math.floor(500 / nyquist * (FFT_SIZE/2));
         const endBin = Math.ceil(2100 / nyquist * (FFT_SIZE/2));
@@ -1170,7 +1168,6 @@
         const eVal = document.getElementById('energy-value');
         if (eVal) eVal.innerText = piccoloEnergy.toFixed(4);
 
-        // Rolling baseline
         baselineSamples.push(piccoloEnergy);
         if (baselineSamples.length > BASELINE_WINDOW_SAMPLES) baselineSamples.shift();
         if (baselineSamples.length === BASELINE_WINDOW_SAMPLES) {
@@ -1371,13 +1368,20 @@
                 log(`📌 isSingleDeviceMode = ${isSingleDeviceMode} (patron count ${patronOrder.length})`);
             }
 
+            // Build device‑specific buffer if we have assigned notes
+            if (!isListenOnlyMode && assignedNotes.length > 0 && bufferCache[PICCOLO_URL]) {
+                log(`🔧 Building device‑specific buffer for ${assignedNotes.length} notes...`);
+                deviceBuffer = createDeviceBuffer(bufferCache[PICCOLO_URL], assignedNotes);
+                log(`✅ Device buffer built, duration: ${deviceBuffer.duration.toFixed(2)}s`);
+            }
+
             if (!isListenOnlyMode) {
                 phase1Complete = false;
                 phase1WindowActive = true;
                 micDelaySamples = [];
                 myMicDelayMs = null;
                 rawTimeShifts = [];
-                pillarSyncShifts = [];  // clear pillar sync array
+                pillarSyncShifts = [];
                 processedMeasurements.clear();
                 localRecordings.clear();
                 scheduledRecordings.clear();
@@ -1570,3 +1574,4 @@
     window.addEventListener('beforeunload', () => { stopHeartbeat(); flushLogs(); });
 </script>
 </html>
+```
