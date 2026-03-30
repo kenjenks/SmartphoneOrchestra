@@ -323,8 +323,15 @@
             const songPos = tuningStartTime ? (now - tuningStartTime) : 0;
             const neighborSummary = Array.from(neighborDetectionsPerNeighbor.entries())
                 .map(([id, cnt]) => `${id}:${cnt}`).join(', ');
-            log(`📊 STATUS: played=${playedNotesCount} | neighbor=${neighborDetectionsCount} (${neighborSummary}) | pillar=${pillarDetectionsCount} | phase=${phase1Complete ? '2' : '1'} | delay=${currentSpeakerDelay.toFixed(0)}ms | mic=${myMicDelayMs?.toFixed(0) || '?'}ms | corr=${correctionCount} | pos=${(songPos/1000).toFixed(0)}s`);
-            flushLogs(); // Ensure it's written immediately
+            // Compute microphone max energy
+            let maxEnergy = 0;
+            if (frequencyData) {
+                for (let i = 0; i < frequencyData.length; i++) {
+                    maxEnergy = Math.max(maxEnergy, frequencyData[i] / 255);
+                }
+            }
+            log(`📊 STATUS: played=${playedNotesCount} | neighbor=${neighborDetectionsCount} (${neighborSummary}) | pillar=${pillarDetectionsCount} | phase=${phase1Complete ? '2' : '1'} | delay=${currentSpeakerDelay.toFixed(0)}ms | mic=${myMicDelayMs?.toFixed(0) || '?'}ms | corr=${correctionCount} | pos=${(songPos/1000).toFixed(0)}s | maxE=${maxEnergy.toFixed(3)}`);
+            flushLogs();
         }, 5000);
     }
 
