@@ -4,8 +4,9 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="2a49255b-03b5-4ec9-ac94-23daadf8b64a" name="Changes" comment="devicedist.html - Log mic max energy periodically too">
+    <list default="true" id="2a49255b-03b5-4ec9-ac94-23daadf8b64a" name="Changes" comment="devicedist.html - Start each correction with the MP3 playing at the same original start time, but seeking to the current time.">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xmusiclistener.html" beforeDir="false" afterPath="$PROJECT_DIR$/xmusiclistener.html" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -78,110 +79,6 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1772254886720</updated>
-    </task>
-    <task id="LOCAL-00409" summary="devicedist.html - Debug Phase 3 neighbors cocktail party">
-      <option name="closed" value="true" />
-      <created>1774691167205</created>
-      <option name="number" value="00409" />
-      <option name="presentableId" value="LOCAL-00409" />
-      <option name="project" value="LOCAL" />
-      <updated>1774691167205</updated>
-    </task>
-    <task id="LOCAL-00410" summary="epillar.html - log to the DB for conductor.html">
-      <option name="closed" value="true" />
-      <created>1774693186466</created>
-      <option name="number" value="00410" />
-      <option name="presentableId" value="LOCAL-00410" />
-      <option name="project" value="LOCAL" />
-      <updated>1774693186467</updated>
-    </task>
-    <task id="LOCAL-00411" summary="epillar.html - Added proper error display - Shows error message when identity resolution fails&#10;&#10;Enabled the ACTIVATE button after identity resolution - Button was staying disabled&#10;&#10;Added timeout handling - Shows error if Firebase doesn't respond&#10;&#10;Fixed the loadPillarConfig return - Returns boolean for success/failure&#10;&#10;Added better logging - Helps debug what's happening&#10;&#10;Fixed the identity check - Properly handles pillars not yet in config">
-      <option name="closed" value="true" />
-      <created>1774707936934</created>
-      <option name="number" value="00411" />
-      <option name="presentableId" value="LOCAL-00411" />
-      <option name="project" value="LOCAL" />
-      <updated>1774707936934</updated>
-    </task>
-    <task id="LOCAL-00412" summary="devicedist.html - function applyCorrection - reversed sign / If medianShift is negative (late), we need to DECREASE delay to play earlier&#10;        // If medianShift is positive (early), we need to INCREASE delay to play later&#10;        // So: newDelay = currentDelay + medianShift">
-      <option name="closed" value="true" />
-      <created>1774709246133</created>
-      <option name="number" value="00412" />
-      <option name="presentableId" value="LOCAL-00412" />
-      <option name="project" value="LOCAL" />
-      <updated>1774709246133</updated>
-    </task>
-    <task id="LOCAL-00413" summary="bach_tone_duration_extractor.py - extract_pillar_notes - Extract pillar notes from quad piano MusicXML.&#10;&#10;        Supports staff filtering and note collision detection.&#10;        Only notes that overlap with another note of the SAME PITCH are filtered out,&#10;        because that causes ambiguous detection. Simultaneous different pitches (chords)&#10;        are fine and actually help detection.">
-      <option name="closed" value="true" />
-      <created>1774713026194</created>
-      <option name="number" value="00413" />
-      <option name="presentableId" value="LOCAL-00413" />
-      <option name="project" value="LOCAL" />
-      <updated>1774713026194</updated>
-    </task>
-    <task id="LOCAL-00414" summary="bach_tone_duration_extractor.py - extract_pillar_notes - Filter out pillar piccolo notes that overlap with string quartet or piano parts">
-      <option name="closed" value="true" />
-      <created>1774714426216</created>
-      <option name="number" value="00414" />
-      <option name="presentableId" value="LOCAL-00414" />
-      <option name="project" value="LOCAL" />
-      <updated>1774714426216</updated>
-    </task>
-    <task id="LOCAL-00415" summary="devicedist.html - Use speed of sound in timing calc">
-      <option name="closed" value="true" />
-      <created>1774715039393</created>
-      <option name="number" value="00415" />
-      <option name="presentableId" value="LOCAL-00415" />
-      <option name="project" value="LOCAL" />
-      <updated>1774715039393</updated>
-    </task>
-    <task id="LOCAL-00416" summary="seat_config.tsv - Divide all numbers by 10 to simulate test configuration where devices are close to each other">
-      <option name="closed" value="true" />
-      <created>1774715931274</created>
-      <option name="number" value="00416" />
-      <option name="presentableId" value="LOCAL-00416" />
-      <option name="project" value="LOCAL" />
-      <updated>1774715931274</updated>
-    </task>
-    <task id="LOCAL-00417" summary="conductor.html - Increase log limits">
-      <option name="closed" value="true" />
-      <created>1774716800781</created>
-      <option name="number" value="00417" />
-      <option name="presentableId" value="LOCAL-00417" />
-      <option name="project" value="LOCAL" />
-      <updated>1774716800781</updated>
-    </task>
-    <task id="LOCAL-00418" summary="devicedist.html  - MAX_CORRECTIONS = 3;">
-      <option name="closed" value="true" />
-      <created>1774718585832</created>
-      <option name="number" value="00418" />
-      <option name="presentableId" value="LOCAL-00418" />
-      <option name="project" value="LOCAL" />
-      <updated>1774718585832</updated>
-    </task>
-    <task id="LOCAL-00419" summary="devicedist.html  - // PARALLEL STREAMING PLAYBACK (No stop() calls)&#10;    // This program was crashing on Samsung A9 tablets&#10;    // when it tried to stop and restart MP3 files so&#10;    // now instead of stopping them, the MP3 files&#10;    // continue to play out at 0% volume.">
-      <option name="closed" value="true" />
-      <created>1774753001965</created>
-      <option name="number" value="00419" />
-      <option name="presentableId" value="LOCAL-00419" />
-      <option name="project" value="LOCAL" />
-      <updated>1774753001965</updated>
-    </task>
-    <task id="LOCAL-00420" summary="devicedist.html  - Force an iteration/correction early in the tuning movement">
-      <option name="closed" value="true" />
-      <created>1774754187722</created>
-      <option name="number" value="00420" />
-      <option name="presentableId" value="LOCAL-00420" />
-      <option name="project" value="LOCAL" />
-      <updated>1774754187722</updated>
-    </task>
-    <task id="LOCAL-00421" summary="devicedist.html  - log(`🔄 Applying correction: shift=${medianShift &gt; 0 ? '+' : ''}${medianShift.toFixed(1)}ms → ${currentDelay.toFixed(1)}ms → ${clampedDelay.toFixed(1)}ms`);">
-      <option name="closed" value="true" />
-      <created>1774755004509</created>
-      <option name="number" value="00421" />
-      <option name="presentableId" value="LOCAL-00421" />
-      <option name="project" value="LOCAL" />
-      <updated>1774755004509</updated>
     </task>
     <task id="LOCAL-00422" summary="devicedist.html  - Just one const newDelay">
       <option name="closed" value="true" />
@@ -471,7 +368,111 @@
       <option name="project" value="LOCAL" />
       <updated>1774842859395</updated>
     </task>
-    <option name="localTasksCounter" value="458" />
+    <task id="LOCAL-00458" summary="xmusiclistener.html - Add latest note detection algorithm">
+      <option name="closed" value="true" />
+      <created>1774855327966</created>
+      <option name="number" value="00458" />
+      <option name="presentableId" value="LOCAL-00458" />
+      <option name="project" value="LOCAL" />
+      <updated>1774855327966</updated>
+    </task>
+    <task id="LOCAL-00459" summary="devicedist.html - 13 ms default speaker delay not 130 ms">
+      <option name="closed" value="true" />
+      <created>1774855974102</created>
+      <option name="number" value="00459" />
+      <option name="presentableId" value="LOCAL-00459" />
+      <option name="project" value="LOCAL" />
+      <updated>1774855974102</updated>
+    </task>
+    <task id="LOCAL-00460" summary="xmusiclistener.html - Advanced note detection">
+      <option name="closed" value="true" />
+      <created>1774856076165</created>
+      <option name="number" value="00460" />
+      <option name="presentableId" value="LOCAL-00460" />
+      <option name="project" value="LOCAL" />
+      <updated>1774856076165</updated>
+    </task>
+    <task id="LOCAL-00461" summary="devicedist.html - Default speaker delay 42 ms">
+      <option name="closed" value="true" />
+      <created>1774856694845</created>
+      <option name="number" value="00461" />
+      <option name="presentableId" value="LOCAL-00461" />
+      <option name="project" value="LOCAL" />
+      <updated>1774856694846</updated>
+    </task>
+    <task id="LOCAL-00462" summary="xmusiclistener.html - Laptop mic delay 40 ms">
+      <option name="closed" value="true" />
+      <created>1774858190699</created>
+      <option name="number" value="00462" />
+      <option name="presentableId" value="LOCAL-00462" />
+      <option name="project" value="LOCAL" />
+      <updated>1774858190699</updated>
+    </task>
+    <task id="LOCAL-00463" summary="devicedist.html - Replace ramp up/ramp down code">
+      <option name="closed" value="true" />
+      <created>1774859461163</created>
+      <option name="number" value="00463" />
+      <option name="presentableId" value="LOCAL-00463" />
+      <option name="project" value="LOCAL" />
+      <updated>1774859461163</updated>
+    </task>
+    <task id="LOCAL-00464" summary="devicedist.html - Set gain 100% for single-device mode">
+      <option name="closed" value="true" />
+      <created>1774860469564</created>
+      <option name="number" value="00464" />
+      <option name="presentableId" value="LOCAL-00464" />
+      <option name="project" value="LOCAL" />
+      <updated>1774860469565</updated>
+    </task>
+    <task id="LOCAL-00465" summary="devicedist.html - Logging single-device mode audio context scheduling">
+      <option name="closed" value="true" />
+      <created>1774861815971</created>
+      <option name="number" value="00465" />
+      <option name="presentableId" value="LOCAL-00465" />
+      <option name="project" value="LOCAL" />
+      <updated>1774861815971</updated>
+    </task>
+    <task id="LOCAL-00466" summary="xmusiclistener.html -Use devicedist algorithm for note detection">
+      <option name="closed" value="true" />
+      <created>1774861854884</created>
+      <option name="number" value="00466" />
+      <option name="presentableId" value="LOCAL-00466" />
+      <option name="project" value="LOCAL" />
+      <updated>1774861854884</updated>
+    </task>
+    <task id="LOCAL-00467" summary="devicedist.html - Disable corrections in single patron device mode">
+      <option name="closed" value="true" />
+      <created>1774906393822</created>
+      <option name="number" value="00467" />
+      <option name="presentableId" value="LOCAL-00467" />
+      <option name="project" value="LOCAL" />
+      <updated>1774906393822</updated>
+    </task>
+    <task id="LOCAL-00468" summary="devicedist.html - applyCorrection – change + medianShift to - medianShift.&#10;&#10;scheduleCorrectionDuringRest – same sign change.&#10;&#10;detectPillarForSync – push shifts into a separate pillarSyncShifts array (add a new global variable).&#10;&#10;Remove pillarSyncShifts from the median calculation in evaluateInRealTime">
+      <option name="closed" value="true" />
+      <created>1774908484756</created>
+      <option name="number" value="00468" />
+      <option name="presentableId" value="LOCAL-00468" />
+      <option name="project" value="LOCAL" />
+      <updated>1774908484756</updated>
+    </task>
+    <task id="LOCAL-00469" summary="devicedist.html - with the buffer‑preprocessing approach. The device downloads the MP3 once, then builds a per‑device buffer containing only its assigned notes (with short fades). Playback uses constant gain; corrections restart the buffer at the current position with the new speaker delay. The envelope scheduler is removed entirely, eliminating clipping.">
+      <option name="closed" value="true" />
+      <created>1774911137312</created>
+      <option name="number" value="00469" />
+      <option name="presentableId" value="LOCAL-00469" />
+      <option name="project" value="LOCAL" />
+      <updated>1774911137312</updated>
+    </task>
+    <task id="LOCAL-00470" summary="devicedist.html - Start each correction with the MP3 playing at the same original start time, but seeking to the current time.">
+      <option name="closed" value="true" />
+      <created>1774913596075</created>
+      <option name="number" value="00470" />
+      <option name="presentableId" value="LOCAL-00470" />
+      <option name="project" value="LOCAL" />
+      <updated>1774913596075</updated>
+    </task>
+    <option name="localTasksCounter" value="471" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
@@ -486,19 +487,6 @@
     </option>
   </component>
   <component name="VcsManagerConfiguration">
-    <MESSAGE value="devicedist.html - function loadNeighborMap uses new GUI elements" />
-    <MESSAGE value="admin.html AND devicedist.html - use same Firebase db structure" />
-    <MESSAGE value="admin.html - use same Firebase db structure, not config/ but in the root" />
-    <MESSAGE value="admin.html - use const file = document.getElementById('seat-config-input').files[0];" />
-    <MESSAGE value="admin.html - use await db.ref('neighbor_map').set(neighborMap);" />
-    <MESSAGE value="admin.html - use document.getElementById('seat-status').innerText = &quot;Loaded&quot;;" />
-    <MESSAGE value="devicedist.html - delete remnants of noSleep library" />
-    <MESSAGE value="devicedist.html - Hidden &lt;div id=&quot;calibration-debug&quot; class=&quot;calibration-debug&quot; style=&quot;display:none;&quot;&gt;" />
-    <MESSAGE value="devicedist.html - Delete neighbor map GUID" />
-    <MESSAGE value="admin.html and devicedist.html - Reverting to earlier versions cuz Gemini  is stupid" />
-    <MESSAGE value="admin.html - Use seat_config instead of config/seats" />
-    <MESSAGE value="admin.html - Use seat-config-input not seat-config-upload" />
-    <MESSAGE value="admin.html - seat-status not seat-config-status" />
     <MESSAGE value="devicedist.html - Revert to older version" />
     <MESSAGE value="devicedist.html - Really revert to older version" />
     <MESSAGE value="devicedist.html - Add &lt;div id=&quot;status-registry&quot;&gt;" />
@@ -511,6 +499,19 @@
     <MESSAGE value="conductor.html - conductorLog(` First 20 spiral notes:`);" />
     <MESSAGE value="devicedist.html - Log the first few notes so we can compare with conductor log" />
     <MESSAGE value="devicedist.html - Log mic max energy periodically too" />
-    <option name="LAST_COMMIT_MESSAGE" value="devicedist.html - Log mic max energy periodically too" />
+    <MESSAGE value="xmusiclistener.html - Add latest note detection algorithm" />
+    <MESSAGE value="devicedist.html - 13 ms default speaker delay not 130 ms" />
+    <MESSAGE value="xmusiclistener.html - Advanced note detection" />
+    <MESSAGE value="devicedist.html - Default speaker delay 42 ms" />
+    <MESSAGE value="xmusiclistener.html - Laptop mic delay 40 ms" />
+    <MESSAGE value="devicedist.html - Replace ramp up/ramp down code" />
+    <MESSAGE value="devicedist.html - Set gain 100% for single-device mode" />
+    <MESSAGE value="devicedist.html - Logging single-device mode audio context scheduling" />
+    <MESSAGE value="xmusiclistener.html -Use devicedist algorithm for note detection" />
+    <MESSAGE value="devicedist.html - Disable corrections in single patron device mode" />
+    <MESSAGE value="devicedist.html - applyCorrection – change + medianShift to - medianShift.&#10;&#10;scheduleCorrectionDuringRest – same sign change.&#10;&#10;detectPillarForSync – push shifts into a separate pillarSyncShifts array (add a new global variable).&#10;&#10;Remove pillarSyncShifts from the median calculation in evaluateInRealTime" />
+    <MESSAGE value="devicedist.html - with the buffer‑preprocessing approach. The device downloads the MP3 once, then builds a per‑device buffer containing only its assigned notes (with short fades). Playback uses constant gain; corrections restart the buffer at the current position with the new speaker delay. The envelope scheduler is removed entirely, eliminating clipping." />
+    <MESSAGE value="devicedist.html - Start each correction with the MP3 playing at the same original start time, but seeking to the current time." />
+    <option name="LAST_COMMIT_MESSAGE" value="devicedist.html - Start each correction with the MP3 playing at the same original start time, but seeking to the current time." />
   </component>
 </project>
