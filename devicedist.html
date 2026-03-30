@@ -189,7 +189,8 @@
         <canvas id="stage-canvas"></canvas>
     </div>
 
-    <script>
+</body>
+<script>
     // ============================================================================
     // CONSTANTS
     // ============================================================================
@@ -312,6 +313,7 @@
     let neighborDetectionsCount = 0;
     let neighborDetectionsPerNeighbor = new Map();
     let pillarDetectionsCount = 0;
+    let firstNoteLogged = false;
 
     function startPeriodicLogging() {
         if (periodicLogInterval) clearInterval(periodicLogInterval);
@@ -881,6 +883,7 @@
     let allStreams = [];
 
     function startContinuousPlayback(startTime, speakerDelay) {
+        log(`🔍 startContinuousPlayback called: isListenOnlyMode=${isListenOnlyMode}, PICCOLO_URL=${PICCOLO_URL}, hasBuffer=${!!bufferCache[PICCOLO_URL]}`);
         if (isListenOnlyMode) { log(`🔇 Listen‑only mode`); return; }
         if (!PICCOLO_URL) { log(`❌ PICCOLO_URL not set`); return; }
         if (!bufferCache[PICCOLO_URL]) { log(`❌ Piccolo audio not loaded`); return; }
@@ -963,6 +966,11 @@
                     activeStream.gain.gain.linearRampToValueAtTime(0, now + (dur - 10)/1000);
                     activeStream.gain.gain.setValueAtTime(0, now + dur/1000);
                     playedNotesCount++;
+
+                    if (!firstNoteLogged) {
+                        log(`🎵 Playing first note ${note.noteIndex} at expected ${note.startMs}ms (wall ${new Date(noteStartWall).toISOString().substr(11,12)})`);
+                        firstNoteLogged = true;
+                    }
                 }, rampUpDelay);
                 envelopeTimeouts.push(tid);
             }
@@ -990,7 +998,7 @@
                 log(`🎵 Scheduling correction at rest ${(nextRest.startMs/1000).toFixed(1)}s (wait ${wait.toFixed(0)}ms)`, 'info');
                 setTimeout(() => {
                     const newDelay = currentDelay + medianShift;
-                    const clamped = Math.max(-50, Math.min(1000, newDelay));
+                    const clamped = Math.max(-500, Math.min(1000, newDelay));
                     log(`🔄 REST CORRECTION: ${currentDelay.toFixed(1)}ms → ${clamped.toFixed(1)}ms`, 'info');
                     currentSpeakerDelay = clamped;
                     const now2 = Date.now() + serverOffset;
@@ -1013,7 +1021,9 @@
     function applyCorrection(medianShift) {
         const currentDelay = currentSpeakerDelay;
         const newDelay = currentDelay + medianShift;
-        const clamped = Math.max(-50, Math.min(1000, newDelay));
+        const MIN_DELAY = -500;
+        const MAX_DELAY = 2000;
+        const clamped = Math.max(MIN_DELAY, Math.min(MAX_DELAY, newDelay));
         const mag = Math.abs(clamped - currentDelay);
         if (mag < MIN_CORRECTION_MS) return;
         log(`🔄 Correction needed: shift=${medianShift.toFixed(1)}ms → ${currentDelay.toFixed(1)}ms → ${clamped.toFixed(1)}ms`);
@@ -1029,6 +1039,11 @@
         rawTimeShifts = [];
         correctionCount++;
         updateCalibrationDisplay();
+
+        if (clamped <= MIN_DELAY && correctionCount > 0) {
+            log(`⚠️ Delay hit minimum (${MIN_DELAY}ms). Completing calibration.`);
+            completeCalibration();
+        }
     }
 
     // ============================================================================
@@ -1069,7 +1084,7 @@
             completeCalibration();
             return;
         }
-        const MIN_DELAY = -50, MAX_DELAY = 1000;
+        const MIN_DELAY = -500, MAX_DELAY = 2000;
         if (curDelay <= MIN_DELAY && median > 0) {
             log(`⚠️ At min delay, still early by ${Math.abs(median).toFixed(1)}ms`);
             if (correctionCount > 0) completeCalibration();
@@ -1263,14 +1278,23 @@
             if (isProcessingTuning || tuningStartTime === sched.startTime) return;
             const now = Date.now() + serverOffset;
             if (sched.startTime < now - 60000) { log(`❌ Schedule in past`); return; }
+
             log(`🎵 Tuning schedule received: start=${new Date(sched.startTime).toISOString().substr(11,12)}`);
             isProcessingTuning = true;
             currentTuningSchedule = sched;
             tuningStartTime = sched.startTime;
             updateDeviceStatusDisplay();
+
+            // Ensure audio context is running before we schedule playback
+            if (audioCtx && audioCtx.state === 'suspended') {
+                await audioCtx.resume();
+                log("🎛️ Audio context resumed (by tuning)");
+            }
+
             const activePillars = (sched.deviceOrder || []).filter(id => id.startsWith('PILLAR_'));
             const calibratedPatrons = sched.calibratedPatronIds || [];
             const isCalibrated = calibratedPatrons.includes(mySeat.id);
+
             if (isCalibrated) {
                 isListenOnlyMode = true;
                 assignedNotes = [];
@@ -1282,17 +1306,27 @@
                     noteSchedule = sched.schedule.map(n => ({ ...n, startMs: parseFloat(n.startMs), durationMs: parseFloat(n.durationMs) }));
                     assignedNotes = noteSchedule.filter(n => n.deviceId === mySeat.id);
                     log(`🎯 Assigned ${assignedNotes.length} notes`);
+
+                    // Log first few assigned notes for debugging
+                    if (assignedNotes.length) {
+                        log(`🎼 First 5 assigned notes for ${mySeat.id}:`);
+                        assignedNotes.slice(0, 5).forEach(note => {
+                            log(`   note ${note.noteIndex} at ${note.startMs}ms, duration ${note.durationMs}ms`);
+                        });
+                    }
                 }
             }
+
             if (!isListenOnlyMode && sched.pillar_notes) allPillarNotes = sched.pillar_notes;
             if (sched.metadata && sched.metadata.pillar_cal_windows) {
                 pillarWindows = sched.metadata.pillar_cal_windows;
-                phase1EndMs = pillarWindows[pillarWindows.length-1].end_ms;
+                phase1EndMs = pillarWindows[pillarWindows.length - 1].end_ms;
             }
             if (sched.deviceOrder && !isListenOnlyMode) {
                 const patronOrder = sched.deviceOrder.filter(id => !id.startsWith('PILLAR_'));
                 isSingleDeviceMode = (patronOrder.length === 1);
             }
+
             if (!isListenOnlyMode) {
                 phase1Complete = false;
                 phase1WindowActive = true;
@@ -1306,8 +1340,10 @@
                 neighborDetectionsCount = 0;
                 neighborDetectionsPerNeighbor.clear();
                 pillarDetectionsCount = 0;
+                firstNoteLogged = false;   // reset flag for new tuning
                 log(`🎤 Phase 1: listening for mic delay (0-${phase1EndMs}ms)`);
             }
+
             if (!isListenOnlyMode) {
                 const initDelay = currentSpeakerDelay !== null ? currentSpeakerDelay : estimatedDeviceDelayMs;
                 log(`🎵 Starting playback with delay ${initDelay.toFixed(1)}ms`);
@@ -1315,9 +1351,11 @@
             } else {
                 log(`🔇 Listen‑only mode, no playback`);
             }
+
             await enableMicrophone();
             log("🎧 Listening...");
             startPeriodicLogging();
+
             if (!isListenOnlyMode && pillarWindows.length && activePillars.length) {
                 setTimeout(() => {
                     if (phase1WindowActive && !phase1Complete) {
@@ -1485,6 +1523,5 @@
         if (canvas) { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
     };
     window.addEventListener('beforeunload', () => { stopHeartbeat(); flushLogs(); });
-    </script>
-</body>
+</script>
 </html>
