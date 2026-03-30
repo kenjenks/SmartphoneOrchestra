@@ -202,7 +202,7 @@
     const PICCOLO_MIN_FREQ = 500;
     const PICCOLO_MAX_FREQ = 2100;
     const FFT_SIZE = 2048;
-    const BASELINE_SAMPLES_MS = 200;       // legacy, not used in rolling baseline
+    const BASELINE_SAMPLES_MS = 200;
     const BASELINE_THRESHOLD_MULTIPLIER = 1.1;
     const MIN_DETECTION_ENERGY = 0.03;
     const PILLAR_ONSET_THRESHOLD = 2.0;
@@ -220,8 +220,8 @@
     const CONVERGENCE_STD_DEV_MS = 15;
     const MAX_CORRECTIONS = 3;
     const HEARTBEAT_TIMEOUT_MS = 12100;
-    const BASELINE_WINDOW_SAMPLES = 50;   // rolling window size
-    const FADE_MS = 5;                    // fade in/out duration in milliseconds
+    const BASELINE_WINDOW_SAMPLES = 50;
+    const FADE_MS = 5;                    // fade in/out duration (ms)
 
     // ============================================================================
     // GLOBAL STATE
@@ -266,8 +266,8 @@
     let noteSchedule = [];
     let detectionWindows = new Map();
     let processedMeasurements = new Set();
-    let rawTimeShifts = [];           // neighbor-reported speaker delays only
-    let pillarSyncShifts = [];        // pillar absolute timing errors (for validation only)
+    let rawTimeShifts = [];
+    let pillarSyncShifts = [];
     let isHappy = false;
     let estimatedDeviceDelayMs = 42;
     let estimatedDeviceMicDelayMs = 13;
@@ -308,8 +308,7 @@
     let pendingCorrection = null;
     let restPeriods = [];
 
-    // Device‑specific buffer (built after tuning schedule)
-    let deviceBuffer = null;
+    let deviceBuffer = null;          // device‑specific buffer
 
     // ============================================================================
     // PERIODIC LOGGING
@@ -742,7 +741,7 @@
     }
 
     // ============================================================================
-    // PHASE 2A: PILLAR SYNC (immutable reference)
+    // PHASE 2A: PILLAR SYNC
     // ============================================================================
     function detectPillarForSync(now) {
         if (!allPillarNotes.length) return;
@@ -883,7 +882,7 @@
     }
 
     // ============================================================================
-    // DEVICE‑SPECIFIC BUFFER CREATION (pre‑process once)
+    // DEVICE‑SPECIFIC BUFFER CREATION (smart fades)
     // ============================================================================
     function createDeviceBuffer(originalBuffer, assignedNotes) {
         const sampleRate = originalBuffer.sampleRate;
@@ -896,26 +895,37 @@
             sampleRate: sampleRate
         });
 
-        // Copy original channel data and fill with silence
+        // Sort notes by start time
+        const sortedNotes = [...assignedNotes].sort((a, b) => a.startMs - b.startMs);
+
         for (let ch = 0; ch < channels; ch++) {
             const srcData = originalBuffer.getChannelData(ch);
             const dstData = deviceBuffer.getChannelData(ch);
             dstData.fill(0);
 
-            for (const note of assignedNotes) {
+            for (let i = 0; i < sortedNotes.length; i++) {
+                const note = sortedNotes[i];
                 const startSample = Math.floor(note.startMs / 1000 * sampleRate);
                 const endSample = Math.floor((note.startMs + note.durationMs) / 1000 * sampleRate);
+
+                // Determine adjacency
+                const prevNote = i > 0 ? sortedNotes[i-1] : null;
+                const prevEndSample = prevNote ? Math.floor((prevNote.startMs + prevNote.durationMs) / 1000 * sampleRate) : -1;
+                const isAdjacentPrev = (prevEndSample === startSample);
+
+                const nextNote = i < sortedNotes.length - 1 ? sortedNotes[i+1] : null;
+                const nextStartSample = nextNote ? Math.floor(nextNote.startMs / 1000 * sampleRate) : -1;
+                const isAdjacentNext = (endSample === nextStartSample);
+
                 const fadeSamples = Math.floor(FADE_MS / 1000 * sampleRate);
 
                 for (let s = startSample; s < endSample && s < length; s++) {
                     let gain = 1.0;
-                    // Linear fade‑in
-                    if (s - startSample < fadeSamples) {
-                        gain = (s - startSample) / fadeSamples;
+                    if (!isAdjacentPrev && s - startSample < fadeSamples) {
+                        gain = (s - startSample) / fadeSamples;          // fade‑in
                     }
-                    // Linear fade‑out
-                    if (endSample - s < fadeSamples) {
-                        gain = (endSample - s) / fadeSamples;
+                    if (!isAdjacentNext && endSample - s < fadeSamples) {
+                        gain = (endSample - s) / fadeSamples;           // fade‑out
                     }
                     dstData[s] += srcData[s] * gain;
                 }
@@ -925,13 +935,13 @@
     }
 
     // ============================================================================
-    // PLAYBACK (constant gain, no envelope)
+    // PLAYBACK (constant gain, seek on correction)
     // ============================================================================
     let activeStream = null;
     let allStreams = [];
 
     function startContinuousPlayback(startTime, speakerDelay) {
-        log(`🔍 startContinuousPlayback called: isListenOnlyMode=${isListenOnlyMode}, hasDeviceBuffer=${!!deviceBuffer}`);
+        log(`🔍 startContinuousPlayback: isListenOnlyMode=${isListenOnlyMode}, hasDeviceBuffer=${!!deviceBuffer}`);
         if (isListenOnlyMode) { log(`🔇 Listen‑only mode`); return; }
         if (!deviceBuffer) { log(`❌ Device buffer not ready`); return; }
         const nowWall = Date.now() + serverOffset;
@@ -939,17 +949,17 @@
         const delayMs = adjStart - nowWall;
         log(`🔍 startContinuousPlayback: delayMs=${delayMs.toFixed(1)}`);
         if (delayMs > 0 && delayMs < 30000) {
-            setTimeout(() => createNewPlaybackStream(adjStart, speakerDelay), delayMs);
+            setTimeout(() => createNewPlaybackStream(adjStart, speakerDelay, 0), delayMs);
         } else if (delayMs > -1000) {
             log(`⚠️ Playback ${Math.round(-delayMs)}ms late, starting immediately`, 'warn');
-            createNewPlaybackStream(adjStart, speakerDelay);
+            createNewPlaybackStream(adjStart, speakerDelay, 0);
         } else {
             log(`❌ Playback too late (${Math.round(-delayMs)}ms)`, 'warn');
         }
     }
 
-    function createNewPlaybackStream(targetWallTime, speakerDelay) {
-        log(`🔍 createNewPlaybackStream: audioCtx.state=${audioCtx?.state}, hasDeviceBuffer=${!!deviceBuffer}`);
+    function createNewPlaybackStream(targetWallTime, speakerDelay, offsetMs = 0) {
+        log(`🔍 createNewPlaybackStream: audioCtx.state=${audioCtx?.state}, hasDeviceBuffer=${!!deviceBuffer}, offsetMs=${offsetMs}`);
         if (!audioCtx || audioCtx.state !== 'running') {
             log(`⚠️ Audio context not running (state=${audioCtx?.state})`);
             return null;
@@ -963,6 +973,7 @@
         const nowWall = Date.now() + serverOffset;
         const delaySec = (targetWallTime - nowWall) / 1000;
         const startAudio = nowAudio + Math.max(0, delaySec);
+        const offsetSec = offsetMs / 1000;
 
         const source = audioCtx.createBufferSource();
         source.buffer = deviceBuffer;
@@ -972,7 +983,7 @@
         gain.gain.setValueAtTime(MASTER_PLAYBACK_GAIN, startAudio);
         source.connect(gain);
         gain.connect(masterGain || audioCtx.destination);
-        source.start(startAudio);
+        source.start(startAudio, offsetSec);
 
         const streamId = allStreams.length + 1;
         const newStream = {
@@ -998,7 +1009,7 @@
         newStream.isActive = true;
         activeStream = newStream;
 
-        log(`✅ Playback stream ${streamId} created, startAudio=${startAudio.toFixed(3)}`);
+        log(`✅ Playback stream ${streamId} created, startAudio=${startAudio.toFixed(3)}, offset=${offsetSec.toFixed(3)}s`);
         return newStream;
     }
 
@@ -1033,8 +1044,8 @@
                     currentSpeakerDelay = clamped;
                     const now2 = Date.now() + serverOffset;
                     const curPos = now2 - tuningStartTime;
-                    const newStart = now2 - curPos + clamped;
-                    createNewPlaybackStream(newStart, clamped);
+                    // Seek to current position in the piece
+                    createNewPlaybackStream(now2 - curPos + clamped, clamped, curPos);
                     const flash = document.getElementById('detection-flash');
                     if (flash) {
                         flash.style.background = '#ffaa44';
@@ -1074,8 +1085,8 @@
             currentSpeakerDelay = clamped;
             const now = Date.now() + serverOffset;
             const curPos = now - tuningStartTime;
-            const newStart = now - curPos + clamped;
-            createNewPlaybackStream(newStart, clamped);
+            // Seek to current position
+            createNewPlaybackStream(now - curPos + clamped, clamped, curPos);
         }
         rawTimeShifts = [];
         correctionCount++;
@@ -1148,7 +1159,7 @@
     }
 
     // ============================================================================
-    // DETECTION LOOP (rolling baseline)
+    // DETECTION LOOP
     // ============================================================================
     function detectNeighborNotes() {
         if (!isMicActive || !analyser || !frequencyData) { requestAnimationFrame(detectNeighborNotes); return; }
@@ -1368,7 +1379,7 @@
                 log(`📌 isSingleDeviceMode = ${isSingleDeviceMode} (patron count ${patronOrder.length})`);
             }
 
-            // Build device‑specific buffer if we have assigned notes
+            // Build device‑specific buffer
             if (!isListenOnlyMode && assignedNotes.length > 0 && bufferCache[PICCOLO_URL]) {
                 log(`🔧 Building device‑specific buffer for ${assignedNotes.length} notes...`);
                 deviceBuffer = createDeviceBuffer(bufferCache[PICCOLO_URL], assignedNotes);
@@ -1574,4 +1585,3 @@
     window.addEventListener('beforeunload', () => { stopHeartbeat(); flushLogs(); });
 </script>
 </html>
-```
