@@ -1255,7 +1255,7 @@
     // ============================================================================
 
     async function preloadAssets() {
-        document.getElementById('asset-progress').style.display = 'block';
+        document.getElementById('assets-progress').style.display = 'block';
         log("📦 Starting asset preload...");
         try {
             const movementsSnap = await db.ref('show/movements').once('value');
@@ -1267,19 +1267,19 @@
             if (PICCOLO_URL) audioFiles.add(PICCOLO_URL);
             if (TEST_PULSE_URL) audioFiles.add(TEST_PULSE_URL);
             const totalAssets = audioFiles.size;
-            if (totalAssets === 0) { document.getElementById('asset-ind').className = 'indicator active'; document.getElementById('asset-progress').style.display = 'none'; assetsPreloaded = true; return true; }
+            if (totalAssets === 0) { document.getElementById('assets-ind').className = 'indicator active'; document.getElementById('assets-progress').style.display = 'none'; assetsPreloaded = true; return true; }
             let loadedCount = 0;
             for (const url of audioFiles) {
-                try { const res = await fetch(url); const arrayBuf = await res.arrayBuffer(); bufferCache[url] = await audioCtx.decodeAudioData(arrayBuf); loadedCount++; document.getElementById('asset-progress-fill').style.width = `${(loadedCount / totalAssets) * 100}%`; }
+                try { const res = await fetch(url); const arrayBuf = await res.arrayBuffer(); bufferCache[url] = await audioCtx.decodeAudioData(arrayBuf); loadedCount++; document.getElementById('assets-progress-fill').style.width = `${(loadedCount / totalAssets) * 100}%`; }
                 catch (e) { log(`❌ Failed to load ${url.split('/').pop()}: ${e.message}`); loadedCount++; }
             }
-            document.getElementById('asset-ind').className = 'indicator active';
-            document.getElementById('asset-progress').style.display = 'none';
+            document.getElementById('assets-ind').className = 'indicator active';
+            document.getElementById('assets-progress').style.display = 'none';
             log(`✅ Asset preload complete (${loadedCount}/${totalAssets})`);
             assetsPreloaded = true;
             updateDeviceStatusDisplay();
             return true;
-        } catch (e) { log(`❌ Asset Load Failure: ${e.message}`); document.getElementById('asset-ind').className = 'indicator error'; return false; }
+        } catch (e) { log(`❌ Asset Load Failure: ${e.message}`); document.getElementById('assets-ind').className = 'indicator error'; return false; }
     }
 
     // ============================================================================
