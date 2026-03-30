@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>xmusiclistener - Note Detection Monitor</title>
+    <title>xmusiclistener - Advanced Note Detection Monitor</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <style>
@@ -15,7 +15,7 @@
             margin: 0;
         }
         .container {
-            max-width: 800px;
+            max-width: 900px;
             margin: 0 auto;
         }
         h1 {
@@ -86,7 +86,7 @@
             border-radius: 4px;
             padding: 10px;
             margin: 10px 0;
-            max-height: 300px;
+            max-height: 350px;
             overflow-y: auto;
             font-family: monospace;
             font-size: 11px;
@@ -110,7 +110,7 @@
             color: #0f0;
             font-family: monospace;
             font-size: 11px;
-            height: 200px;
+            height: 250px;
             overflow-y: auto;
             padding: 10px;
             border-radius: 4px;
@@ -120,12 +120,21 @@
             color: #666;
             margin-right: 8px;
         }
+        .note-badge {
+            display: inline-block;
+            background: #44ffaa20;
+            color: #44ffaa;
+            border-radius: 3px;
+            padding: 1px 4px;
+            margin-right: 6px;
+            font-size: 9px;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🎧 xmusiclistener - Note Detection Monitor</h1>
-        <p style="color: #888;">Listens for notes using pitch-aware detection. Reports successes and misses to the log.</p>
+        <h1>🎧 xmusiclistener - Advanced Note Detection Monitor</h1>
+        <p style="color: #888;">Listens for pillar and patron notes using tight frequency bands and adaptive baseline. Reports successes and misses in real time.</p>
 
         <div id="connection-status" class="status">
             🔌 Firebase: Disconnected
@@ -134,19 +143,31 @@
         <div class="info-panel">
             <div class="info-row">
                 <span>🎯 Listening Device:</span>
-                <span id="device-id">--</span>
+                <span id="device-id">xmusiclistener</span>
             </div>
             <div class="info-row">
                 <span>🎤 Mic Status:</span>
                 <span id="mic-status">Not requested</span>
             </div>
             <div class="info-row">
+                <span>🎵 Tuning Phase:</span>
+                <span id="phase-status">Waiting for schedule...</span>
+            </div>
+            <div class="info-row">
                 <span>📊 Current Energy (note band):</span>
                 <span id="energy-value">0.00</span>
             </div>
             <div class="info-row">
-                <span>🎵 Current Note:</span>
+                <span>🎯 Current Note:</span>
                 <span id="current-note">--</span>
+            </div>
+            <div class="info-row">
+                <span>⏱️ Song Position:</span>
+                <span id="song-position">0.0 s</span>
+            </div>
+            <div class="info-row">
+                <span>📈 Baseline Energy:</span>
+                <span id="baseline-value">0.0000</span>
             </div>
         </div>
 
@@ -164,7 +185,7 @@
         </div>
 
         <div class="detection-box">
-            <div style="color: #44ffaa; margin-bottom: 5px;">📡 Note Detections (last 50):</div>
+            <div style="color: #44ffaa; margin-bottom: 5px;">📡 Note Detections (last 100):</div>
             <div id="detection-list">No detections yet...</div>
         </div>
 
@@ -174,7 +195,9 @@
     </div>
 
     <script>
-        // Firebase Configuration
+        // ============================================================================
+        // FIREBASE CONFIGURATION
+        // ============================================================================
         const firebaseConfig = {
             apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
             authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
@@ -184,80 +207,124 @@
             messagingSenderId: "722537253165",
             appId: "1:722537253165:web:8e8b6495bd508de35b2ba4"
         };
-
         firebase.initializeApp(firebaseConfig);
         const db = firebase.database();
 
-        // State
-        let audioCtx = null;
-        let mySeat = { id: 'xmusiclistener' };
-        let serverOffset = 0;
-        let micStream = null;
-        let analyser = null;
-        let isListening = false;
-        let logRef = null;
-        let logQueue = [];
-        
-        // Tuning data (loaded from Firebase)
-        let noteTimings = [];
-        let tuningStartTime = 0;
-        let pillarNoteSchedule = [];
-        let noteSchedule = [];
-        let phase1EndMs = 20571.4;
-        
-        // FFT parameters
+        // ============================================================================
+        // CONSTANTS
+        // ============================================================================
         const FFT_SIZE = 2048;
-        let sampleRate = 48000;
-        let frequencyData = null;
-        
-        // Pitch-aware detection
-        const PITCH_DETECTION_TOLERANCE_BINS = 2;
+        const NOTE_BAND_RATIO = Math.pow(2, 1/48); // ±1/4 semitone
+        const PITCH_DETECTION_TOLERANCE_BINS = 2;   // ±2 bins around target
         const BASELINE_SAMPLES_MS = 200;
         const BASELINE_THRESHOLD_MULTIPLIER = 1.5;
+        const MIN_DETECTION_ENERGY = 0.03;
+        const PHASE1_END_MS = 20571.4;
+        const SPEED_OF_SOUND = 343;
+
+        // ============================================================================
+        // GLOBAL STATE
+        // ============================================================================
+        let audioCtx = null;
+        let micStream = null;
+        let analyser = null;
+        let frequencyData = null;
+        let sampleRate = 48000;
+
+        let isListening = false;
+        let serverOffset = 0;
+        let tuningStartTime = 0;
+        let phase1EndMs = PHASE1_END_MS;
+
+        // Tuning data
+        let noteTimings = [];         // Full list of piano notes (for reference)
+        let pillarNotes = [];         // Pillar notes for Phase 1
+        let patronNotes = [];         // Patron notes (from tuning schedule)
+        let allPillarNotes = [];      // Original pillar notes from tuning_mode.json
+
+        // Baseline tracking
         let baselineEnergy = 0;
         let baselineSamples = [];
         let baselineEstablished = false;
         let baselineStartTime = 0;
-        
+
         // Detection tracking
-        let detectionCount = 0;
         let processedNotes = new Set();
-        let currentSongPosition = 0;
-        
-        // Helper functions
+        let detectionCount = 0;
+
+        // UI elements
+        const detectionListDiv = document.getElementById('detection-list');
+        const logArea = document.getElementById('log-area');
+        const energyFill = document.getElementById('energy-fill');
+        const energyValueSpan = document.getElementById('energy-value');
+        const currentNoteSpan = document.getElementById('current-note');
+        const songPositionSpan = document.getElementById('song-position');
+        const baselineValueSpan = document.getElementById('baseline-value');
+        const phaseStatusSpan = document.getElementById('phase-status');
+
+        // Log queue
+        let logQueue = [];
+        let logRef = null;
+
+        // ============================================================================
+        // UTILITIES
+        // ============================================================================
         function getFrequencyFromMidi(midiNote) {
             return 440 * Math.pow(2, (midiNote - 69) / 12);
         }
-        
+
+        function getNoteFrequencyBand(midiNote) {
+            const fundamental = getFrequencyFromMidi(midiNote);
+            const lowerFreq = fundamental / NOTE_BAND_RATIO;
+            const upperFreq = fundamental * NOTE_BAND_RATIO;
+            return { lowerFreq, upperFreq };
+        }
+
         function getBinForFrequency(frequency, sampleRate, fftSize) {
             const nyquist = sampleRate / 2;
             const bin = Math.floor(frequency / nyquist * (fftSize / 2));
             return Math.min(Math.max(0, bin), fftSize / 2 - 1);
         }
-        
+
+        function calculateEnergyForNote(midiNote, sampleRate, fftSize) {
+            if (!frequencyData) return 0;
+            const band = getNoteFrequencyBand(midiNote);
+            const lowerBin = getBinForFrequency(band.lowerFreq, sampleRate, fftSize);
+            const upperBin = getBinForFrequency(band.upperFreq, sampleRate, fftSize);
+            let energy = 0, binsChecked = 0;
+            for (let i = lowerBin; i <= upperBin && i < frequencyData.length; i++) {
+                energy += frequencyData[i] / 255;
+                binsChecked++;
+            }
+            return binsChecked > 0 ? energy / binsChecked : 0;
+        }
+
+        // ============================================================================
+        // LOGGING
+        // ============================================================================
         function log(message, type = 'info') {
             const timestamp = Date.now() + serverOffset;
             const timeStr = new Date(timestamp).toISOString().substr(11, 12);
             const logDiv = document.createElement('div');
             logDiv.className = 'log-entry';
             logDiv.innerHTML = `<span class="timestamp">[${timeStr}]</span> ${message}`;
-            document.getElementById('log-area').appendChild(logDiv);
+            logArea.appendChild(logDiv);
             logDiv.scrollIntoView({ behavior: 'smooth', block: 'end' });
             console.log(`[${timeStr}] ${message}`);
-            
+
             if (logRef) {
                 const logEntry = {
                     timestamp: timestamp,
                     timeStr: timeStr,
                     message: message,
-                    seatId: mySeat.id,
+                    seatId: 'xmusiclistener',
                     type: type
                 };
                 logQueue.push(logEntry);
                 if (logQueue.length >= 10) flushLogs();
             }
         }
-        
+
         function flushLogs() {
             if (logQueue.length === 0 || !logRef) return;
             const logsToSend = [...logQueue];
@@ -268,14 +335,15 @@
             });
             logRef.update(batch).catch(e => console.error("Failed to send logs:", e));
         }
-        
-        // Clock sync
+
+        // ============================================================================
+        // FIREBASE LISTENERS
+        // ============================================================================
         db.ref(".info/serverTimeOffset").on("value", snap => {
             serverOffset = snap.val() || 0;
             log(`⏱️ Server offset: ${serverOffset}ms`);
         });
-        
-        // Connection status
+
         db.ref(".info/connected").on("value", snap => {
             const statusDiv = document.getElementById('connection-status');
             if (snap.val() === true) {
@@ -288,78 +356,73 @@
                 log("Firebase disconnected");
             }
         });
-        
-        // Load tuning configuration from Firebase
+
         async function loadTuningConfig() {
             try {
-                const tuningSnap = await db.ref('tuning_mode').once('value');
-                const tuningData = tuningSnap.val();
-                
-                if (!tuningData || !tuningData.piano_notes) {
-                    log("⚠️ No tuning configuration found in Firebase");
+                const snap = await db.ref('tuning_mode').once('value');
+                const data = snap.val();
+                if (!data || !data.piano_notes) {
+                    log("⚠️ No tuning configuration found");
                     return false;
                 }
-                
-                // Load note timings (all notes, both pillar and patron)
-                noteTimings = tuningData.piano_notes.map((note, index) => ({
-                    index: index,
-                    startMs: note.ms_offset,
-                    durationMs: note.duration_ms || 500,
-                    measure: note.measure,
-                    pitch: note.pitch,
-                    midi: note.midi
+
+                noteTimings = data.piano_notes.map((n, i) => ({
+                    index: i,
+                    startMs: n.ms_offset,
+                    durationMs: n.duration_ms || 500,
+                    measure: n.measure,
+                    pitch: n.pitch,
+                    midi: n.midi
                 }));
-                
-                // Load pillar notes for Phase 1 detection
-                if (tuningData.pillar_notes) {
-                    pillarNoteSchedule = tuningData.pillar_notes.map(note => ({
-                        pillar_id: note.pillar_id,
-                        index: note.index,
-                        ms_offset: note.ms_offset,
-                        duration_ms: note.duration_ms,
-                        pitch: note.pitch,
-                        midi: note.midi
-                    }));
-                    log(`📡 Loaded ${pillarNoteSchedule.length} pillar notes`);
+
+                if (data.pillar_notes) {
+                    allPillarNotes = data.pillar_notes;
+                    pillarNotes = allPillarNotes; // for detection
+                    log(`📡 Loaded ${pillarNotes.length} pillar notes`);
                 }
-                
-                // Get Phase 1 end time
-                if (tuningData.metadata && tuningData.metadata.pillar_cal_windows) {
-                    const lastWindow = tuningData.metadata.pillar_cal_windows[tuningData.metadata.pillar_cal_windows.length - 1];
+
+                if (data.metadata && data.metadata.pillar_cal_windows) {
+                    const lastWindow = data.metadata.pillar_cal_windows[data.metadata.pillar_cal_windows.length - 1];
                     phase1EndMs = lastWindow.end_ms;
                 }
-                
+
                 log(`📋 Loaded ${noteTimings.length} total notes, Phase 1 ends at ${phase1EndMs}ms`);
                 return true;
-                
             } catch (e) {
                 log(`❌ Failed to load tuning config: ${e.message}`);
                 return false;
             }
         }
-        
-        // Listen for tuning schedule to get startTime
+
         function listenForTuningSchedule() {
             db.ref('tuning/current').on('value', snap => {
                 const schedule = snap.val();
                 if (schedule && schedule.startTime) {
                     tuningStartTime = schedule.startTime;
-                    noteSchedule = schedule.schedule || [];
-                    log(`🎵 Tuning schedule loaded: startTime=${new Date(tuningStartTime).toISOString().substr(11, 12)}, ${noteSchedule.length} notes`);
+                    if (schedule.schedule) {
+                        patronNotes = schedule.schedule.map(n => ({
+                            ...n,
+                            ms_offset: n.startMs,
+                            midi: noteTimings[n.noteIndex]?.midi || 69,
+                            pitch: noteTimings[n.noteIndex]?.pitch || '?'
+                        }));
+                        log(`🎵 Tuning schedule loaded: startTime=${new Date(tuningStartTime).toISOString().substr(11,12)}, ${patronNotes.length} patron notes`);
+                    }
+                    phaseStatusSpan.innerHTML = `Active – Phase ${tuningStartTime ? (Date.now()+serverOffset - tuningStartTime < phase1EndMs ? '1 (Pillars)' : '2 (Patrons)') : '?'}`;
                 }
             });
         }
-        
-        // Setup microphone and start detection
+
+        // ============================================================================
+        // MICROPHONE SETUP
+        // ============================================================================
         async function setupMicrophone() {
             if (!audioCtx) {
                 audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             }
-            
             if (audioCtx.state === 'suspended') {
                 await audioCtx.resume();
             }
-            
             try {
                 if (!micStream) {
                     log("📱 Requesting microphone access...");
@@ -374,120 +437,97 @@
                     micStream = stream;
                     log("✅ Microphone access granted");
                 }
-                
                 const source = audioCtx.createMediaStreamSource(micStream);
                 analyser = audioCtx.createAnalyser();
                 analyser.fftSize = FFT_SIZE;
                 analyser.smoothingTimeConstant = 0.1;
-                
                 source.connect(analyser);
-                
                 sampleRate = audioCtx.sampleRate;
                 frequencyData = new Uint8Array(analyser.frequencyBinCount);
-                
                 log(`🎤 Microphone active, sample rate: ${sampleRate}Hz, FFT size: ${FFT_SIZE}`);
                 return true;
-                
             } catch (e) {
                 log(`❌ Microphone setup failed: ${e.message}`);
                 return false;
             }
         }
-        
-        // Detect notes (both pillar and patron) using pitch-aware detection
+
+        // ============================================================================
+        // DETECTION LOOP
+        // ============================================================================
         function detectNotes() {
             if (!isListening || !analyser || !frequencyData) {
                 requestAnimationFrame(detectNotes);
                 return;
             }
-            
+
             const now = Date.now() + serverOffset;
             analyser.getByteFrequencyData(frequencyData);
-            
+
             if (!tuningStartTime) {
                 requestAnimationFrame(detectNotes);
                 return;
             }
-            
-            const songPosition = now - tuningStartTime;
-            if (songPosition < 0 || songPosition > 200000) {
+
+            const songPos = now - tuningStartTime;
+            if (songPos < 0 || songPos > 200000) {
                 requestAnimationFrame(detectNotes);
                 return;
             }
-            
-            // Determine which notes to look for (pillars in Phase 1, patrons in Phase 2)
+
+            // Update UI with song position
+            songPositionSpan.innerText = (songPos / 1000).toFixed(1) + ' s';
+
+            // Determine current phase and which notes to expect
+            const isPhase1 = songPos < phase1EndMs;
+            phaseStatusSpan.innerHTML = isPhase1 ? 'Phase 1 (Pillars)' : 'Phase 2 (Patrons)';
+
+            // Get expected notes near current time
             let expectedNotes = [];
-            if (songPosition < phase1EndMs) {
-                // Phase 1: Look for pillar notes
-                expectedNotes = pillarNoteSchedule.filter(note => {
-                    const timeDiff = Math.abs(songPosition - note.ms_offset);
+            if (isPhase1) {
+                expectedNotes = pillarNotes.filter(note => {
+                    const timeDiff = Math.abs(songPos - note.ms_offset);
                     return timeDiff < 500;
                 });
             } else {
-                // Phase 2: Look for patron notes
-                expectedNotes = noteSchedule.filter(note => {
-                    const timeDiff = Math.abs(songPosition - note.startMs);
+                expectedNotes = patronNotes.filter(note => {
+                    const timeDiff = Math.abs(songPos - note.ms_offset);
                     return timeDiff < 500;
-                }).map(note => ({
-                    ...note,
-                    ms_offset: note.startMs,
-                    pitch: noteTimings[note.noteIndex]?.pitch || '?',
-                    midi: noteTimings[note.noteIndex]?.midi || 69
-                }));
+                });
             }
-            
+
             if (expectedNotes.length === 0) {
                 requestAnimationFrame(detectNotes);
                 return;
             }
-            
-            // Find the closest expected note
+
+            // Find closest note
             let closestNote = null;
             let minDelta = Infinity;
-            
-            expectedNotes.forEach(note => {
-                const expectedTime = tuningStartTime + (note.ms_offset || note.startMs);
+            for (const note of expectedNotes) {
+                const expectedTime = tuningStartTime + note.ms_offset;
                 const delta = Math.abs(now - expectedTime);
                 if (delta < minDelta && delta < 500) {
                     minDelta = delta;
                     closestNote = note;
                 }
-            });
-            
+            }
+
             if (!closestNote) {
                 requestAnimationFrame(detectNotes);
                 return;
             }
-            
+
+            // Calculate energy for that note
+            const energy = calculateEnergyForNote(closestNote.midi, sampleRate, FFT_SIZE);
             const noteKey = `${closestNote.pillar_id || 'patron'}_${closestNote.index || closestNote.noteIndex}`;
-            if (processedNotes.has(noteKey)) {
-                requestAnimationFrame(detectNotes);
-                return;
-            }
-            
-            // Calculate energy at the expected frequency
-            const frequency = getFrequencyFromMidi(closestNote.midi);
-            const targetBin = getBinForFrequency(frequency, sampleRate, FFT_SIZE);
-            const safeBin = Math.min(Math.max(0, targetBin), FFT_SIZE / 2 - 1);
-            
-            let energy = 0;
-            let binsChecked = 0;
-            for (let i = Math.max(0, safeBin - PITCH_DETECTION_TOLERANCE_BINS); 
-                 i <= Math.min(FFT_SIZE / 2 - 1, safeBin + PITCH_DETECTION_TOLERANCE_BINS); 
-                 i++) {
-                if (frequencyData && i < frequencyData.length) {
-                    energy += frequencyData[i] / 255;
-                    binsChecked++;
-                }
-            }
-            if (binsChecked > 0) energy = energy / binsChecked;
-            
-            // Update UI meter
+
+            // Update UI meters
             const fillPercent = Math.min(100, energy * 100);
-            document.getElementById('energy-fill').style.width = fillPercent + '%';
-            document.getElementById('energy-value').innerHTML = energy.toFixed(4);
-            document.getElementById('current-note').innerHTML = `${closestNote.pitch} (${frequency.toFixed(0)}Hz)`;
-            
+            energyFill.style.width = fillPercent + '%';
+            energyValueSpan.innerText = energy.toFixed(4);
+            currentNoteSpan.innerHTML = `${closestNote.pitch} (${getFrequencyFromMidi(closestNote.midi).toFixed(0)}Hz)`;
+
             // Baseline adaptation
             if (!baselineEstablished) {
                 if (Date.now() - baselineStartTime < BASELINE_SAMPLES_MS) {
@@ -503,133 +543,108 @@
                         baselineEstablished = true;
                     }
                 }
+                baselineValueSpan.innerText = baselineEnergy.toFixed(4);
                 requestAnimationFrame(detectNotes);
                 return;
             }
-            
-            const threshold = baselineEnergy * BASELINE_THRESHOLD_MULTIPLIER;
+
+            const threshold = Math.max(baselineEnergy * BASELINE_THRESHOLD_MULTIPLIER, MIN_DETECTION_ENERGY);
             const ratio = baselineEnergy > 0 ? energy / baselineEnergy : 1.0;
-            
-            // Determine if this is a detection or miss
-            const expectedTimeAbs = tuningStartTime + (closestNote.ms_offset || closestNote.startMs);
+            baselineValueSpan.innerText = baselineEnergy.toFixed(4);
+
+            // Decide if detection or miss
+            const expectedTimeAbs = tuningStartTime + closestNote.ms_offset;
             const timeError = now - expectedTimeAbs;
-            const sourceType = songPosition < phase1EndMs ? 'PILLAR' : 'PATRON';
-            const sourceId = closestNote.pillar_id || closestNote.deviceId || 'unknown';
-            
-            if (energy > threshold) {
+            const sourceType = isPhase1 ? 'PILLAR' : 'PATRON';
+            const sourceId = closestNote.pillar_id || closestNote.deviceId || '?';
+
+            if (!processedNotes.has(noteKey) && energy > threshold) {
                 // SUCCESSFUL DETECTION
-                detectionCount++;
                 processedNotes.add(noteKey);
-                
-                const detectionMsg = `✅ DETECTED: ${sourceType} ${sourceId} note ${closestNote.index || closestNote.noteIndex} (${closestNote.pitch} @ ${frequency.toFixed(0)}Hz) | timeError=${timeError > 0 ? '+' : ''}${timeError.toFixed(1)}ms | energy=${energy.toFixed(4)} (${ratio.toFixed(1)}x baseline)`;
-                
-                // Add to detection list
-                const detectionList = document.getElementById('detection-list');
-                if (detectionList.innerHTML === "No detections yet...") {
-                    detectionList.innerHTML = '';
-                }
-                const detectionDiv = document.createElement('div');
-                detectionDiv.className = 'detection-entry detection-success';
-                detectionDiv.innerHTML = `[${new Date(now).toISOString().substr(11, 12)}] ${detectionMsg}`;
-                detectionList.insertBefore(detectionDiv, detectionList.firstChild);
-                if (detectionList.children.length > 50) {
-                    detectionList.removeChild(detectionList.lastChild);
-                }
-                
-                log(detectionMsg, 'match');
-                
+                detectionCount++;
+                const msg = `✅ DETECTED: ${sourceType} ${sourceId} note ${closestNote.index || closestNote.noteIndex} (${closestNote.pitch} @ ${getFrequencyFromMidi(closestNote.midi).toFixed(0)}Hz) | timeError=${timeError > 0 ? '+' : ''}${timeError.toFixed(1)}ms | energy=${energy.toFixed(4)} (${ratio.toFixed(1)}x baseline)`;
+                addDetectionEntry(msg, 'success');
+                log(msg, 'match');
+
                 // Flash effect
-                const meterFill = document.getElementById('energy-fill');
-                meterFill.style.background = '#ffaa44';
-                setTimeout(() => { meterFill.style.background = '#44ffaa'; }, 200);
-                
-            } else if (energy > baselineEnergy) {
+                energyFill.style.background = '#ffaa44';
+                setTimeout(() => { energyFill.style.background = '#44ffaa'; }, 200);
+            } else if (energy > baselineEnergy && !processedNotes.has(noteKey)) {
                 // MISSED DETECTION (some energy but below threshold)
-                const missMsg = `❌ MISSED: ${sourceType} ${sourceId} note ${closestNote.index || closestNote.noteIndex} (${closestNote.pitch} @ ${frequency.toFixed(0)}Hz) | energy=${energy.toFixed(4)} (${ratio.toFixed(1)}x baseline), threshold=${threshold.toFixed(4)}`;
-                
-                const detectionList = document.getElementById('detection-list');
-                if (detectionList.innerHTML === "No detections yet...") {
-                    detectionList.innerHTML = '';
-                }
-                const detectionDiv = document.createElement('div');
-                detectionDiv.className = 'detection-entry detection-miss';
-                detectionDiv.innerHTML = `[${new Date(now).toISOString().substr(11, 12)}] ${missMsg}`;
-                detectionList.insertBefore(detectionDiv, detectionList.firstChild);
-                if (detectionList.children.length > 50) {
-                    detectionList.removeChild(detectionList.lastChild);
-                }
-                
-                log(missMsg, 'break');
+                const msg = `❌ MISSED: ${sourceType} ${sourceId} note ${closestNote.index || closestNote.noteIndex} (${closestNote.pitch} @ ${getFrequencyFromMidi(closestNote.midi).toFixed(0)}Hz) | energy=${energy.toFixed(4)} (${ratio.toFixed(1)}x baseline), threshold=${threshold.toFixed(4)} | timeError=${timeError > 0 ? '+' : ''}${timeError.toFixed(1)}ms`;
+                addDetectionEntry(msg, 'miss');
+                log(msg, 'break');
             }
-            
+
             requestAnimationFrame(detectNotes);
         }
-        
-        // Start listening
+
+        function addDetectionEntry(msg, type) {
+            if (detectionListDiv.innerHTML === "No detections yet...") {
+                detectionListDiv.innerHTML = '';
+            }
+            const div = document.createElement('div');
+            div.className = `detection-entry detection-${type === 'success' ? 'success' : 'miss'}`;
+            const now = new Date(Date.now() + serverOffset);
+            div.innerHTML = `[${now.toISOString().substr(11, 12)}] ${msg}`;
+            detectionListDiv.insertBefore(div, detectionListDiv.firstChild);
+            if (detectionListDiv.children.length > 100) {
+                detectionListDiv.removeChild(detectionListDiv.lastChild);
+            }
+        }
+
+        // ============================================================================
+        // CONTROL FUNCTIONS
+        // ============================================================================
         async function startListening() {
             if (isListening) {
                 log("⚠️ Already listening");
                 return;
             }
-            
             log("🎤 Starting note detection...");
-            
-            const micSuccess = await setupMicrophone();
-            if (!micSuccess) {
-                log("❌ Failed to setup microphone");
-                return;
-            }
-            
-            // Load tuning data if not already loaded
+            const micOk = await setupMicrophone();
+            if (!micOk) return;
+
             if (noteTimings.length === 0) {
                 await loadTuningConfig();
             }
-            
             listenForTuningSchedule();
-            
+
             isListening = true;
             baselineEstablished = false;
             baselineSamples = [];
             baselineStartTime = Date.now();
             processedNotes.clear();
             detectionCount = 0;
-            
-            log("🔊 Listening for notes using pitch-aware detection");
-            log(`   Phase 1 (pillars): 0-${phase1EndMs}ms, Phase 2 (patrons): ${phase1EndMs}ms+`);
-            
+
+            log(`🔊 Listening for notes using pitch-aware detection (Phase 1: pillars, Phase 2: patrons)`);
             detectNotes();
-            
+
             document.getElementById('start-listening-btn').disabled = true;
             document.getElementById('stop-listening-btn').disabled = false;
         }
-        
-        // Stop listening
+
         function stopListening() {
             if (!isListening) return;
-            
             isListening = false;
-            log("⏹️ Stopped listening");
-            log(`📊 Summary: ${detectionCount} successful detections, ${processedNotes.size} unique notes tracked`);
-            
+            log(`⏹️ Stopped listening. Summary: ${detectionCount} successful detections, ${processedNotes.size} unique notes tracked.`);
             if (micStream) {
                 micStream.getTracks().forEach(track => track.stop());
                 micStream = null;
             }
             analyser = null;
-            
             document.getElementById('start-listening-btn').disabled = false;
             document.getElementById('stop-listening-btn').disabled = true;
         }
-        
-        // Initialize
+
+        // ============================================================================
+        // INITIALIZATION
+        // ============================================================================
         window.onload = async () => {
             log("🎧 xmusiclistener started");
-            
-            // Initialize log reference
-            logRef = db.ref(`device_logs/${mySeat.id}`);
+            logRef = db.ref(`device_logs/xmusiclistener`);
             setInterval(flushLogs, 2000);
-            
-            // Request mic button
+
             document.getElementById('request-mic-btn').onclick = async () => {
                 log("📱 Requesting microphone permission...");
                 try {
@@ -643,18 +658,12 @@
                     document.getElementById('mic-status').innerHTML = `Denied: ${e.message}`;
                 }
             };
-            
-            // Start listening button
             document.getElementById('start-listening-btn').onclick = startListening;
-            
-            // Stop listening button
             document.getElementById('stop-listening-btn').onclick = stopListening;
         };
-        
+
         window.addEventListener('beforeunload', () => {
-            if (micStream) {
-                micStream.getTracks().forEach(track => track.stop());
-            }
+            if (micStream) micStream.getTracks().forEach(t => t.stop());
             flushLogs();
         });
     </script>
