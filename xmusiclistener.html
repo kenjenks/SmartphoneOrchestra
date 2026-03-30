@@ -221,6 +221,7 @@
         const MIN_DETECTION_ENERGY = 0.03;
         const PHASE1_END_MS = 20571.4;
         const SPEED_OF_SOUND = 343;
+        const LISTENER_MIC_DELAY_MS = 40;   // laptop microphone input latency (ms)
 
         // ============================================================================
         // GLOBAL STATE
@@ -554,7 +555,7 @@
 
             // Decide if detection or miss
             const expectedTimeAbs = tuningStartTime + closestNote.ms_offset;
-            const timeError = now - expectedTimeAbs;
+            const timeError = now - expectedTimeAbs - LISTENER_MIC_DELAY_MS;
             const sourceType = isPhase1 ? 'PILLAR' : 'PATRON';
             const sourceId = closestNote.pillar_id || closestNote.deviceId || '?';
 
