@@ -908,78 +908,81 @@
         }
     }
 
-    function createNewPlaybackStream(targetWallTime, speakerDelay) {
-        log(`🔍 createNewPlaybackStream: audioCtx.state=${audioCtx?.state}, buffer=${!!bufferCache[PICCOLO_URL]}`);
-        if (!audioCtx || audioCtx.state !== 'running') {
-            log(`⚠️ Audio context not running (state=${audioCtx?.state})`);
-            return null;
-        }
-        if (!PICCOLO_URL || !bufferCache[PICCOLO_URL]) {
-            log(`⚠️ Missing audio buffer`);
-            return null;
-        }
-        const nowAudio = audioCtx.currentTime;
-        const nowWall = Date.now() + serverOffset;
-        const delaySec = (targetWallTime - nowWall) / 1000;
-        const startAudio = nowAudio + Math.max(0, delaySec);
-        const source = audioCtx.createBufferSource();
-        source.buffer = bufferCache[PICCOLO_URL];
-        source.loop = false;
-        const gain = audioCtx.createGain();
-        gain.gain.setValueAtTime(0, startAudio);
-        source.connect(gain);
-        gain.connect(masterGain || audioCtx.destination);
-        source.start(startAudio);
-        const streamId = allStreams.length + 1;
-        const newStream = { id: streamId, source, gain, targetWallTime, startAudio, speakerDelay, createdAt: nowWall, isActive: false };
-        allStreams.push(newStream);
-        if (activeStream) {
-            const fade = 0.1;
-            const now = audioCtx.currentTime;
-            activeStream.gain.gain.linearRampToValueAtTime(0, now + fade);
-            gain.gain.linearRampToValueAtTime(1, startAudio + 0.01);
-            activeStream.isActive = false;
-        } else {
-            gain.gain.setValueAtTime(1, startAudio);
-        }
-        newStream.isActive = true;
-        activeStream = newStream;
-        startEnvelopeScheduler(targetWallTime, speakerDelay);
-        log(`✅ Playback stream ${streamId} created, startAudio=${startAudio.toFixed(3)}`);
-        return newStream;
-    }
-
-    function startEnvelopeScheduler(pieceStartTime, speakerDelay) {
+    function startEnvelopeScheduler(pieceStartWallTime, speakerDelay) {
+        // Cancel any previously scheduled envelope timeouts (legacy, but harmless)
         envelopeTimeouts.forEach(t => clearTimeout(t));
         envelopeTimeouts = [];
-        if (isListenOnlyMode) return;
+
+        const stream = activeStream;
+        if (!stream || !stream.gain) return;
+
+        // If only one device is playing, we don't need per-note envelopes.
+        // Keep the old logic: set gain to constant and return.
         if (isSingleDeviceMode) {
-            if (activeStream?.gain) activeStream.gain.gain.setValueAtTime(MASTER_PLAYBACK_GAIN, audioCtx.currentTime);
+            if (stream.gain) {
+                stream.gain.gain.setValueAtTime(MASTER_PLAYBACK_GAIN, audioCtx.currentTime);
+            }
             return;
         }
-        assignedNotes.forEach(note => {
-            const noteStartWall = pieceStartTime + note.startMs;
-            const nowWall = Date.now() + serverOffset;
-            const rampUpStart = noteStartWall - speakerDelay;
-            const rampUpDelay = rampUpStart - nowWall;
-            if (rampUpDelay > 0) {
-                const tid = setTimeout(() => {
-                    if (!activeStream?.gain) return;
-                    const now = audioCtx.currentTime;
-                    const dur = note.durationMs;
-                    activeStream.gain.gain.cancelScheduledValues(now);
-                    activeStream.gain.gain.setValueAtTime(0, now);
-                    activeStream.gain.gain.linearRampToValueAtTime(MASTER_PLAYBACK_GAIN, now + 0.005);
-                    activeStream.gain.gain.linearRampToValueAtTime(0, now + (dur - 10)/1000);
-                    activeStream.gain.gain.setValueAtTime(0, now + dur/1000);
-                    playedNotesCount++;
 
-                    if (!firstNoteLogged) {
-                        log(`🎵 Playing first note ${note.noteIndex} at expected ${note.startMs}ms (wall ${new Date(noteStartWall).toISOString().substr(11,12)})`);
-                        firstNoteLogged = true;
-                    }
-                }, rampUpDelay);
-                envelopeTimeouts.push(tid);
+        const nowWall = Date.now() + serverOffset;
+        const nowAudio = audioCtx.currentTime;
+        const gain = stream.gain.gain;
+
+        assignedNotes.forEach(note => {
+            const noteStartWall = pieceStartWallTime + note.startMs;
+            const noteEndWall = noteStartWall + note.durationMs;
+
+            // Convert wall‑clock times to audio context timeline
+            const startAudio = nowAudio + (noteStartWall - nowWall) / 1000;
+            const endAudio = nowAudio + (noteEndWall - nowWall) / 1000;
+
+            // Only schedule if the note is in the future (or very close)
+            if (startAudio > nowAudio - 0.01) {
+                // Cancel any pending changes that might overlap
+                gain.cancelScheduledValues(startAudio - 0.01);
+
+                // Ramp up from 0 to full gain in 5ms (avoid click)
+                gain.setValueAtTime(0, startAudio);
+                gain.linearRampToValueAtTime(MASTER_PLAYBACK_GAIN, startAudio + 0.005);
+
+                // Ramp down to 0 at the note's end
+                gain.linearRampToValueAtTime(0, endAudio);
+            }
+        });
+    }
+
+    function startEnvelopeScheduler(pieceStartWallTime, speakerDelay) {
+        // Cancel any previously scheduled envelope timeouts (legacy)
+        envelopeTimeouts.forEach(t => clearTimeout(t));
+        envelopeTimeouts = [];
+
+        const stream = activeStream;
+        if (!stream || !stream.gain) return;
+
+        const nowWall = Date.now() + serverOffset;
+        const nowAudio = audioCtx.currentTime;
+        const gain = stream.gain.gain;
+
+        assignedNotes.forEach(note => {
+            const noteStartWall = pieceStartWallTime + note.startMs;
+            const noteEndWall = noteStartWall + note.durationMs;
+
+            // Audio context time when this note should start and end
+            const startAudio = nowAudio + (noteStartWall - nowWall) / 1000;
+            const endAudio = nowAudio + (noteEndWall - nowWall) / 1000;
+
+            // Only schedule if the start is in the future (or very near future)
+            if (startAudio > nowAudio - 0.01) {
+                // Cancel any previously scheduled changes in this range
+                gain.cancelScheduledValues(startAudio - 0.01);
+
+                // Ramp up from 0 to full gain in 5ms
+                gain.setValueAtTime(0, startAudio);
+                gain.linearRampToValueAtTime(MASTER_PLAYBACK_GAIN, startAudio + 0.005);
+
+                // Ramp down to 0 at the end
+                gain.linearRampToValueAtTime(0, endAudio);
             }
         });
     }
