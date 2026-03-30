@@ -264,7 +264,8 @@
     let noteSchedule = [];
     let detectionWindows = new Map();
     let processedMeasurements = new Set();
-    let rawTimeShifts = [];
+    let rawTimeShifts = [];           // neighbor-reported speaker delays only
+    let pillarSyncShifts = [];        // pillar absolute timing errors (for validation only)
     let isHappy = false;
     let estimatedDeviceDelayMs = 42;
     let estimatedDeviceMicDelayMs = 13;
@@ -755,8 +756,9 @@
                 const expTime = tuningStartTime + note.ms_offset;
                 const shift = now - expTime;
                 if (Math.abs(shift) < 500) {
-                    rawTimeShifts.push(shift);
-                    if (rawTimeShifts.length > 50) rawTimeShifts.shift();
+                    // Store in separate array for validation only – not used for speaker delay correction
+                    pillarSyncShifts.push(shift);
+                    if (pillarSyncShifts.length > 50) pillarSyncShifts.shift();
                     pillarDetectionsCount++;
                 }
                 processedMeasurements.add(key);
@@ -1024,7 +1026,7 @@
             if (wait > 0 && wait < 30000) {
                 log(`🎵 Scheduling correction at rest ${(nextRest.startMs/1000).toFixed(1)}s (wait ${wait.toFixed(0)}ms)`, 'info');
                 setTimeout(() => {
-                    const newDelay = currentDelay + medianShift;
+                    const newDelay = currentDelay - medianShift;
                     const clamped = Math.max(-500, Math.min(1000, newDelay));
                     log(`🔄 REST CORRECTION: ${currentDelay.toFixed(1)}ms → ${clamped.toFixed(1)}ms`, 'info');
                     currentSpeakerDelay = clamped;
@@ -1047,7 +1049,7 @@
 
     function applyCorrection(medianShift) {
         const currentDelay = currentSpeakerDelay;
-        const newDelay = currentDelay + medianShift;
+        const newDelay = currentDelay - medianShift;
         const MIN_DELAY = -500;
         const MAX_DELAY = 2000;
         const clamped = Math.max(MIN_DELAY, Math.min(MAX_DELAY, newDelay));
@@ -1100,6 +1102,7 @@
 
     function evaluateInRealTime() {
         if (isHappy) return;
+        // Use only neighbor-reported delays (rawTimeShifts) for correction
         if (rawTimeShifts.length < MIN_SAMPLES_FOR_CORRECTION) return;
         const median = calculateMedian(rawTimeShifts);
         const stdDev = calculateStdDev(rawTimeShifts);
@@ -1374,6 +1377,7 @@
                 micDelaySamples = [];
                 myMicDelayMs = null;
                 rawTimeShifts = [];
+                pillarSyncShifts = [];  // clear pillar sync array
                 processedMeasurements.clear();
                 localRecordings.clear();
                 scheduledRecordings.clear();
