@@ -1009,6 +1009,12 @@
     }
 
     function scheduleCorrectionDuringRest(medianShift, currentDelay) {
+        // Disable corrections in single‑device mode
+        if (isSingleDeviceMode) {
+            log(`🎧 Single‑device mode: skipping correction scheduling`);
+            return false;
+        }
+
         const nowWall = Date.now() + serverOffset;
         const songPos = nowWall - tuningStartTime;
         const nextRest = findNextRestPeriod(songPos);
@@ -1047,7 +1053,19 @@
         const clamped = Math.max(MIN_DELAY, Math.min(MAX_DELAY, newDelay));
         const mag = Math.abs(clamped - currentDelay);
         if (mag < MIN_CORRECTION_MS) return;
+
         log(`🔄 Correction needed: shift=${medianShift.toFixed(1)}ms → ${currentDelay.toFixed(1)}ms → ${clamped.toFixed(1)}ms`);
+
+        // In single‑device mode, we just store the delay and do not restart playback
+        if (isSingleDeviceMode) {
+            log(`🔧 Single‑device mode: storing delay ${clamped.toFixed(1)}ms, not correcting stream`);
+            currentSpeakerDelay = clamped;
+            rawTimeShifts = [];
+            correctionCount++;
+            updateCalibrationDisplay();
+            return;
+        }
+
         const scheduled = scheduleCorrectionDuringRest(medianShift, currentDelay);
         if (!scheduled) {
             log(`⚠️ No suitable rest, applying immediately`, 'warn');
