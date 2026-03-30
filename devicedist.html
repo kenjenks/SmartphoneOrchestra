@@ -305,6 +305,35 @@
     let restPeriods = [];
 
     // ============================================================================
+    // PERIODIC LOGGING
+    // ============================================================================
+    let periodicLogInterval = null;
+    let playedNotesCount = 0;
+    let neighborDetectionsCount = 0;
+    let neighborDetectionsPerNeighbor = new Map();
+    let pillarDetectionsCount = 0;
+
+    function startPeriodicLogging() {
+        if (periodicLogInterval) clearInterval(periodicLogInterval);
+        periodicLogInterval = setInterval(() => {
+            if (!tuningStartTime) return;
+            const now = Date.now() + serverOffset;
+            const songPos = tuningStartTime ? (now - tuningStartTime) : 0;
+            const neighborSummary = Array.from(neighborDetectionsPerNeighbor.entries())
+                .map(([id, cnt]) => `${id}:${cnt}`).join(', ');
+            log(`📊 STATUS: played=${playedNotesCount} | neighbor=${neighborDetectionsCount} (${neighborSummary}) | pillar=${pillarDetectionsCount} | phase=${phase1Complete ? '2' : '1'} | delay=${currentSpeakerDelay.toFixed(0)}ms | mic=${myMicDelayMs?.toFixed(0) || '?'}ms | corr=${correctionCount} | pos=${(songPos/1000).toFixed(0)}s`);
+            flushLogs(); // Ensure it's written immediately
+        }, 5000);
+    }
+
+    function stopPeriodicLogging() {
+        if (periodicLogInterval) {
+            clearInterval(periodicLogInterval);
+            periodicLogInterval = null;
+        }
+    }
+
+    // ============================================================================
     // UTILITIES
     // ============================================================================
     function calculateMedian(values) {
@@ -623,6 +652,11 @@
                 masterGain.gain.value = MASTER_PLAYBACK_GAIN;
                 masterGain.connect(audioCtx.destination);
             }
+            // Ensure audio context is running
+            if (audioCtx.state === 'suspended') {
+                await audioCtx.resume();
+                log("🎛️ Audio context resumed");
+            }
             if (!micStream) {
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
                 micStream = stream;
@@ -679,6 +713,7 @@
                 if (micDelay >= MIC_DELAY_SANITY_MIN && micDelay <= MIC_DELAY_SANITY_MAX) {
                     micDelaySamples.push(micDelay);
                     processedMeasurements.add(key);
+                    pillarDetectionsCount++;
                     if (micDelaySamples.length >= MIN_MIC_SAMPLES) {
                         myMicDelayMs = calculateMedian(micDelaySamples);
                         phase1Complete = true;
@@ -720,6 +755,7 @@
                 if (Math.abs(shift) < 500) {
                     rawTimeShifts.push(shift);
                     if (rawTimeShifts.length > 50) rawTimeShifts.shift();
+                    pillarDetectionsCount++;
                 }
                 processedMeasurements.add(key);
             }
@@ -817,6 +853,9 @@
                     }
                     rawTimeShifts.push(speakerDelay);
                     if (rawTimeShifts.length > 50) rawTimeShifts.shift();
+                    neighborDetectionsCount++;
+                    const cnt = neighborDetectionsPerNeighbor.get(note.deviceId) || 0;
+                    neighborDetectionsPerNeighbor.set(note.deviceId, cnt + 1);
                     reportMeasurement(note.noteIndex, note.deviceId, speakerDelay, rawDelay, propMs, now);
                     processedMeasurements.add(`${note.noteIndex}_${note.deviceId}`);
                     log(`👥 ${note.deviceId} note ${note.noteIndex} → delay=${speakerDelay.toFixed(1)}ms`);
@@ -843,10 +882,12 @@
 
     function startContinuousPlayback(startTime, speakerDelay) {
         if (isListenOnlyMode) { log(`🔇 Listen‑only mode`); return; }
-        if (!PICCOLO_URL || !bufferCache[PICCOLO_URL]) return;
+        if (!PICCOLO_URL) { log(`❌ PICCOLO_URL not set`); return; }
+        if (!bufferCache[PICCOLO_URL]) { log(`❌ Piccolo audio not loaded`); return; }
         const nowWall = Date.now() + serverOffset;
         const adjStart = startTime - speakerDelay;
         const delayMs = adjStart - nowWall;
+        log(`🔍 startContinuousPlayback: isListenOnlyMode=${isListenOnlyMode}, PICCOLO_URL=${PICCOLO_URL}, hasBuffer=${!!bufferCache[PICCOLO_URL]}, delayMs=${delayMs.toFixed(1)}`);
         if (delayMs > 0 && delayMs < 30000) {
             setTimeout(() => createNewPlaybackStream(adjStart, speakerDelay), delayMs);
         } else if (delayMs > -1000) {
@@ -858,8 +899,15 @@
     }
 
     function createNewPlaybackStream(targetWallTime, speakerDelay) {
-        if (!audioCtx || audioCtx.state !== 'running') return null;
-        if (!PICCOLO_URL || !bufferCache[PICCOLO_URL]) return null;
+        log(`🔍 createNewPlaybackStream: audioCtx.state=${audioCtx?.state}, buffer=${!!bufferCache[PICCOLO_URL]}`);
+        if (!audioCtx || audioCtx.state !== 'running') {
+            log(`⚠️ Audio context not running (state=${audioCtx?.state})`);
+            return null;
+        }
+        if (!PICCOLO_URL || !bufferCache[PICCOLO_URL]) {
+            log(`⚠️ Missing audio buffer`);
+            return null;
+        }
         const nowAudio = audioCtx.currentTime;
         const nowWall = Date.now() + serverOffset;
         const delaySec = (targetWallTime - nowWall) / 1000;
@@ -887,6 +935,7 @@
         newStream.isActive = true;
         activeStream = newStream;
         startEnvelopeScheduler(targetWallTime, speakerDelay);
+        log(`✅ Playback stream ${streamId} created, startAudio=${startAudio.toFixed(3)}`);
         return newStream;
     }
 
@@ -913,6 +962,7 @@
                     activeStream.gain.gain.linearRampToValueAtTime(MASTER_PLAYBACK_GAIN, now + 0.005);
                     activeStream.gain.gain.linearRampToValueAtTime(0, now + (dur - 10)/1000);
                     activeStream.gain.gain.setValueAtTime(0, now + dur/1000);
+                    playedNotesCount++;
                 }, rampUpDelay);
                 envelopeTimeouts.push(tid);
             }
@@ -1001,14 +1051,12 @@
         const stdDev = calculateStdDev(rawTimeShifts);
         const curDelay = currentSpeakerDelay;
         log(`📊 Real-time: shift=${median>0?'+':''}${median.toFixed(1)}ms, σ=${stdDev.toFixed(1)}ms, samples=${rawTimeShifts.length}, delay=${curDelay.toFixed(1)}ms, corr=${correctionCount}`);
-        // Force first correction
         if (correctionCount === 0 && rawTimeShifts.length >= 5 && Math.abs(median) > 20) {
             log(`🔧 FORCE FIRST CORRECTION: shift=${median.toFixed(1)}ms`, 'info');
             applyCorrection(median);
             rawTimeShifts = [];
             return;
         }
-        // Convergence
         if (Math.abs(median) <= CONVERGENCE_STD_DEV_MS && stdDev <= CONVERGENCE_STD_DEV_MS) {
             if (!isHappy) {
                 log(`✅ Converged! error=${Math.abs(median).toFixed(1)}ms, σ=${stdDev.toFixed(1)}ms`, 'success');
@@ -1101,6 +1149,7 @@
             convergedAt: Date.now() + serverOffset
         });
         updateCalibrationDisplay();
+        stopPeriodicLogging();
         startPhase3();
     }
 
@@ -1253,6 +1302,10 @@
                 processedMeasurements.clear();
                 localRecordings.clear();
                 scheduledRecordings.clear();
+                playedNotesCount = 0;
+                neighborDetectionsCount = 0;
+                neighborDetectionsPerNeighbor.clear();
+                pillarDetectionsCount = 0;
                 log(`🎤 Phase 1: listening for mic delay (0-${phase1EndMs}ms)`);
             }
             if (!isListenOnlyMode) {
@@ -1264,6 +1317,7 @@
             }
             await enableMicrophone();
             log("🎧 Listening...");
+            startPeriodicLogging();
             if (!isListenOnlyMode && pillarWindows.length && activePillars.length) {
                 setTimeout(() => {
                     if (phase1WindowActive && !phase1Complete) {
@@ -1369,6 +1423,10 @@
             if (granted) {
                 log("✅ Mic granted");
                 await setupMicrophone();
+                if (audioCtx && audioCtx.state === 'suspended') {
+                    await audioCtx.resume();
+                    log("🎛️ Audio context resumed");
+                }
                 if (mySeat && mySeat.id && assetsPreloaded) {
                     document.getElementById('setup-screen').style.display = 'none';
                     document.getElementById('show-screen').style.display = 'block';
