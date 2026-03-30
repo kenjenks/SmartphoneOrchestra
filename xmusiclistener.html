@@ -216,8 +216,8 @@
         const FFT_SIZE = 2048;
         const NOTE_BAND_RATIO = Math.pow(2, 1/48); // ±1/4 semitone
         const PITCH_DETECTION_TOLERANCE_BINS = 2;   // ±2 bins around target
-        const BASELINE_SAMPLES_MS = 200;
-        const BASELINE_THRESHOLD_MULTIPLIER = 1.5;
+        const BASELINE_THRESHOLD_MULTIPLIER = 1.1;         // was 1.5 – matches devicedist
+        const BASELINE_WINDOW_SAMPLES = 50;                // rolling median window size (matches devicedist)
         const MIN_DETECTION_ENERGY = 0.03;
         const PHASE1_END_MS = 20571.4;
         const SPEED_OF_SOUND = 343;
@@ -247,7 +247,6 @@
         let baselineEnergy = 0;
         let baselineSamples = [];
         let baselineEstablished = false;
-        let baselineStartTime = 0;
 
         // Detection tracking
         let processedNotes = new Set();
@@ -476,25 +475,17 @@
                 return;
             }
 
-            // Update UI with song position
             songPositionSpan.innerText = (songPos / 1000).toFixed(1) + ' s';
 
-            // Determine current phase and which notes to expect
             const isPhase1 = songPos < phase1EndMs;
             phaseStatusSpan.innerHTML = isPhase1 ? 'Phase 1 (Pillars)' : 'Phase 2 (Patrons)';
 
             // Get expected notes near current time
             let expectedNotes = [];
             if (isPhase1) {
-                expectedNotes = pillarNotes.filter(note => {
-                    const timeDiff = Math.abs(songPos - note.ms_offset);
-                    return timeDiff < 500;
-                });
+                expectedNotes = pillarNotes.filter(note => Math.abs(songPos - note.ms_offset) < 500);
             } else {
-                expectedNotes = patronNotes.filter(note => {
-                    const timeDiff = Math.abs(songPos - note.ms_offset);
-                    return timeDiff < 500;
-                });
+                expectedNotes = patronNotes.filter(note => Math.abs(songPos - note.ms_offset) < 500);
             }
 
             if (expectedNotes.length === 0) {
@@ -502,7 +493,7 @@
                 return;
             }
 
-            // Find closest note
+            // Find the closest expected note
             let closestNote = null;
             let minDelta = Infinity;
             for (const note of expectedNotes) {
@@ -519,7 +510,6 @@
                 return;
             }
 
-            // Calculate energy for that note
             const energy = calculateEnergyForNote(closestNote.midi, sampleRate, FFT_SIZE);
             const noteKey = `${closestNote.pillar_id || 'patron'}_${closestNote.index || closestNote.noteIndex}`;
 
@@ -529,33 +519,28 @@
             energyValueSpan.innerText = energy.toFixed(4);
             currentNoteSpan.innerHTML = `${closestNote.pitch} (${getFrequencyFromMidi(closestNote.midi).toFixed(0)}Hz)`;
 
-            // Baseline adaptation
-            if (!baselineEstablished) {
-                if (Date.now() - baselineStartTime < BASELINE_SAMPLES_MS) {
-                    baselineSamples.push(energy);
-                } else {
-                    if (baselineSamples.length > 0) {
-                        const sorted = [...baselineSamples].sort((a, b) => a - b);
-                        baselineEnergy = sorted[Math.floor(sorted.length / 2)];
-                        baselineEstablished = true;
-                        log(`📊 Baseline established: ${baselineEnergy.toFixed(4)} from ${baselineSamples.length} samples`);
-                    } else {
-                        baselineEnergy = 0.01;
-                        baselineEstablished = true;
-                    }
-                }
-                baselineValueSpan.innerText = baselineEnergy.toFixed(4);
+            // --- Rolling baseline update (mirrors devicedist) ---
+            baselineSamples.push(energy);
+            if (baselineSamples.length > BASELINE_WINDOW_SAMPLES) {
+                baselineSamples.shift();
+            }
+
+            // Wait until we have enough samples for a stable baseline
+            if (baselineSamples.length < BASELINE_WINDOW_SAMPLES) {
                 requestAnimationFrame(detectNotes);
                 return;
             }
 
-            const threshold = Math.max(baselineEnergy * BASELINE_THRESHOLD_MULTIPLIER, MIN_DETECTION_ENERGY);
-            const ratio = baselineEnergy > 0 ? energy / baselineEnergy : 1.0;
+            // Update baselineEnergy as median of the window
+            const sorted = [...baselineSamples].sort((a, b) => a - b);
+            baselineEnergy = sorted[Math.floor(sorted.length / 2)];
             baselineValueSpan.innerText = baselineEnergy.toFixed(4);
 
-            // Decide if detection or miss
+            const threshold = Math.max(baselineEnergy * BASELINE_THRESHOLD_MULTIPLIER, MIN_DETECTION_ENERGY);
+            const ratio = baselineEnergy > 0 ? energy / baselineEnergy : 1.0;
+
             const expectedTimeAbs = tuningStartTime + closestNote.ms_offset;
-            const timeError = now - expectedTimeAbs - LISTENER_MIC_DELAY_MS;
+            const timeError = now - expectedTimeAbs;
             const sourceType = isPhase1 ? 'PILLAR' : 'PATRON';
             const sourceId = closestNote.pillar_id || closestNote.deviceId || '?';
 
