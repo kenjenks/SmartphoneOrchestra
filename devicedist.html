@@ -889,6 +889,77 @@
     let activeStream = null;
     let allStreams = [];
 
+    function createNewPlaybackStream(targetWallTime, speakerDelay) {
+        log(`🔍 createNewPlaybackStream: audioCtx.state=${audioCtx?.state}, buffer=${!!bufferCache[PICCOLO_URL]}`);
+        if (!audioCtx || audioCtx.state !== 'running') {
+            log(`⚠️ Audio context not running (state=${audioCtx?.state})`);
+            return null;
+        }
+        if (!PICCOLO_URL || !bufferCache[PICCOLO_URL]) {
+            log(`⚠️ Missing audio buffer`);
+            return null;
+        }
+
+        const nowAudio = audioCtx.currentTime;
+        const nowWall = Date.now() + serverOffset;
+        const delaySec = (targetWallTime - nowWall) / 1000;
+        const startAudio = nowAudio + Math.max(0, delaySec);
+
+        const source = audioCtx.createBufferSource();
+        source.buffer = bufferCache[PICCOLO_URL];
+        source.loop = false;
+
+        const gain = audioCtx.createGain();
+
+        // --- MODIFIED: Set initial gain based on mode ---
+        if (isSingleDeviceMode) {
+            // Single device: constant full volume from the start
+            gain.gain.setValueAtTime(MASTER_PLAYBACK_GAIN, startAudio);
+        } else {
+            // Multi‑device: start at zero, envelope scheduler will shape notes
+            gain.gain.setValueAtTime(0, startAudio);
+        }
+
+        source.connect(gain);
+        gain.connect(masterGain || audioCtx.destination);
+
+        source.start(startAudio);
+
+        const streamId = allStreams.length + 1;
+        const newStream = {
+            id: streamId,
+            source,
+            gain,
+            targetWallTime,
+            startAudio,
+            speakerDelay,
+            createdAt: nowWall,
+            isActive: false
+        };
+        allStreams.push(newStream);
+
+        // Clean up old stream's pending automations before fading out
+        if (activeStream) {
+            const now = audioCtx.currentTime;
+            const oldGain = activeStream.gain.gain;
+            // Cancel any future gain changes on the old stream
+            oldGain.cancelScheduledValues(now);
+            // Fade out quickly (100ms)
+            oldGain.linearRampToValueAtTime(0, now + 0.1);
+            activeStream.isActive = false;
+        }
+
+        // Make the new stream active
+        newStream.isActive = true;
+        activeStream = newStream;
+
+        // Schedule per‑note gain envelopes (or do nothing in single‑device mode)
+        startEnvelopeScheduler(targetWallTime, speakerDelay);
+
+        log(`✅ Playback stream ${streamId} created, startAudio=${startAudio.toFixed(3)}`);
+        return newStream;
+    }
+
     function startContinuousPlayback(startTime, speakerDelay) {
         log(`🔍 startContinuousPlayback called: isListenOnlyMode=${isListenOnlyMode}, PICCOLO_URL=${PICCOLO_URL}, hasBuffer=${!!bufferCache[PICCOLO_URL]}`);
         if (isListenOnlyMode) { log(`🔇 Listen‑only mode`); return; }
@@ -909,19 +980,16 @@
     }
 
     function startEnvelopeScheduler(pieceStartWallTime, speakerDelay) {
-        // Cancel any previously scheduled envelope timeouts (legacy, but harmless)
+        // Clear any legacy setTimeout handles (if any)
         envelopeTimeouts.forEach(t => clearTimeout(t));
         envelopeTimeouts = [];
 
         const stream = activeStream;
         if (!stream || !stream.gain) return;
 
-        // If only one device is playing, we don't need per-note envelopes.
-        // Keep the old logic: set gain to constant and return.
+        // Single device mode: gain already set to constant full volume at start.
+        // No need to schedule envelopes.
         if (isSingleDeviceMode) {
-            if (stream.gain) {
-                stream.gain.gain.setValueAtTime(MASTER_PLAYBACK_GAIN, audioCtx.currentTime);
-            }
             return;
         }
 
@@ -929,6 +997,7 @@
         const nowAudio = audioCtx.currentTime;
         const gain = stream.gain.gain;
 
+        // Schedule gain envelopes for each assigned note
         assignedNotes.forEach(note => {
             const noteStartWall = pieceStartWallTime + note.startMs;
             const noteEndWall = noteStartWall + note.durationMs;
@@ -937,12 +1006,12 @@
             const startAudio = nowAudio + (noteStartWall - nowWall) / 1000;
             const endAudio = nowAudio + (noteEndWall - nowWall) / 1000;
 
-            // Only schedule if the note is in the future (or very close)
+            // Only schedule if the note's start is in the future (or very near)
             if (startAudio > nowAudio - 0.01) {
-                // Cancel any pending changes that might overlap
+                // Cancel any previous automations that might overlap
                 gain.cancelScheduledValues(startAudio - 0.01);
 
-                // Ramp up from 0 to full gain in 5ms (avoid click)
+                // Ramp up from 0 to full gain in 5ms (avoids clicks)
                 gain.setValueAtTime(0, startAudio);
                 gain.linearRampToValueAtTime(MASTER_PLAYBACK_GAIN, startAudio + 0.005);
 
