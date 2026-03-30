@@ -1419,6 +1419,12 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             return;
         }
 
+        const firstNotes = tuningSchedule.notes.slice(0, 20);
+        conductorLog(`🎼 First 20 spiral notes:`);
+        firstNotes.forEach((note, idx) => {
+            conductorLog(`   ${idx}: device ${note.deviceId} note ${note.noteIndex} at ${note.startMs}ms`);
+        });
+
         const nowWall = Date.now() + serverOffset;
         const tuningStartTimeAbs = nowWall + 5000;
         conductorLog(`📡 Writing tuning/current with startTime: ${tuningStartTimeAbs} (${new Date(tuningStartTimeAbs).toISOString().substr(11, 12)})`);
