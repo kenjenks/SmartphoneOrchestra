@@ -202,7 +202,6 @@
     const PICCOLO_MIN_FREQ = 500;
     const PICCOLO_MAX_FREQ = 2100;
     const FFT_SIZE = 2048;
-    const BASELINE_SAMPLES_MS = 200;
     const BASELINE_THRESHOLD_MULTIPLIER = 1.1;
     const MIN_DETECTION_ENERGY = 0.03;
     const PILLAR_ONSET_THRESHOLD = 2.0;
@@ -220,6 +219,7 @@
     const CONVERGENCE_STD_DEV_MS = 15;
     const MAX_CORRECTIONS = 3;
     const HEARTBEAT_TIMEOUT_MS = 12100;
+    const BASELINE_WINDOW_SAMPLES = 50;   // rolling window size
 
     // ============================================================================
     // GLOBAL STATE
@@ -323,7 +323,6 @@
             const songPos = tuningStartTime ? (now - tuningStartTime) : 0;
             const neighborSummary = Array.from(neighborDetectionsPerNeighbor.entries())
                 .map(([id, cnt]) => `${id}:${cnt}`).join(', ');
-            // Compute microphone max energy
             let maxEnergy = 0;
             if (frequencyData) {
                 for (let i = 0; i < frequencyData.length; i++) {
@@ -394,7 +393,6 @@
     // STATUS DISPLAY (UI)
     // ============================================================================
     function updateDeviceStatusDisplay() {
-        // Update indicators
         const updateInd = (id, condition) => {
             const el = document.getElementById(id);
             if (el) {
@@ -407,11 +405,9 @@
         updateInd('neighbor-ind', myNeighbors && myNeighbors.length > 0);
         updateInd('sync-ind', serverOffset !== 0);
 
-        // Seat ID
         const seatEl = document.getElementById('seat-id');
         if (seatEl) seatEl.innerText = mySeat.id || '--';
 
-        // Action button
         const actionBtn = document.getElementById('init-permissions-btn');
         if (actionBtn) {
             const isDataReady = mySeat && mySeat.id && assetsPreloaded;
@@ -603,7 +599,6 @@
                 if (data.assets.test_pulse) TEST_PULSE_URL = data.assets.test_pulse;
                 if (data.assets.pillars) pillarUrls = data.assets.pillars;
             }
-            // Precompute rest periods
             restPeriods = [];
             let lastEndMs = 0;
             for (let i = 0; i < noteTimings.length; i++) {
@@ -661,7 +656,6 @@
                 masterGain.gain.value = MASTER_PLAYBACK_GAIN;
                 masterGain.connect(audioCtx.destination);
             }
-            // Ensure audio context is running
             if (audioCtx.state === 'suspended') {
                 await audioCtx.resume();
                 log("🎛️ Audio context resumed");
@@ -682,7 +676,7 @@
             frequencyData = new Uint8Array(analyser.frequencyBinCount);
             isMicActive = true;
             document.getElementById('energy-meter').style.display = 'block';
-            log(`🎤 Microphone active`);
+            log(`🎤 Microphone active, sample rate: ${sampleRate}Hz, FFT size: ${FFT_SIZE}`);
             requestAnimationFrame(detectNeighborNotes);
             return true;
         } catch (e) { log(`❌ Mic setup failed: ${e.message}`); return false; }
@@ -731,7 +725,6 @@
                     }
                 }
             }
-            // update baseline
             if (pillarRefBaselineSamples.length < 50) pillarRefBaselineSamples.push(energy);
             else {
                 const sorted = [...pillarRefBaselineSamples].sort((a,b)=>a-b);
@@ -884,81 +877,10 @@
     }
 
     // ============================================================================
-    // PARALLEL STREAMING PLAYBACK (No stop())
+    // PARALLEL STREAMING PLAYBACK (audio‑context scheduling)
     // ============================================================================
     let activeStream = null;
     let allStreams = [];
-
-    function createNewPlaybackStream(targetWallTime, speakerDelay) {
-        log(`🔍 createNewPlaybackStream: audioCtx.state=${audioCtx?.state}, buffer=${!!bufferCache[PICCOLO_URL]}`);
-        if (!audioCtx || audioCtx.state !== 'running') {
-            log(`⚠️ Audio context not running (state=${audioCtx?.state})`);
-            return null;
-        }
-        if (!PICCOLO_URL || !bufferCache[PICCOLO_URL]) {
-            log(`⚠️ Missing audio buffer`);
-            return null;
-        }
-
-        const nowAudio = audioCtx.currentTime;
-        const nowWall = Date.now() + serverOffset;
-        const delaySec = (targetWallTime - nowWall) / 1000;
-        const startAudio = nowAudio + Math.max(0, delaySec);
-
-        const source = audioCtx.createBufferSource();
-        source.buffer = bufferCache[PICCOLO_URL];
-        source.loop = false;
-
-        const gain = audioCtx.createGain();
-
-        // --- MODIFIED: Set initial gain based on mode ---
-        if (isSingleDeviceMode) {
-            // Single device: constant full volume from the start
-            gain.gain.setValueAtTime(MASTER_PLAYBACK_GAIN, startAudio);
-        } else {
-            // Multi‑device: start at zero, envelope scheduler will shape notes
-            gain.gain.setValueAtTime(0, startAudio);
-        }
-
-        source.connect(gain);
-        gain.connect(masterGain || audioCtx.destination);
-
-        source.start(startAudio);
-
-        const streamId = allStreams.length + 1;
-        const newStream = {
-            id: streamId,
-            source,
-            gain,
-            targetWallTime,
-            startAudio,
-            speakerDelay,
-            createdAt: nowWall,
-            isActive: false
-        };
-        allStreams.push(newStream);
-
-        // Clean up old stream's pending automations before fading out
-        if (activeStream) {
-            const now = audioCtx.currentTime;
-            const oldGain = activeStream.gain.gain;
-            // Cancel any future gain changes on the old stream
-            oldGain.cancelScheduledValues(now);
-            // Fade out quickly (100ms)
-            oldGain.linearRampToValueAtTime(0, now + 0.1);
-            activeStream.isActive = false;
-        }
-
-        // Make the new stream active
-        newStream.isActive = true;
-        activeStream = newStream;
-
-        // Schedule per‑note gain envelopes (or do nothing in single‑device mode)
-        startEnvelopeScheduler(targetWallTime, speakerDelay);
-
-        log(`✅ Playback stream ${streamId} created, startAudio=${startAudio.toFixed(3)}`);
-        return newStream;
-    }
 
     function startContinuousPlayback(startTime, speakerDelay) {
         log(`🔍 startContinuousPlayback called: isListenOnlyMode=${isListenOnlyMode}, PICCOLO_URL=${PICCOLO_URL}, hasBuffer=${!!bufferCache[PICCOLO_URL]}`);
@@ -979,17 +901,80 @@
         }
     }
 
+    function createNewPlaybackStream(targetWallTime, speakerDelay) {
+        log(`🔍 createNewPlaybackStream: audioCtx.state=${audioCtx?.state}, buffer=${!!bufferCache[PICCOLO_URL]}, isSingleDeviceMode=${isSingleDeviceMode}`);
+        if (!audioCtx || audioCtx.state !== 'running') {
+            log(`⚠️ Audio context not running (state=${audioCtx?.state})`);
+            return null;
+        }
+        if (!PICCOLO_URL || !bufferCache[PICCOLO_URL]) {
+            log(`⚠️ Missing audio buffer`);
+            return null;
+        }
+
+        const nowAudio = audioCtx.currentTime;
+        const nowWall = Date.now() + serverOffset;
+        const delaySec = (targetWallTime - nowWall) / 1000;
+        const startAudio = nowAudio + Math.max(0, delaySec);
+
+        const source = audioCtx.createBufferSource();
+        source.buffer = bufferCache[PICCOLO_URL];
+        source.loop = false;
+
+        const gain = audioCtx.createGain();
+
+        if (isSingleDeviceMode) {
+            // Single device: constant full volume from the start
+            log(`🔊 Single‑device mode: setting gain to ${MASTER_PLAYBACK_GAIN} at startAudio=${startAudio.toFixed(3)}`);
+            gain.gain.setValueAtTime(MASTER_PLAYBACK_GAIN, startAudio);
+        } else {
+            // Multi‑device: start at zero, envelope scheduler will shape notes
+            gain.gain.setValueAtTime(0, startAudio);
+        }
+
+        source.connect(gain);
+        gain.connect(masterGain || audioCtx.destination);
+        source.start(startAudio);
+
+        const streamId = allStreams.length + 1;
+        const newStream = {
+            id: streamId,
+            source,
+            gain,
+            targetWallTime,
+            startAudio,
+            speakerDelay,
+            createdAt: nowWall,
+            isActive: false
+        };
+        allStreams.push(newStream);
+
+        if (activeStream) {
+            const now = audioCtx.currentTime;
+            const oldGain = activeStream.gain.gain;
+            oldGain.cancelScheduledValues(now);
+            oldGain.linearRampToValueAtTime(0, now + 0.1);
+            activeStream.isActive = false;
+        }
+
+        newStream.isActive = true;
+        activeStream = newStream;
+
+        startEnvelopeScheduler(targetWallTime, speakerDelay);
+
+        log(`✅ Playback stream ${streamId} created, startAudio=${startAudio.toFixed(3)}`);
+        return newStream;
+    }
+
     function startEnvelopeScheduler(pieceStartWallTime, speakerDelay) {
-        // Clear any legacy setTimeout handles (if any)
         envelopeTimeouts.forEach(t => clearTimeout(t));
         envelopeTimeouts = [];
 
         const stream = activeStream;
         if (!stream || !stream.gain) return;
 
-        // Single device mode: gain already set to constant full volume at start.
-        // No need to schedule envelopes.
         if (isSingleDeviceMode) {
+            log(`🎧 Single‑device mode: skipping envelope scheduling`);
             return;
         }
 
@@ -997,60 +982,17 @@
         const nowAudio = audioCtx.currentTime;
         const gain = stream.gain.gain;
 
-        // Schedule gain envelopes for each assigned note
         assignedNotes.forEach(note => {
             const noteStartWall = pieceStartWallTime + note.startMs;
             const noteEndWall = noteStartWall + note.durationMs;
 
-            // Convert wall‑clock times to audio context timeline
             const startAudio = nowAudio + (noteStartWall - nowWall) / 1000;
             const endAudio = nowAudio + (noteEndWall - nowWall) / 1000;
 
-            // Only schedule if the note's start is in the future (or very near)
             if (startAudio > nowAudio - 0.01) {
-                // Cancel any previous automations that might overlap
                 gain.cancelScheduledValues(startAudio - 0.01);
-
-                // Ramp up from 0 to full gain in 5ms (avoids clicks)
                 gain.setValueAtTime(0, startAudio);
                 gain.linearRampToValueAtTime(MASTER_PLAYBACK_GAIN, startAudio + 0.005);
-
-                // Ramp down to 0 at the note's end
-                gain.linearRampToValueAtTime(0, endAudio);
-            }
-        });
-    }
-
-    function startEnvelopeScheduler(pieceStartWallTime, speakerDelay) {
-        // Cancel any previously scheduled envelope timeouts (legacy)
-        envelopeTimeouts.forEach(t => clearTimeout(t));
-        envelopeTimeouts = [];
-
-        const stream = activeStream;
-        if (!stream || !stream.gain) return;
-
-        const nowWall = Date.now() + serverOffset;
-        const nowAudio = audioCtx.currentTime;
-        const gain = stream.gain.gain;
-
-        assignedNotes.forEach(note => {
-            const noteStartWall = pieceStartWallTime + note.startMs;
-            const noteEndWall = noteStartWall + note.durationMs;
-
-            // Audio context time when this note should start and end
-            const startAudio = nowAudio + (noteStartWall - nowWall) / 1000;
-            const endAudio = nowAudio + (noteEndWall - nowWall) / 1000;
-
-            // Only schedule if the start is in the future (or very near future)
-            if (startAudio > nowAudio - 0.01) {
-                // Cancel any previously scheduled changes in this range
-                gain.cancelScheduledValues(startAudio - 0.01);
-
-                // Ramp up from 0 to full gain in 5ms
-                gain.setValueAtTime(0, startAudio);
-                gain.linearRampToValueAtTime(MASTER_PLAYBACK_GAIN, startAudio + 0.005);
-
-                // Ramp down to 0 at the end
                 gain.linearRampToValueAtTime(0, endAudio);
             }
         });
@@ -1186,12 +1128,14 @@
     }
 
     // ============================================================================
-    // DETECTION LOOP
+    // DETECTION LOOP (rolling baseline)
     // ============================================================================
     function detectNeighborNotes() {
         if (!isMicActive || !analyser || !frequencyData) { requestAnimationFrame(detectNeighborNotes); return; }
         const now = Date.now() + serverOffset;
         analyser.getByteFrequencyData(frequencyData);
+
+        // Rolling baseline (same as xmusiclistener)
         const nyquist = sampleRate/2;
         const startBin = Math.floor(500 / nyquist * (FFT_SIZE/2));
         const endBin = Math.ceil(2100 / nyquist * (FFT_SIZE/2));
@@ -1199,22 +1143,24 @@
         for (let i = startBin; i <= endBin && i < frequencyData.length; i++) piccoloEnergy += frequencyData[i]/255;
         piccoloEnergy /= (endBin - startBin + 1);
         currentAvgEnergy = piccoloEnergy;
+
         const eFill = document.getElementById('energy-fill');
         if (eFill) eFill.style.width = (piccoloEnergy*100)+'%';
         const eVal = document.getElementById('energy-value');
         if (eVal) eVal.innerText = piccoloEnergy.toFixed(4);
-        if (!baselineComplete && tuningStartTime) {
-            if (now - baselineStartTime < BASELINE_SAMPLES_MS) baselineSamples.push(piccoloEnergy);
-            else if (baselineSamples.length) {
-                const sorted = [...baselineSamples].sort((a,b)=>a-b);
-                baselineEnergy = sorted[Math.floor(sorted.length/2)];
-                baselineComplete = true;
-                log(`📊 Baseline: ${baselineEnergy.toFixed(4)}`);
-            }
+
+        // Rolling baseline
+        baselineSamples.push(piccoloEnergy);
+        if (baselineSamples.length > BASELINE_WINDOW_SAMPLES) baselineSamples.shift();
+        if (baselineSamples.length === BASELINE_WINDOW_SAMPLES) {
+            const sorted = [...baselineSamples].sort((a,b)=>a-b);
+            baselineEnergy = sorted[Math.floor(sorted.length/2)];
         }
+
         const songPos = tuningStartTime ? now - tuningStartTime : 0;
         const isPhase1 = songPos < phase1EndMs;
         const isPhase2 = songPos >= phase1EndMs;
+
         if (!isHappy && !phase1Complete && isPhase1 && tuningStartTime) detectPillarOnsets(now);
         if (!isHappy && isPhase2 && tuningStartTime) detectPillarForSync(now);
         if (!isHappy && isPhase2 && tuningStartTime) {
@@ -1364,7 +1310,6 @@
             tuningStartTime = sched.startTime;
             updateDeviceStatusDisplay();
 
-            // Ensure audio context is running before we schedule playback
             if (audioCtx && audioCtx.state === 'suspended') {
                 await audioCtx.resume();
                 log("🎛️ Audio context resumed (by tuning)");
@@ -1385,8 +1330,6 @@
                     noteSchedule = sched.schedule.map(n => ({ ...n, startMs: parseFloat(n.startMs), durationMs: parseFloat(n.durationMs) }));
                     assignedNotes = noteSchedule.filter(n => n.deviceId === mySeat.id);
                     log(`🎯 Assigned ${assignedNotes.length} notes`);
-
-                    // Log first few assigned notes for debugging
                     if (assignedNotes.length) {
                         log(`🎼 First 5 assigned notes for ${mySeat.id}:`);
                         assignedNotes.slice(0, 5).forEach(note => {
@@ -1404,6 +1347,7 @@
             if (sched.deviceOrder && !isListenOnlyMode) {
                 const patronOrder = sched.deviceOrder.filter(id => !id.startsWith('PILLAR_'));
                 isSingleDeviceMode = (patronOrder.length === 1);
+                log(`📌 isSingleDeviceMode = ${isSingleDeviceMode} (patron count ${patronOrder.length})`);
             }
 
             if (!isListenOnlyMode) {
@@ -1419,7 +1363,7 @@
                 neighborDetectionsCount = 0;
                 neighborDetectionsPerNeighbor.clear();
                 pillarDetectionsCount = 0;
-                firstNoteLogged = false;   // reset flag for new tuning
+                firstNoteLogged = false;
                 log(`🎤 Phase 1: listening for mic delay (0-${phase1EndMs}ms)`);
             }
 
