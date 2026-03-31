@@ -583,15 +583,15 @@ Operational SOP for Admin:
                     });
 
                     // 4. Firebase Upload
-                    // Format seats as an object keyed by ID: { "A1": {x,y...}, "A2": {...} }
-                    const seatDataObj = seats.reduce((acc, s) => {
-                        acc[s.id] = s;
-                        return acc;
-                    }, {});
-
                     log("📡 Uploading to Firebase...");
 
-                    await db.ref('seat_config').set(seatDataObj);
+                    // Store seat config with seats array and neighborMap
+                    await db.ref('seat_config').set({
+                        seats: seats,
+                        neighborMap: neighborMap
+                    });
+
+                    // Also store neighborMap separately for backward compatibility (optional)
                     await db.ref('neighbor_map').set(neighborMap);
 
                     log("🎉 SUCCESS: Seat Config and Neighbor Map are live.");
