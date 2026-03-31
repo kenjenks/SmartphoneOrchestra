@@ -8,8 +8,8 @@
       "preferred_freq": 1000,
       "stagger": 0,
       "audioUrl": "https://static.wixstatic.com/mp3/9178d1_865189a6de11407188075d651d03f4c9.mp3",
-      "speakerDelayMs": 42,
-      "micDelayMs": 18
+      "speakerDelayMs": 175,
+      "micDelayMs": 15
     },
     {
       "id": "PILLAR_FR",
@@ -19,8 +19,8 @@
       "preferred_freq": 2000,
       "stagger": 100,
       "audioUrl": "https://static.wixstatic.com/mp3/9178d1_f2fb55f02d204f55b8c9e8b711a8a290.mp3",
-      "speakerDelayMs": 42,
-      "micDelayMs": 18
+      "speakerDelayMs": 175,
+      "micDelayMs": 15
     },
     {
       "id": "PILLAR_BL",
@@ -30,8 +30,8 @@
       "preferred_freq": 3000,
       "stagger": 200,
       "audioUrl": "https://static.wixstatic.com/mp3/9178d1_dfdab53807c5453fb1009568960e94c6.mp3",
-      "speakerDelayMs": 42,
-      "micDelayMs": 18
+      "speakerDelayMs": 175,
+      "micDelayMs": 15
     },
     {
       "id": "PILLAR_BR",
@@ -41,8 +41,8 @@
       "preferred_freq": 4000,
       "stagger": 300,
       "audioUrl": "https://static.wixstatic.com/mp3/9178d1_0f17b2b18ea74f7db54ce3ca3d10c0f6.mp3",
-      "speakerDelayMs": 42,
-      "micDelayMs": 18
+      "speakerDelayMs": 175,
+      "micDelayMs": 15
     }
   ],
   "speed_of_sound": 344.0,
