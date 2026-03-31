@@ -1,28 +1,16 @@
 """
 bach_tone_duration_extractor.py
 
-Extracts note timing from MusicXML for both piccolo and pillar parts.
+Extracts note timing from MusicXML for piccolo, pillars, oboe, and tuba.
 Uses fixed tempo from config file for perfect synchronization.
 
-This version:
-- Reads configuration from bach_tone_duration_extractor.json
-- Parses piccolo MusicXML to get exact note sequence
-- Parses quad piano MusicXML to extract pillar notes for Phase 1 mic calibration
-- Creates tuning_mode.json with perfect timing from the score
-- Pillar calibration windows are sequential (2 measures per pillar)
-- SUPPORTS STAFF FILTERING: can extract notes from specific staff (e.g., staff 1 for piccolo parts)
-- FILTERS OUT pillar notes that overlap with string quartet parts (violin, viola, cello, bass)
-
-REQUIREMENTS
-------------
-pip install music21
+This version now supports optional oboe and tuba sections for calibration.
 """
 
 import os
 import json
 import music21
 from datetime import datetime
-
 
 # ---------------------------------------------------------------------------
 # LOAD CONFIGURATION
@@ -56,6 +44,19 @@ class BachToneExtractor:
         self.piccolo_path = os.path.join(base_dir, config["paths"]["input_musicxml"])
         self.pillars_path = os.path.join(base_dir, config["paths"]["input_musicxml_pillars"])
         self.output_path = config["paths"]["output_file"]
+
+        # Oboe and Tuba paths (if present)
+        self.oboe_path = None
+        self.oboe_url = None
+        if "oboe" in config:
+            self.oboe_path = os.path.join(base_dir, config["oboe"]["input_musicxml"])
+            self.oboe_url = config["oboe"]["audio_url"]
+
+        self.tuba_path = None
+        self.tuba_urls = None
+        if "tuba" in config:
+            self.tuba_path = os.path.join(base_dir, config["tuba"]["input_musicxml"])
+            self.tuba_urls = config["tuba"]["audio_urls"]
 
         # Extract tempo and timing
         self.tempo_bpm = config["tempo"]["bpm"]
@@ -117,6 +118,11 @@ class BachToneExtractor:
         print(f"   Pillar staff map: {self.pillar_staff_map}")
         print(f"   String quartet parts to filter: {self.string_quartet_parts}")
 
+        if self.oboe_path:
+            print(f"   Oboe MusicXML: {self.oboe_path}")
+        if self.tuba_path:
+            print(f"   Tuba MusicXML: {self.tuba_path}")
+
     def get_note_staff(self, element):
         """
         Get the staff number for a note element.
@@ -146,33 +152,42 @@ class BachToneExtractor:
 
         return None
 
-    def parse_piccolo_musicxml(self):
-        """Extract perfect note sequence from piccolo MusicXML."""
-        print(f"\n📄 Loading piccolo MusicXML: {self.piccolo_path}")
+    def parse_musicxml_notes(self, filepath, part_id=None, staff=None):
+        """
+        Extract notes from a MusicXML file.
+        Returns a list of dicts with keys: pitch, midi, duration_q, offset_q.
+        """
+        print(f"\n📄 Loading MusicXML: {filepath}")
 
         try:
-            score = music21.converter.parse(self.piccolo_path)
+            score = music21.converter.parse(filepath)
         except Exception as e:
             print(f"❌ Error parsing MusicXML: {e}")
             return None, None
 
-        # Get the first part (the piccolo)
-        if len(score.parts) > 0:
-            part = score.parts[0]
+        # If part_id is specified, use that part; otherwise use the first part
+        if part_id:
+            part = score.parts[part_id]
         else:
-            print("❌ No parts found in MusicXML")
-            return None, None
+            if len(score.parts) > 0:
+                part = score.parts[0]
+            else:
+                print("❌ No parts found in MusicXML")
+                return None, None
 
-        # Extract notes
         notes = []
         current_offset = 0.0  # in quarter notes
 
         for element in part.flatten().notesAndRests:
             if element.isNote:
-                # Get duration in quarters
-                duration_q = element.duration.quarterLength
+                # If a specific staff is requested, skip if staff doesn't match
+                if staff is not None:
+                    note_staff = self.get_note_staff(element)
+                    if note_staff is not None and note_staff != staff:
+                        current_offset += element.duration.quarterLength
+                        continue
 
-                # Get pitch
+                duration_q = element.duration.quarterLength
                 pitch = element.pitch.nameWithOctave
                 midi = element.pitch.midi
 
@@ -228,6 +243,32 @@ class BachToneExtractor:
             print(f"     {i}: {note['pitch']} at {note['ms_offset']:.1f}ms, duration {note['duration_ms']:.1f}ms")
 
         return timeline
+
+    def create_notes_from_musicxml(self, xml_notes):
+        """Create a note list for oboe/tuba (with freq_hz)."""
+        if xml_notes is None:
+            return None
+
+        notes = []
+        total_duration_ms = 0
+
+        for i, xml_note in enumerate(xml_notes):
+            offset_ms = xml_note['offset_q'] * self.quarter_duration_ms
+            duration_ms = xml_note['duration_q'] * self.quarter_duration_ms
+            freq_hz = 440 * (2 ** ((xml_note['midi'] - 69) / 12))
+
+            notes.append({
+                "index": i,
+                "ms_offset": round(offset_ms, 1),
+                "duration_ms": round(duration_ms, 1),
+                "midi": xml_note['midi'],
+                "pitch": xml_note['pitch'],
+                "freq_hz": round(freq_hz, 2)
+            })
+
+            total_duration_ms = max(total_duration_ms, offset_ms + duration_ms)
+
+        return notes, total_duration_ms
 
     def collect_all_notes(self, score):
         """Collect all notes from all parts for overlap detection."""
@@ -293,9 +334,7 @@ class BachToneExtractor:
     def extract_pillar_notes(self):
         """
         Extract pillar notes from quad piano MusicXML.
-
-        Filters out notes that overlap with string quartet parts to ensure
-        clean, unambiguous detection.
+        Filters out notes that overlap with string quartet parts.
         """
         print(f"\n🎹 Loading pillar MusicXML: {self.pillars_path}")
 
@@ -431,21 +470,17 @@ class BachToneExtractor:
 
         return all_pillar_notes, pillar_windows, total_duration_ms
 
-    def create_manifest(self, piccolo_timeline, pillar_notes, pillar_windows):
+    def create_manifest(self, piccolo_timeline, pillar_notes, pillar_windows,
+                        oboe_notes=None, oboe_total_duration=None,
+                        tuba_notes=None, tuba_total_duration=None):
         """Create the final tuning_mode.json manifest."""
-
-        # Build asset URLs
-        piccolo_full_url = self.urls["piccolo"]
-        test_pulse_full_url = self.urls["test_pulse"]
-        pillar_full_urls = self.urls["pillars"]
-
         manifest = {
             "metadata": {
                 "source_musicxml": os.path.basename(self.piccolo_path),
                 "source_musicxml_pillars": os.path.basename(self.pillars_path),
-                "source_audio_url": piccolo_full_url,
-                "test_pulse_url": test_pulse_full_url,
-                **{f"source_audio_{pos}": url for pos, url in pillar_full_urls.items()},
+                "source_audio_url": self.urls["piccolo"],
+                "test_pulse_url": self.urls["test_pulse"],
+                **{f"source_audio_{pos}": url for pos, url in self.urls["pillars"].items()},
                 "tempo": self.tempo_bpm,
                 "time_signature": f"{self.beats_per_measure}/{self.beat_unit}",
                 "total_duration_ms": round(piccolo_timeline[-1]["ms_offset"] + piccolo_timeline[-1]["duration_ms"], 1),
@@ -465,9 +500,9 @@ class BachToneExtractor:
             },
             "piano_notes": piccolo_timeline,
             "assets": {
-                "piccolo": piccolo_full_url,
-                "test_pulse": test_pulse_full_url,
-                "pillars": pillar_full_urls,
+                "piccolo": self.urls["piccolo"],
+                "test_pulse": self.urls["test_pulse"],
+                "pillars": self.urls["pillars"],
             },
             "performance": {
                 "calibration_strategy": {
@@ -487,6 +522,24 @@ class BachToneExtractor:
             )
             manifest["metadata"]["pillar_notes_count"] = len(pillar_notes)
 
+        # Add oboe section if present
+        if oboe_notes is not None:
+            manifest["oboe"] = {
+                "audio_url": self.oboe_url,
+                "notes": oboe_notes,
+                "total_duration_ms": round(oboe_total_duration, 1),
+                "note_count": len(oboe_notes)
+            }
+
+        # Add tuba section if present
+        if tuba_notes is not None:
+            manifest["tuba"] = {
+                "audio_urls": self.tuba_urls,
+                "notes": tuba_notes,
+                "total_duration_ms": round(tuba_total_duration, 1),
+                "note_count": len(tuba_notes)
+            }
+
         return manifest
 
     def save_manifest(self, manifest):
@@ -500,6 +553,10 @@ class BachToneExtractor:
         print(f"   • Piccolo notes: {len(manifest['piano_notes'])}")
         if manifest["metadata"].get("pillar_notes_count"):
             print(f"   • Pillar notes:  {manifest['metadata']['pillar_notes_count']}")
+        if "oboe" in manifest:
+            print(f"   • Oboe notes:    {manifest['oboe']['note_count']}")
+        if "tuba" in manifest:
+            print(f"   • Tuba notes:    {manifest['tuba']['note_count']}")
         print(f"   • Tempo: {self.tempo_bpm} BPM")
         print(f"   • Time signature: {manifest['metadata']['time_signature']}")
         print(f"   • Total duration: {manifest['metadata']['total_duration_ms'] / 1000:.2f}s")
@@ -507,6 +564,13 @@ class BachToneExtractor:
         print(f"\n🎯 Pillar Calibration Windows:")
         for w in manifest["metadata"]["pillar_cal_windows"]:
             print(f"   {w['pillar_id']:12s}: measures {w['start_measure']}-{w['end_measure']} → {w['start_ms']:.1f}ms → {w['end_ms']:.1f}ms")
+
+        if "oboe" in manifest:
+            print(f"\n🎵 Oboe Calibration Sequence:")
+            print(f"   Duration: {manifest['oboe']['total_duration_ms']:.1f}ms, {manifest['oboe']['note_count']} notes")
+        if "tuba" in manifest:
+            print(f"\n📯 Tuba Calibration Sequence:")
+            print(f"   Duration: {manifest['tuba']['total_duration_ms']:.1f}ms, {manifest['tuba']['note_count']} notes")
 
     def run(self):
         """Main execution pipeline."""
@@ -516,7 +580,7 @@ class BachToneExtractor:
         print(f"\n🎯 Using MusicXML timing (fixed tempo: {self.tempo_bpm} BPM)")
 
         # Parse piccolo MusicXML
-        xml_notes, _ = self.parse_piccolo_musicxml()
+        xml_notes, _ = self.parse_musicxml_notes(self.piccolo_path)
         if xml_notes is None:
             return None
 
@@ -533,8 +597,40 @@ class BachToneExtractor:
             pillar_notes = None
             pillar_windows = []
 
+        # Parse oboe MusicXML if present
+        oboe_notes = None
+        oboe_total_duration = 0
+        if self.oboe_path and os.path.exists(self.oboe_path):
+            print("\n🎵 Processing oboe calibration...")
+            oboe_xml, _ = self.parse_musicxml_notes(self.oboe_path)
+            if oboe_xml:
+                oboe_notes, oboe_total_duration = self.create_notes_from_musicxml(oboe_xml)
+        else:
+            if self.oboe_path:
+                print(f"\n⚠️ Oboe MusicXML not found: {self.oboe_path}")
+
+        # Parse tuba MusicXML if present
+        tuba_notes = None
+        tuba_total_duration = 0
+        if self.tuba_path and os.path.exists(self.tuba_path):
+            print("\n📯 Processing tuba calibration...")
+            tuba_xml, _ = self.parse_musicxml_notes(self.tuba_path)
+            if tuba_xml:
+                tuba_notes, tuba_total_duration = self.create_notes_from_musicxml(tuba_xml)
+        else:
+            if self.tuba_path:
+                print(f"\n⚠️ Tuba MusicXML not found: {self.tuba_path}")
+
         # Create manifest
-        manifest = self.create_manifest(piccolo_timeline, pillar_notes, pillar_windows)
+        manifest = self.create_manifest(
+            piccolo_timeline,
+            pillar_notes,
+            pillar_windows,
+            oboe_notes,
+            oboe_total_duration,
+            tuba_notes,
+            tuba_total_duration
+        )
 
         # Save manifest
         self.save_manifest(manifest)

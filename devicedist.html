@@ -222,6 +222,7 @@
     const HEARTBEAT_TIMEOUT_MS = 12100;
     const BASELINE_WINDOW_SAMPLES = 50;
     const FADE_MS = 5;                    // fade in/out duration (ms)
+    const DIAGNOSTIC_RMS_THRESHOLD = 0.05;
 
     // ============================================================================
     // GLOBAL STATE
@@ -309,6 +310,16 @@
     let restPeriods = [];
 
     let deviceBuffer = null;          // device‑specific buffer
+
+    // Diagnostic mode
+    let diagnoseMode = false;
+
+    // Oboe/Tuba calibration
+    let pendingOboeDetections = [];
+    let tubaCalibrationActive = false;
+    let tubaNotes = [];
+    let tubaPillarId = null;
+    let tubaStartTime = 0;
 
     // ============================================================================
     // PERIODIC LOGGING
@@ -525,49 +536,60 @@
         mySeat.id = seatParam;
         log(`Identity: ${mySeat.id}`);
 
+        // Check for diagnostic mode
+        diagnoseMode = urlParams.has('diagnose');
+        if (diagnoseMode) log("🔬 DIAGNOSTIC MODE ENABLED - will analyze buffer content");
+
+        // Load seat coordinates
         try {
-            const snap = await db.ref('seat_config').once('value');
-            const seatsData = snap.val();
-            if (seatsData && seatsData[mySeat.id]) {
-                mySeat.x = seatsData[mySeat.id].x || 0;
-                mySeat.y = seatsData[mySeat.id].y || 0;
+            const seatSnap = await db.ref('seat_config').once('value');
+            const seats = seatSnap.val();
+            if (seats && seats[mySeat.id]) {
+                mySeat.x = seats[mySeat.id].x || 0;
+                mySeat.y = seats[mySeat.id].y || 0;
                 log(`Spatial: (${mySeat.x}, ${mySeat.y})`);
             } else {
                 log(`⚠️ No coordinates for ${mySeat.id}`);
             }
-            updateDeviceStatusDisplay();
-            return true;
         } catch (e) {
             log(`❌ Identity error: ${e.message}`);
             return false;
         }
+
+        // Load full seat data for neighbor coordinate lookup (used in oboe detection)
+        try {
+            const seatConfigSnap = await db.ref('seat_config').once('value');
+            seatData = seatConfigSnap.val() || {};
+        } catch (e) {
+            log(`⚠️ Could not load seat data: ${e.message}`);
+        }
+
+        updateDeviceStatusDisplay();
+        return true;
     }
 
     async function loadStoredCalibration() {
         if (!mySeat.id) return false;
         try {
             const stored = localStorage.getItem(`calibration_${mySeat.id}`);
-            if (!stored) {
+            if (stored) {
+                const cal = JSON.parse(stored);
+                const age = Date.now() - cal.timestamp;
+                if (age < 30 * 24 * 60 * 60 * 1000 && typeof cal.speakerDelay === 'number' && typeof cal.micDelay === 'number') {
+                    currentSpeakerDelay = cal.speakerDelay;
+                    myMicDelayMs = cal.micDelay;
+                    phase1Complete = true;
+                    isHappy = true;
+                    log(`✅ Loaded calibration: speaker=${currentSpeakerDelay.toFixed(1)}ms, mic=${myMicDelayMs.toFixed(1)}ms (age: ${Math.round(age/1000/60)}min)`);
+                    updateCalibrationDisplay();
+                    return true;
+                } else {
+                    log(`📭 Stored calibration for ${mySeat.id} is invalid or too old, ignoring`);
+                }
+            } else {
                 log(`📭 No stored calibration found for ${mySeat.id}`);
-                return false;
             }
-            const cal = JSON.parse(stored);
-            const age = Date.now() - cal.timestamp;
-            if (age > 30 * 24 * 60 * 60 * 1000) {
-                log(`📭 Stored calibration for ${mySeat.id} is too old (${Math.round(age / (24*60*60*1000))} days), ignoring`);
-                return false;
-            }
-            if (typeof cal.speakerDelay !== 'number' || typeof cal.micDelay !== 'number') {
-                log(`⚠️ Invalid calibration data for ${mySeat.id}: missing speaker/mic delay`);
-                return false;
-            }
-            currentSpeakerDelay = cal.speakerDelay;
-            myMicDelayMs = cal.micDelay;
-            phase1Complete = true;
-            isHappy = true;
-            log(`✅ Loaded calibration for ${mySeat.id}: speaker=${currentSpeakerDelay.toFixed(1)}ms, mic=${myMicDelayMs.toFixed(1)}ms (age: ${Math.round(age/1000/60)}min)`);
-            updateCalibrationDisplay();
-            return true;
+            return false;
         } catch (e) {
             log(`⚠️ Failed to load calibration: ${e.message}`);
             return false;
@@ -942,6 +964,72 @@
     }
 
     // ============================================================================
+    // DIAGNOSTIC: analyze buffer RMS for each assigned note
+    // ============================================================================
+    function diagnoseBuffer(buffer, assignedNotes) {
+        const sampleRate = buffer.sampleRate;
+        const channels = buffer.numberOfChannels;
+        // Use first channel for analysis (assume mono or mix)
+        const channelData = buffer.getChannelData(0);
+        const length = buffer.length;
+
+        log(`🔬 Starting diagnostic analysis of device buffer (${assignedNotes.length} assigned notes)...`);
+
+        let presentCount = 0;
+        let missingCount = 0;
+
+        // 1. Check assigned notes
+        for (let i = 0; i < assignedNotes.length; i++) {
+            const note = assignedNotes[i];
+            const startSample = Math.floor(note.startMs / 1000 * sampleRate);
+            const endSample = Math.floor((note.startMs + note.durationMs) / 1000 * sampleRate);
+            const len = endSample - startSample;
+            if (len <= 0) {
+                log(`DIAGNOSTIC: note ${note.noteIndex} (${note.pitch}) – invalid range`);
+                continue;
+            }
+            let sumSq = 0;
+            for (let s = startSample; s < endSample && s < length; s++) {
+                const val = channelData[s];
+                sumSq += val * val;
+            }
+            const rms = Math.sqrt(sumSq / len);
+            const status = rms >= DIAGNOSTIC_RMS_THRESHOLD ? "PRESENT" : "MISSING";
+            if (rms >= DIAGNOSTIC_RMS_THRESHOLD) presentCount++;
+            else missingCount++;
+            log(`DIAGNOSTIC: assigned note ${note.noteIndex} (${note.pitch}) – RMS = ${rms.toFixed(4)} → ${status}`);
+        }
+
+        // 2. Check a sample of unassigned notes
+        const assignedIndices = new Set(assignedNotes.map(n => n.noteIndex));
+        const unassignedSample = noteTimings.filter(n => !assignedIndices.has(n.index)).slice(0, 10);
+        let unassignedPresent = 0;
+        for (const note of unassignedSample) {
+            const startSample = Math.floor(note.startMs / 1000 * sampleRate);
+            const endSample = Math.floor((note.startMs + note.durationMs) / 1000 * sampleRate);
+            const len = endSample - startSample;
+            if (len <= 0) continue;
+            let sumSq = 0;
+            for (let s = startSample; s < endSample && s < length; s++) {
+                const val = channelData[s];
+                sumSq += val * val;
+            }
+            const rms = Math.sqrt(sumSq / len);
+            const status = rms >= DIAGNOSTIC_RMS_THRESHOLD ? "PRESENT (ERROR)" : "ABSENT (OK)";
+            if (rms >= DIAGNOSTIC_RMS_THRESHOLD) unassignedPresent++;
+            log(`DIAGNOSTIC: unassigned note ${note.index} (${note.pitch}) – RMS = ${rms.toFixed(4)} → ${status}`);
+        }
+
+        // 3. Summary
+        log(`🔬 Diagnostic summary: ${presentCount} present, ${missingCount} missing out of ${assignedNotes.length} assigned notes.`);
+        if (unassignedPresent > 0) {
+            log(`⚠️ DIAGNOSTIC WARNING: ${unassignedPresent} unassigned notes have non‑zero energy in buffer!`);
+        } else {
+            log(`✅ DIAGNOSTIC OK: No unassigned notes detected in buffer.`);
+        }
+    }
+
+    // ============================================================================
     // PLAYBACK (constant gain, seek on correction)
     // ============================================================================
     let activeStream = null;
@@ -1051,7 +1139,6 @@
                     currentSpeakerDelay = clamped;
                     const now2 = Date.now() + serverOffset;
                     const curPos = now2 - tuningStartTime;
-                    // Seek to current position in the piece
                     createNewPlaybackStream(now2 - curPos + clamped, clamped, curPos);
                     const flash = document.getElementById('detection-flash');
                     if (flash) {
@@ -1092,7 +1179,6 @@
             currentSpeakerDelay = clamped;
             const now = Date.now() + serverOffset;
             const curPos = now - tuningStartTime;
-            // Seek to current position
             createNewPlaybackStream(now - curPos + clamped, clamped, curPos);
         }
         rawTimeShifts = [];
@@ -1166,13 +1252,14 @@
     }
 
     // ============================================================================
-    // DETECTION LOOP
+    // DETECTION LOOP (rolling baseline)
     // ============================================================================
     function detectNeighborNotes() {
         if (!isMicActive || !analyser || !frequencyData) { requestAnimationFrame(detectNeighborNotes); return; }
         const now = Date.now() + serverOffset;
         analyser.getByteFrequencyData(frequencyData);
 
+        // Rolling baseline
         const nyquist = sampleRate/2;
         const startBin = Math.floor(500 / nyquist * (FFT_SIZE/2));
         const endBin = Math.ceil(2100 / nyquist * (FFT_SIZE/2));
@@ -1197,8 +1284,11 @@
         const isPhase1 = songPos < phase1EndMs;
         const isPhase2 = songPos >= phase1EndMs;
 
+        // Pillar detections for mic delay (Phase 1) and sync (Phase 2)
         if (!isHappy && !phase1Complete && isPhase1 && tuningStartTime) detectPillarOnsets(now);
         if (!isHappy && isPhase2 && tuningStartTime) detectPillarForSync(now);
+
+        // Neighbor detection for piccolo (Phase 2)
         if (!isHappy && isPhase2 && tuningStartTime) {
             processDetectionWindows(now, piccoloEnergy);
             if (now - lastEvaluationTime > EVALUATION_INTERVAL_MS) {
@@ -1206,7 +1296,258 @@
                 evaluateInRealTime();
             }
         }
+
+        // Oboe neighbor detection (SPEAKER_CAL)
+        if (pendingOboeDetections.length > 0) {
+            for (const det of pendingOboeDetections) {
+                if (Math.abs(now - det.expectedTime) < 500) {
+                    const energy = calculateEnergyForNote(det.midi, sampleRate, FFT_SIZE);
+                    if (energy > MIN_DETECTION_ENERGY) {
+                        const rawDelay = now - det.expectedTime;
+                        const targetSeatData = seatData[det.targetSeat];
+                        if (targetSeatData) {
+                            const dx = mySeat.x - targetSeatData.x;
+                            const dy = mySeat.y - targetSeatData.y;
+                            const dist = Math.sqrt(dx*dx + dy*dy);
+                            const propMs = (dist / SPEED_OF_SOUND) * 1000;
+                            const speakerDelay = rawDelay - propMs - (myMicDelayMs || 0);
+                            reportOboeDetection(det.targetSeat, det.noteIndex, speakerDelay, det.calibrationId, rawDelay, propMs);
+                        } else {
+                            log(`⚠️ No coordinates for target seat ${det.targetSeat}`);
+                        }
+                    }
+                    // Remove detection after attempt
+                    pendingOboeDetections = pendingOboeDetections.filter(d => d !== det);
+                }
+            }
+        }
+
+        // Tuba mic calibration detection
+        if (tubaCalibrationActive && tubaNotes.length > 0 && tubaPillarId) {
+            const songPosTuba = now - tubaStartTime;
+            if (songPosTuba >= 0 && songPosTuba < (tubaNotes[tubaNotes.length-1].ms_offset + 1000)) {
+                const activeNotes = tubaNotes.filter(n => Math.abs(songPosTuba - n.ms_offset) < 500);
+                for (const note of activeNotes) {
+                    const key = `tuba_${tubaPillarId}_${note.ms_offset}`;
+                    if (processedMeasurements.has(key)) continue;
+                    const energy = calculateEnergyForNote(note.midi, sampleRate, FFT_SIZE);
+                    let threshold = MIN_DETECTION_ENERGY;
+                    if (pillarRefBaseline > 0) threshold = pillarRefBaseline * 2.0; // same as pillar
+                    if (energy > threshold) {
+                        const expTime = tubaStartTime + note.ms_offset;
+                        const rawDelay = now - expTime;
+                        const pillar = pillarData[tubaPillarId];
+                        if (pillar) {
+                            const dx = mySeat.x - pillar.x;
+                            const dy = mySeat.y - pillar.y;
+                            const dist = Math.sqrt(dx*dx + dy*dy);
+                            const propMs = (dist / SPEED_OF_SOUND) * 1000;
+                            const micDelay = rawDelay - pillar.speakerDelayMs - propMs;
+                            if (micDelay >= MIC_DELAY_SANITY_MIN && micDelay <= MIC_DELAY_SANITY_MAX) {
+                                micDelaySamples.push(micDelay);
+                                processedMeasurements.add(key);
+                                pillarDetectionsCount++;
+                                if (micDelaySamples.length >= MIN_MIC_SAMPLES) {
+                                    myMicDelayMs = calculateMedian(micDelaySamples);
+                                    log(`🎤 Mic delay (tuba): ${myMicDelayMs.toFixed(1)}ms (${micDelaySamples.length} detections)`);
+                                    saveCalibration();
+                                    // Optionally report to conductor
+                                    db.ref(`devices/${mySeat.id}/mic_cal_result`).set({
+                                        micDelayMs: myMicDelayMs,
+                                        source: 'tuba',
+                                        timestamp: Date.now() + serverOffset
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         requestAnimationFrame(detectNeighborNotes);
+    }
+
+    // ============================================================================
+    // OBOE CALIBRATION FUNCTIONS
+    // ============================================================================
+    let oboeMeasurementId = null;
+
+    async function startOboeCalibration(cue) {
+        const oboeUrl = cue.audio_url;
+        const notes = cue.notes;
+        const targetSeat = cue.targetSeat;
+        const expectedNeighbors = cue.expectedNeighbors || [];
+        const responseWindowMs = cue.responseWindowMs || 5000;
+        const measurementId = `oboe_${Date.now()}`;
+        oboeMeasurementId = measurementId;
+
+        // Ensure audio is loaded
+        if (!bufferCache[oboeUrl]) {
+            try {
+                const res = await fetch(oboeUrl);
+                const arrayBuf = await res.arrayBuffer();
+                bufferCache[oboeUrl] = await audioCtx.decodeAudioData(arrayBuf);
+            } catch (e) {
+                log(`❌ Failed to load oboe audio: ${e.message}`);
+                reportOboeResult(targetSeat, 'FAILED', null, 0, 0, expectedNeighbors.length, 0, 'audio_load_failed');
+                return;
+            }
+        }
+
+        let receivedReports = [];
+
+        // Listen for neighbor reports
+        const reportPath = `measurements/speaker_cal/${targetSeat}`;
+        const reportListener = db.ref(reportPath).on('child_added', (snap) => {
+            const report = snap.val();
+            if (report.calibrationId === measurementId) {
+                receivedReports.push(report.speakerDelay);
+                log(`📡 Received report from ${report.reporterSeatId}: ${report.speakerDelay.toFixed(1)}ms`);
+            }
+        });
+
+        // Play the oboe sequence
+        const nowWall = Date.now() + serverOffset;
+        const startDelay = cue.startTime - nowWall - (currentSpeakerDelay || 0) - (myMicDelayMs || 0);
+        if (startDelay > 0) {
+            setTimeout(() => playOboeSequence(oboeUrl, notes, cue.startTime), startDelay);
+        } else if (startDelay > -1000) {
+            playOboeSequence(oboeUrl, notes, cue.startTime);
+        } else {
+            log(`❌ Oboe start is too late (${Math.round(-startDelay)}ms), skipping`);
+            reportOboeResult(targetSeat, 'FAILED', null, 0, 0, expectedNeighbors.length, 0, 'start_too_late');
+            return;
+        }
+
+        // Wait for response window
+        setTimeout(() => {
+            db.ref(reportPath).off('child_added', reportListener);
+            evaluateOboeCalibration(targetSeat, receivedReports, expectedNeighbors.length, measurementId);
+        }, responseWindowMs);
+    }
+
+    function playOboeSequence(url, notes, movementStartTime) {
+        const source = audioCtx.createBufferSource();
+        source.buffer = bufferCache[url];
+        const gainNode = audioCtx.createGain();
+        gainNode.gain.value = MASTER_PLAYBACK_GAIN;
+        source.connect(gainNode).connect(masterGain || audioCtx.destination);
+        source.start(0);
+        log(`🎵 Oboe sequence playing (${notes.length} notes)`);
+    }
+
+    function evaluateOboeCalibration(targetSeat, reports, expectedCount, measurementId) {
+        if (reports.length === 0) {
+            log(`❌ Oboe calibration: no reports received`);
+            reportOboeResult(targetSeat, 'FAILED', null, 0, 0, expectedCount, 0, 'no_reports');
+            return;
+        }
+
+        const sorted = [...reports].sort((a,b)=>a-b);
+        const median = sorted[Math.floor(sorted.length/2)];
+        const mean = reports.reduce((a,b)=>a+b,0)/reports.length;
+        const variance = reports.reduce((a,b)=>a+Math.pow(b-mean,2),0)/reports.length;
+        const stdDev = Math.sqrt(variance);
+
+        let status = 'PARTIAL';
+        let recommendation = 'group_only';
+        if (reports.length >= 3 && stdDev < 15) {
+            status = 'HAPPY';
+            recommendation = 'individual';
+            currentSpeakerDelay = median;
+            log(`✅ Oboe calibration SUCCESS: ${median.toFixed(1)}ms (±${stdDev.toFixed(1)}ms) from ${reports.length} neighbors`);
+            saveCalibration();
+            playSoftChime();
+        } else if (reports.length >= 2 && stdDev < 30) {
+            status = 'PARTIAL';
+            currentSpeakerDelay = median;
+            log(`⚠️ Oboe calibration PARTIAL: ${median.toFixed(1)}ms (±${stdDev.toFixed(1)}ms) from ${reports.length} neighbors`);
+        } else {
+            status = 'FAILED';
+            log(`❌ Oboe calibration FAILED: stdDev=${stdDev.toFixed(1)}ms, reports=${reports.length}`);
+        }
+
+        // Report result back to conductor
+        db.ref(`devices/${mySeat.id}/speaker_cal_result`).set({
+            targetSeat: targetSeat,
+            speakerDelayMs: Math.round(median),
+            stdDev: Math.round(stdDev),
+            receivedReports: reports.length,
+            expectedNeighbors: expectedCount,
+            status: status,
+            recommendation: recommendation,
+            calibrationId: measurementId,
+            timestamp: Date.now() + serverOffset
+        });
+    }
+
+    function reportOboeResult(targetSeat, status, speakerDelayMs, stdDev, median, expected, received, reason) {
+        db.ref(`devices/${mySeat.id}/speaker_cal_result`).set({
+            targetSeat: targetSeat,
+            speakerDelayMs: speakerDelayMs ? Math.round(speakerDelayMs) : null,
+            stdDev: stdDev,
+            median: median,
+            expectedNeighbors: expected,
+            receivedReports: received,
+            status: status,
+            reason: reason,
+            timestamp: Date.now() + serverOffset
+        });
+    }
+
+    function startListeningForOboe(cue) {
+        const targetSeat = cue.targetSeat;
+        const notes = cue.notes;
+        const calibrationId = `oboe_${cue.startTime}`;
+
+        notes.forEach(note => {
+            const expectedTime = cue.startTime + note.ms_offset;
+            const detectionWindow = {
+                type: 'oboe',
+                targetSeat: targetSeat,
+                noteIndex: note.index,
+                expectedTime: expectedTime,
+                midi: note.midi,
+                freq: note.freq_hz,
+                calibrationId: calibrationId
+            };
+            pendingOboeDetections.push(detectionWindow);
+            // Clean up after 1 second
+            setTimeout(() => {
+                pendingOboeDetections = pendingOboeDetections.filter(d => d !== detectionWindow);
+            }, 1000);
+        });
+    }
+
+    function reportOboeDetection(targetSeat, noteIndex, speakerDelay, calibrationId, rawDelay, propMs) {
+        db.ref(`measurements/speaker_cal/${targetSeat}`).push({
+            reporterSeatId: mySeat.id,
+            targetSeat: targetSeat,
+            noteIndex: noteIndex,
+            speakerDelay: speakerDelay,
+            rawDelay: rawDelay,
+            propagationMs: propMs,
+            micDelayMs: myMicDelayMs || 0,
+            calibrationId: calibrationId,
+            timestamp: Date.now() + serverOffset
+        });
+        log(`📝 Reported oboe note ${noteIndex} for ${targetSeat}: ${speakerDelay.toFixed(1)}ms (silent)`, 'phase2');
+    }
+
+    function playSoftChime() {
+        if (audioCtx) {
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'sine';
+            osc.frequency.value = 880;
+            gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.5);
+            osc.connect(gain);
+            gain.connect(masterGain || audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.5);
+        }
     }
 
     // ============================================================================
@@ -1245,7 +1586,7 @@
 
     async function startPhase3() {
         log("📡 Phase 3: Analyzing recordings...");
-        // Wait a moment to allow any final processing (simulated)
+        // Wait a moment to allow any final processing
         await new Promise(resolve => setTimeout(resolve, 3000));
         // Final summary log with the calibrated values
         log(`✅ Phase 3 complete. Calibration finalized: speaker=${currentSpeakerDelay.toFixed(1)}ms, mic=${myMicDelayMs?.toFixed(1) || '?'}ms`);
@@ -1346,6 +1687,22 @@
             const now = Date.now() + serverOffset;
             if (sched.startTime < now - 60000) { log(`❌ Schedule in past`); return; }
 
+            // Handle tuba mic calibration
+            if (sched.type === 'MIC_CAL' && sched.instrument === 'tuba') {
+                log(`📯 Tuba mic calibration from ${sched.pillar}`);
+                tubaCalibrationActive = true;
+                tubaNotes = sched.notes;
+                tubaPillarId = sched.pillar;
+                tubaStartTime = sched.startTime;
+                // Set a timeout to turn off after the piece duration + buffer
+                setTimeout(() => {
+                    tubaCalibrationActive = false;
+                    log(`🔇 Tuba calibration finished`);
+                }, sched.total_duration_ms + 2000);
+                return;
+            }
+
+            // Normal piccolo tuning
             log(`🎵 Tuning schedule received: start=${new Date(sched.startTime).toISOString().substr(11,12)}`);
             isProcessingTuning = true;
             currentTuningSchedule = sched;
@@ -1397,6 +1754,11 @@
                 log(`🔧 Building device‑specific buffer for ${assignedNotes.length} notes...`);
                 deviceBuffer = createDeviceBuffer(bufferCache[PICCOLO_URL], assignedNotes);
                 log(`✅ Device buffer built, duration: ${deviceBuffer.duration.toFixed(2)}s`);
+
+                // Run diagnostic if enabled
+                if (diagnoseMode) {
+                    diagnoseBuffer(deviceBuffer, assignedNotes);
+                }
             }
 
             if (!isListenOnlyMode) {
@@ -1523,6 +1885,35 @@
     }
 
     // ============================================================================
+    // SHOW/SPEAKER_CAL HANDLER
+    // ============================================================================
+    function initShowCueListener() {
+        db.ref('show/currentCue').on('value', async snap => {
+            const cue = snap.val();
+            if (!cue) return;
+            if (cue.action === 'KILL') {
+                log("💀 KILL signal");
+                location.reload();
+            } else if (cue.action === 'GO') {
+                handleMovementStart(cue);
+            } else if (cue.type === 'SPEAKER_CAL' && cue.instrument === 'oboe') {
+                if (mySeat.id === cue.targetSeat) {
+                    // This device is the target
+                    startOboeCalibration(cue);
+                } else {
+                    // Check if we are a neighbor of the target seat
+                    const neighborSnap = await db.ref(`neighbor_map/${cue.targetSeat}`).once('value');
+                    const neighbors = neighborSnap.val() || [];
+                    if (neighbors.includes(mySeat.id)) {
+                        log(`👂 Listening for oboe calibration from ${cue.targetSeat}`);
+                        startListeningForOboe(cue);
+                    }
+                }
+            }
+        });
+    }
+
+    // ============================================================================
     // INITIALIZATION
     // ============================================================================
     const initBtn = document.getElementById('init-permissions-btn');
@@ -1546,16 +1937,7 @@
                     canvas.height = window.innerHeight;
                     await requestWakeLock();
                     requestAnimationFrame(frame);
-                    db.ref('show/currentCue').on('value', snap => {
-                        const cue = snap.val();
-                        if (!cue) return;
-                        if (cue.action === 'KILL') {
-                            log("💀 KILL signal");
-                            location.reload();
-                        } else if (cue.action === 'GO') {
-                            handleMovementStart(cue);
-                        }
-                    });
+                    initShowCueListener();
                     initTuningListener();
                     startHeartbeat();
                     log("🚀 Entered show mode");
@@ -1583,6 +1965,28 @@
             masterGain.connect(audioCtx.destination);
             await preloadAssets();
             await loadPillarData();
+
+            // URL override for speaker/mic delays
+            const urlParams = new URLSearchParams(window.location.search);
+            const speakerParam = urlParams.get('speaker');
+            const micParam = urlParams.get('mic');
+            if (speakerParam !== null && micParam !== null) {
+                const speaker = parseFloat(speakerParam);
+                const mic = parseFloat(micParam);
+                if (!isNaN(speaker) && !isNaN(mic)) {
+                    currentSpeakerDelay = speaker;
+                    myMicDelayMs = mic;
+                    isHappy = true;
+                    phase1Complete = true;
+                    log(`🔧 Using URL overrides: speaker=${speaker}ms, mic=${mic}ms`);
+                    saveCalibration();
+                } else {
+                    log(`⚠️ Invalid speaker/mic params: ${speakerParam}/${micParam}`);
+                }
+            } else {
+                await loadStoredCalibration();
+            }
+
             if (mySeat.id) initLogging();
             updateDeviceStatusDisplay();
             log("✅ Initialization complete");

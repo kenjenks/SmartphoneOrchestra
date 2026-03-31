@@ -505,6 +505,17 @@
                     return;
                 }
 
+                // Check if this is a tuba mic calibration
+                if (schedule.type === 'MIC_CAL' && schedule.instrument === 'tuba') {
+                    log(`📯 Tuba calibration from ${schedule.pillar}`);
+                    const audioUrl = schedule.audio_url;
+                    // Use the provided audio URL instead of the pillar's default
+                    stopPlayback();
+                    schedulePlayback(schedule.startTime, audioUrl, 'tuba_cal');
+                    return;
+                }
+
+                // Otherwise, normal tuning (piccolo)
                 const now = Date.now() + serverOffset;
                 const conductorStartTime = schedule.startTime;
                 const timeToStart = conductorStartTime - now;

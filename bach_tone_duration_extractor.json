@@ -72,10 +72,10 @@
     "Bass"
   ],
   "_string_quartet_parts_comment": "Parts to treat as string quartet - pillar notes overlapping with these will be filtered out",
-  
+
   "window_start_measures": [1, 3, 5, 7],
   "_window_start_measures_comment": "Starting measure numbers for each pillar's calibration window (2 measures each, in pillar_order sequence)",
-  
+
   "urls": {
     "piccolo": "https://static.wixstatic.com/mp3/9178d1_35993e7582de455c95f5314e85db5784.mp3",
     "test_pulse": "https://static.wixstatic.com/mp3/9178d1_63e58ac50ec7434eba6785cd3291c227.mp3",
@@ -89,11 +89,26 @@
     },
     "_comment": "URLs for audio assets on Wix CDN"
   },
-  
+
   "analysis_params": {
     "method": "musicxml_only",
     "use_audio_alignment": false,
     "pillar_staff": 1,
     "_comment": "Set use_audio_alignment to true if you want to align with recorded audio (experimental). pillar_staff: 1 = right hand (piccolo part), 2 = left hand (piano part)"
+  },
+
+  "oboe": {
+    "input_musicxml": "..\\\\Duel\\\\Duel Oboe.musicxml",
+    "audio_url": "https://static.wixstatic.com/mp3/9178d1_ae95d6ebd4bc4c40b2ade8f235f9a42b.mp3"
+  },
+
+  "tuba": {
+    "input_musicxml": "..\\\\Duel\\\\Duel Tuba.musicxml",
+    "audio_urls": {
+      "FL": "https://static.wixstatic.com/mp3/9178d1_fd07382a21304090b9833edf3b4e510e.mp3",
+      "FR": "https://static.wixstatic.com/mp3/9178d1_fd07382a21304090b9833edf3b4e510e.mp3",
+      "BL": "https://static.wixstatic.com/mp3/9178d1_fd07382a21304090b9833edf3b4e510e.mp3",
+      "BR": "https://static.wixstatic.com/mp3/9178d1_fd07382a21304090b9833edf3b4e510e.mp3"
+    }
   }
 }

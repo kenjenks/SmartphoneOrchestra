@@ -17,6 +17,7 @@ Features:
 - COPY LOGS: Copy all device logs to clipboard
 - Uses Firebase time, not local device time
 - PHASE 4: Individual device tuning for failed or late-arriving devices
+- OBOE/TUBA DUET: Single-seat speaker calibration (oboe) and pillar mic calibration (tuba)
 
 Note: All configuration uploads (seat_config.tsv, tuning_mode.json,
 pillar_config.json, visual_timeline.json) are handled by admin.html
@@ -210,6 +211,12 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         .phase4-controls { margin-top: 10px; }
         .device-action-btn { background: #ffaa4420; border-color: #ffaa44; color: #ffaa44; width: auto; padding: 2px 8px; font-size: 10px; margin: 0; cursor: pointer; }
         .device-action-btn:hover { background: #ffaa4440; }
+
+        /* Oboe/Tuba Duet UI */
+        .duet-select { background:#000; color:#fff; padding:8px; width:100%; margin-bottom:8px; }
+        .tuba-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+        .duet-result { margin-top: 12px; font-size: 0.75rem; background: #1a1a1a; padding: 8px; border-radius: 4px; font-family: monospace; }
+        .duet-result div { margin: 2px 0; }
     </style>
 </head>
 <body>
@@ -240,6 +247,33 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             </div>
 
             <button class="go-button" id="go-button" disabled>🚀 GO (in 1.0s)</button>
+        </div>
+
+        <!-- OBOE & TUBA DUET SECTION -->
+        <div class="section">
+            <h2>🎭 Oboe & Tuba Duet</h2>
+            <div style="font-size: 0.8rem; color: #888; margin-bottom: 10px;">
+                Call and response calibration. Neighbors report silently.
+            </div>
+            <div style="margin-bottom: 10px;">
+                <select id="duet-seat-select" class="duet-select">
+                    <option value="">Select a seat...</option>
+                </select>
+                <button id="oboe-call-btn" class="primary" style="width: 100%;">🎵 Oboe (Call)</button>
+            </div>
+            <div style="font-size: 0.7rem; color: #888; margin: 8px 0 4px 0;">Tuba Response:</div>
+            <div class="tuba-buttons">
+                <button id="tuba-fl-btn" class="secondary">📯 FL</button>
+                <button id="tuba-fr-btn" class="secondary">📯 FR</button>
+                <button id="tuba-br-btn" class="secondary">📯 BR</button>
+                <button id="tuba-bl-btn" class="secondary">📯 BL</button>
+            </div>
+            <div id="duet-result" class="duet-result">
+                <div>🎵 Last oboe: <span class="last-oboe">---</span></div>
+                <div>📯 Last tuba: <span class="last-tuba">---</span></div>
+                <div>📊 Neighbors: <span class="neighbor-progress">0/0</span></div>
+                <div>📊 Status: <span class="duet-status">Ready</span></div>
+            </div>
         </div>
 
         <!-- DYNAMIC TUNING MODE -->
@@ -1032,6 +1066,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             updateCalibrationStats();
             renderMap();
             updatePerformanceRegistry();
+            updateSeatDropdown();  // Update Oboe seat dropdown when device list changes
         });
 
         db.ref('measurements/summary').on('value', snap => {
@@ -1554,11 +1589,138 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         });
     }
 
+    // ==================== OBOE / TUBA DUET FUNCTIONS ====================
+    async function loadOboeData() {
+        const snap = await db.ref('tuning_mode/oboe').once('value');
+        return snap.val();
+    }
+
+    async function loadTubaData() {
+        const snap = await db.ref('tuning_mode/tuba').once('value');
+        return snap.val();
+    }
+
+    function updateSeatDropdown() {
+        const select = document.getElementById('duet-seat-select');
+        if (!select) return;
+        const activeSeats = Object.entries(deviceData)
+            .filter(([id, data]) => {
+                if (id.startsWith('PILLAR_')) return false;
+                const now = Date.now() + serverOffset;
+                return data.lastSeen && (now - data.lastSeen) < HEARTBEAT_TIMEOUT_MS;
+            })
+            .map(([id]) => id)
+            .sort();
+        const currentValue = select.value;
+        select.innerHTML = '<option value="">Select a seat...</option>' +
+            activeSeats.map(id => `<option value="${id}" ${id === currentValue ? 'selected' : ''}>${id}</option>`).join('');
+    }
+
+    document.getElementById('oboe-call-btn').onclick = async () => {
+        const seatSelect = document.getElementById('duet-seat-select');
+        const targetSeat = seatSelect.value;
+        if (!targetSeat) {
+            alert("Please select a seat first");
+            return;
+        }
+        const oboeData = await loadOboeData();
+        if (!oboeData) {
+            alert("No oboe data in tuning_mode.json");
+            return;
+        }
+        const now = Date.now() + serverOffset;
+        const startTime = now + 2000; // 2s buffer
+        const responseWindowMs = 5000; // wait 5s for reports
+
+        // Get expected neighbors for this seat
+        const neighborSnap = await db.ref(`neighbor_map/${targetSeat}`).once('value');
+        const expectedNeighbors = neighborSnap.val() || [];
+
+        await db.ref('show/currentCue').set({
+            type: "SPEAKER_CAL",
+            instrument: "oboe",
+            audio_url: oboeData.audio_url,
+            notes: oboeData.notes,
+            targetSeat: targetSeat,
+            startTime: startTime,
+            total_duration_ms: oboeData.total_duration_ms,
+            responseWindowMs: responseWindowMs,
+            expectedNeighbors: expectedNeighbors
+        });
+
+        // Update UI
+        document.querySelector('.last-oboe').innerText = `${targetSeat} at ${new Date(startTime).toLocaleTimeString()}`;
+        document.querySelector('.neighbor-progress').innerText = `0/${expectedNeighbors.length}`;
+        document.querySelector('.duet-status').innerText = "Waiting for oboe to play...";
+        conductorLog(`🎵 Oboe call triggered for ${targetSeat} (expecting ${expectedNeighbors.length} neighbors)`, 'match');
+    };
+
+    async function triggerTuba(pillarId) {
+        const tubaData = await loadTubaData();
+        if (!tubaData) {
+            alert("No tuba data in tuning_mode.json");
+            return;
+        }
+        const pillarKey = pillarId.replace('PILLAR_', '');
+        const audioUrl = tubaData.audio_urls?.[pillarKey];
+        if (!audioUrl) {
+            alert(`No audio URL for ${pillarId}`);
+            return;
+        }
+        const now = Date.now() + serverOffset;
+        const startTime = now + 1000; // 1s buffer
+
+        // Write to tuning/current for pillars to pick up
+        await db.ref('tuning/current').set({
+            status: 'ACTIVE',
+            type: 'MIC_CAL',
+            instrument: 'tuba',
+            audio_url: audioUrl,
+            pillar: pillarId,
+            notes: tubaData.notes,
+            startTime: startTime,
+            total_duration_ms: tubaData.total_duration_ms
+        });
+
+        document.querySelector('.last-tuba').innerText = `${pillarId} at ${new Date(startTime).toLocaleTimeString()}`;
+        conductorLog(`📯 Tuba response triggered for ${pillarId}`, 'match');
+    }
+
+    document.getElementById('tuba-fl-btn').onclick = () => triggerTuba('PILLAR_FL');
+    document.getElementById('tuba-fr-btn').onclick = () => triggerTuba('PILLAR_FR');
+    document.getElementById('tuba-br-btn').onclick = () => triggerTuba('PILLAR_BR');
+    document.getElementById('tuba-bl-btn').onclick = () => triggerTuba('PILLAR_BL');
+
+    // Listen for speaker calibration results
+    db.ref('devices').on('child_changed', (snap) => {
+        const deviceId = snap.key;
+        const data = snap.val();
+        if (data.speaker_cal_result) {
+            const result = data.speaker_cal_result;
+            const progressSpan = document.querySelector('.neighbor-progress');
+            const statusSpan = document.querySelector('.duet-status');
+            if (deviceId === result.targetSeat) {
+                progressSpan.innerText = `${result.receivedReports}/${result.expectedNeighbors}`;
+                if (result.status === 'HAPPY') {
+                    statusSpan.innerText = `✅ Calibrated: ${result.speakerDelayMs}ms (±${result.stdDev}ms)`;
+                    statusSpan.style.color = '#00ffcc';
+                } else if (result.status === 'PARTIAL') {
+                    statusSpan.innerText = `⚠️ Partial: ${result.receivedReports}/${result.expectedNeighbors} neighbors, ${result.speakerDelayMs}ms (±${result.stdDev}ms)`;
+                    statusSpan.style.color = '#ffcc00';
+                } else if (result.status === 'FAILED') {
+                    statusSpan.innerText = `❌ Failed: ${result.reason || 'No reliable data'}`;
+                    statusSpan.style.color = '#ff4444';
+                }
+            }
+        }
+    });
+
     // --- UI BINDINGS ---
     document.getElementById('refresh-devices-btn').onclick = async () => {
         await refreshActiveDevices();
         renderMap();
         updatePerformanceRegistry();
+        updateSeatDropdown();
         conductorLog("Device list refreshed", 'info');
     };
     document.getElementById('start-tuning-btn').onclick = startTuningMovement;
@@ -1657,6 +1819,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         startHeartbeatMonitoring();
         initLogViewer();
         updateLegend();
+        updateSeatDropdown(); // initial population
 
         db.ref('.info/connected').on('value', snap => {
             const el = document.getElementById('connection-status');
