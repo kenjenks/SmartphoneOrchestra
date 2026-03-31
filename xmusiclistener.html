@@ -215,13 +215,12 @@
         // ============================================================================
         const FFT_SIZE = 2048;
         const NOTE_BAND_RATIO = Math.pow(2, 1/48); // ±1/4 semitone
-        const PITCH_DETECTION_TOLERANCE_BINS = 2;   // ±2 bins around target
-        const BASELINE_THRESHOLD_MULTIPLIER = 1.1;         // was 1.5 – matches devicedist
-        const BASELINE_WINDOW_SAMPLES = 50;                // rolling median window size (matches devicedist)
-        const MIN_DETECTION_ENERGY = 0.03;
+        const BASELINE_THRESHOLD_MULTIPLIER = 2.0;      // increased from 1.1 to reduce false positives
+        const BASELINE_WINDOW_SAMPLES = 50;
+        const MIN_DETECTION_ENERGY = 0.05;              // increased from 0.03
         const PHASE1_END_MS = 20571.4;
         const SPEED_OF_SOUND = 343;
-        const LISTENER_MIC_DELAY_MS = 40;   // laptop microphone input latency (ms)
+        const LISTENER_MIC_DELAY_MS = 40;               // laptop microphone input latency (ms)
 
         // ============================================================================
         // GLOBAL STATE
@@ -238,15 +237,14 @@
         let phase1EndMs = PHASE1_END_MS;
 
         // Tuning data
-        let noteTimings = [];         // Full list of piano notes (for reference)
-        let pillarNotes = [];         // Pillar notes for Phase 1
-        let patronNotes = [];         // Patron notes (from tuning schedule)
-        let allPillarNotes = [];      // Original pillar notes from tuning_mode.json
+        let noteTimings = [];
+        let pillarNotes = [];
+        let patronNotes = [];
+        let allPillarNotes = [];
 
         // Baseline tracking
         let baselineEnergy = 0;
         let baselineSamples = [];
-        let baselineEstablished = false;
 
         // Detection tracking
         let processedNotes = new Set();
@@ -377,7 +375,7 @@
 
                 if (data.pillar_notes) {
                     allPillarNotes = data.pillar_notes;
-                    pillarNotes = allPillarNotes; // for detection
+                    pillarNotes = allPillarNotes;
                     log(`📡 Loaded ${pillarNotes.length} pillar notes`);
                 }
 
@@ -519,13 +517,12 @@
             energyValueSpan.innerText = energy.toFixed(4);
             currentNoteSpan.innerHTML = `${closestNote.pitch} (${getFrequencyFromMidi(closestNote.midi).toFixed(0)}Hz)`;
 
-            // --- Rolling baseline update (mirrors devicedist) ---
+            // Rolling baseline update
             baselineSamples.push(energy);
             if (baselineSamples.length > BASELINE_WINDOW_SAMPLES) {
                 baselineSamples.shift();
             }
 
-            // Wait until we have enough samples for a stable baseline
             if (baselineSamples.length < BASELINE_WINDOW_SAMPLES) {
                 requestAnimationFrame(detectNotes);
                 return;
@@ -540,7 +537,8 @@
             const ratio = baselineEnergy > 0 ? energy / baselineEnergy : 1.0;
 
             const expectedTimeAbs = tuningStartTime + closestNote.ms_offset;
-            const timeError = now - expectedTimeAbs;
+            // Subtract listener's own mic delay to get actual device timing
+            const timeError = now - expectedTimeAbs - LISTENER_MIC_DELAY_MS;
             const sourceType = isPhase1 ? 'PILLAR' : 'PATRON';
             const sourceId = closestNote.pillar_id || closestNote.deviceId || '?';
 
@@ -597,9 +595,7 @@
             listenForTuningSchedule();
 
             isListening = true;
-            baselineEstablished = false;
             baselineSamples = [];
-            baselineStartTime = Date.now();
             processedNotes.clear();
             detectionCount = 0;
 
