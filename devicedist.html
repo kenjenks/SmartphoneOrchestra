@@ -547,20 +547,27 @@
         if (!mySeat.id) return false;
         try {
             const stored = localStorage.getItem(`calibration_${mySeat.id}`);
-            if (stored) {
-                const cal = JSON.parse(stored);
-                const age = Date.now() - cal.timestamp;
-                if (age < 30 * 24 * 60 * 60 * 1000 && cal.speakerDelay && cal.micDelay) {
-                    currentSpeakerDelay = cal.speakerDelay;
-                    myMicDelayMs = cal.micDelay;
-                    phase1Complete = true;
-                    isHappy = true;
-                    log(`✅ Loaded calibration: speaker=${currentSpeakerDelay.toFixed(1)}ms, mic=${myMicDelayMs.toFixed(1)}ms`);
-                    updateCalibrationDisplay();
-                    return true;
-                }
+            if (!stored) {
+                log(`📭 No stored calibration found for ${mySeat.id}`);
+                return false;
             }
-            return false;
+            const cal = JSON.parse(stored);
+            const age = Date.now() - cal.timestamp;
+            if (age > 30 * 24 * 60 * 60 * 1000) {
+                log(`📭 Stored calibration for ${mySeat.id} is too old (${Math.round(age / (24*60*60*1000))} days), ignoring`);
+                return false;
+            }
+            if (typeof cal.speakerDelay !== 'number' || typeof cal.micDelay !== 'number') {
+                log(`⚠️ Invalid calibration data for ${mySeat.id}: missing speaker/mic delay`);
+                return false;
+            }
+            currentSpeakerDelay = cal.speakerDelay;
+            myMicDelayMs = cal.micDelay;
+            phase1Complete = true;
+            isHappy = true;
+            log(`✅ Loaded calibration for ${mySeat.id}: speaker=${currentSpeakerDelay.toFixed(1)}ms, mic=${myMicDelayMs.toFixed(1)}ms (age: ${Math.round(age/1000/60)}min)`);
+            updateCalibrationDisplay();
+            return true;
         } catch (e) {
             log(`⚠️ Failed to load calibration: ${e.message}`);
             return false;
@@ -1224,13 +1231,16 @@
 
     function saveCalibration() {
         try {
-            localStorage.setItem(`calibration_${mySeat.id}`, JSON.stringify({
+            const calData = {
                 speakerDelay: currentSpeakerDelay,
                 micDelay: myMicDelayMs,
                 timestamp: Date.now()
-            }));
-            log(`💾 Calibration saved`);
-        } catch (e) { log(`⚠️ Could not save: ${e.message}`); }
+            };
+            localStorage.setItem(`calibration_${mySeat.id}`, JSON.stringify(calData));
+            log(`💾 Calibration saved: speaker=${currentSpeakerDelay.toFixed(1)}ms, mic=${myMicDelayMs?.toFixed(1) || '?'}ms`);
+        } catch (e) {
+            log(`⚠️ Could not save calibration: ${e.message}`);
+        }
     }
 
     async function startPhase3() {
