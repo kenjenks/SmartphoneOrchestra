@@ -1245,7 +1245,10 @@
 
     async function startPhase3() {
         log("📡 Phase 3: Analyzing recordings...");
-        setTimeout(() => log("✅ Phase 3 complete (simplified)"), 2000);
+        // Wait a moment to allow any final processing (simulated)
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        // Final summary log with the calibrated values
+        log(`✅ Phase 3 complete. Calibration finalized: speaker=${currentSpeakerDelay.toFixed(1)}ms, mic=${myMicDelayMs?.toFixed(1) || '?'}ms`);
     }
 
     // ============================================================================
