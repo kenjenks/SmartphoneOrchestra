@@ -944,19 +944,23 @@ https://smartphoneorchestra-dwt.web.app/xA2.html?seat=A2&&diagnose=1&forget=true
     }
 
     // ============================================================================
-    // DIAGNOSTIC: analyze buffer RMS for each assigned note
+    // DIAGNOSTIC: analyze device buffer for assigned and unassigned notes
     // ============================================================================
-    function diagnoseBuffer(buffer, notes) {
-        log(`🔬 Starting diagnostic analysis of device buffer (${notes.length} notes)...`);
+    function diagnoseBuffer(buffer, assignedNotes) {
         const sampleRate = buffer.sampleRate;
         const channels = buffer.numberOfChannels;
         // Use first channel for analysis (assume mono or mix)
         const channelData = buffer.getChannelData(0);
+        const length = buffer.length;
+
+        log(`🔬 Starting diagnostic analysis of device buffer (${assignedNotes.length} assigned notes)...`);
+
         let presentCount = 0;
         let missingCount = 0;
 
-        for (let i = 0; i < notes.length; i++) {
-            const note = notes[i];
+        // 1. Check assigned notes
+        for (let i = 0; i < assignedNotes.length; i++) {
+            const note = assignedNotes[i];
             const startSample = Math.floor(note.startMs / 1000 * sampleRate);
             const endSample = Math.floor((note.startMs + note.durationMs) / 1000 * sampleRate);
             const len = endSample - startSample;
@@ -965,7 +969,7 @@ https://smartphoneorchestra-dwt.web.app/xA2.html?seat=A2&&diagnose=1&forget=true
                 continue;
             }
             let sumSq = 0;
-            for (let s = startSample; s < endSample; s++) {
+            for (let s = startSample; s < endSample && s < length; s++) {
                 const val = channelData[s];
                 sumSq += val * val;
             }
@@ -973,9 +977,37 @@ https://smartphoneorchestra-dwt.web.app/xA2.html?seat=A2&&diagnose=1&forget=true
             const status = rms >= DIAGNOSTIC_RMS_THRESHOLD ? "PRESENT" : "MISSING";
             if (rms >= DIAGNOSTIC_RMS_THRESHOLD) presentCount++;
             else missingCount++;
-            log(`DIAGNOSTIC: note ${note.noteIndex} (${note.pitch}) – RMS = ${rms.toFixed(4)} → ${status}`);
+            log(`DIAGNOSTIC: assigned note ${note.noteIndex} (${note.pitch}) – RMS = ${rms.toFixed(4)} → ${status}`);
         }
-        log(`🔬 Diagnostic summary: ${presentCount} present, ${missingCount} missing out of ${notes.length} notes`);
+
+        // 2. Check a sample of unassigned notes (to detect buffer contamination)
+        // Use the first 5 notes that are not in assignedNotes (by index)
+        const assignedIndices = new Set(assignedNotes.map(n => n.noteIndex));
+        const unassignedSample = noteTimings.filter(n => !assignedIndices.has(n.index)).slice(0, 10);
+        let unassignedPresent = 0;
+        for (const note of unassignedSample) {
+            const startSample = Math.floor(note.startMs / 1000 * sampleRate);
+            const endSample = Math.floor((note.startMs + note.durationMs) / 1000 * sampleRate);
+            const len = endSample - startSample;
+            if (len <= 0) continue;
+            let sumSq = 0;
+            for (let s = startSample; s < endSample && s < length; s++) {
+                const val = channelData[s];
+                sumSq += val * val;
+            }
+            const rms = Math.sqrt(sumSq / len);
+            const status = rms >= DIAGNOSTIC_RMS_THRESHOLD ? "PRESENT (ERROR)" : "ABSENT (OK)";
+            if (rms >= DIAGNOSTIC_RMS_THRESHOLD) unassignedPresent++;
+            log(`DIAGNOSTIC: unassigned note ${note.index} (${note.pitch}) – RMS = ${rms.toFixed(4)} → ${status}`);
+        }
+
+        // 3. Summary
+        log(`🔬 Diagnostic summary: ${presentCount} present, ${missingCount} missing out of ${assignedNotes.length} assigned notes.`);
+        if (unassignedPresent > 0) {
+            log(`⚠️ DIAGNOSTIC WARNING: ${unassignedPresent} unassigned notes have non‑zero energy in buffer!`);
+        } else {
+            log(`✅ DIAGNOSTIC OK: No unassigned notes detected in buffer.`);
+        }
     }
 
     // ============================================================================
