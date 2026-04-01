@@ -506,7 +506,7 @@
                 }
 
                 // Check if this is a tuba mic calibration
-                if (schedule.type === 'MIC_CAL' && schedule.instrument === 'tuba') {
+                if (schedule.type === 'MIC_CAL' && schedule.instrument === 'tuba' && schedule.pillar === mySeat.id) {
                     log(`📯 Tuba calibration from ${schedule.pillar}`);
                     const audioUrl = schedule.audio_url;
                     // Use the provided audio URL instead of the pillar's default
