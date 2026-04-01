@@ -488,7 +488,7 @@
         }
 
         // ==================== TUNING LISTENER ====================
-        function listenForTuning() {
+         {
             db.ref('tuning/current').on('value', snap => {
                 const schedule = snap.val();
 
