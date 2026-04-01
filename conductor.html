@@ -1756,58 +1756,85 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         showToast(`🎬 "${currentMovement.movement_name}" starting in ${bufferMs/1000}s`, false);
     };
 
-    canvas.addEventListener('click', (e) => {
-        const rect = canvas.getBoundingClientRect();
-        const mouseX = e.clientX - rect.left;
-        const mouseY = e.clientY - rect.top;
+canvas.addEventListener('click', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
 
-        let closestSeat = null;
-        let minDist = Infinity;
+    let closestSeat = null;
+    let minDist = Infinity;
 
-        seats.forEach(seat => {
-            const xValues = seats.map(s => s.x);
-            const yValues = seats.map(s => s.y);
-            const minX = Math.min(...xValues) - 1;
-            const maxX = Math.max(...xValues) + 1;
-            const minY = Math.min(...yValues) - 1;
-            const maxY = Math.max(...yValues) + 1;
+    seats.forEach(seat => {
+        const xValues = seats.map(s => s.x);
+        const yValues = seats.map(s => s.y);
+        const minX = Math.min(...xValues) - 1;
+        const maxX = Math.max(...xValues) + 1;
+        const minY = Math.min(...yValues) - 1;
+        const maxY = Math.max(...yValues) + 1;
 
-            const scaleX = canvas.width / (maxX - minX);
-            const scaleY = canvas.height / (maxY - minY);
-            const scale = Math.min(scaleX, scaleY) * 0.9;
+        const scaleX = canvas.width / (maxX - minX);
+        const scaleY = canvas.height / (maxY - minY);
+        const scale = Math.min(scaleX, scaleY) * 0.9;
 
-            const offsetX = (canvas.width - (maxX - minX) * scale) / 2 - minX * scale;
-            const offsetY = (canvas.height - (maxY - minY) * scale) / 2 - minY * scale;
+        const offsetX = (canvas.width - (maxX - minX) * scale) / 2 - minX * scale;
+        const offsetY = (canvas.height - (maxY - minY) * scale) / 2 - minY * scale;
 
-            const screenX = seat.x * scale + offsetX;
-            const screenY = seat.y * scale + offsetY;
+        const screenX = seat.x * scale + offsetX;
+        const screenY = seat.y * scale + offsetY;
 
-            const dist = Math.sqrt(Math.pow(mouseX - screenX, 2) + Math.pow(mouseY - screenY, 2));
-            if (dist < minDist) {
-                minDist = dist;
-                closestSeat = seat;
-            }
-        });
-
-        if (closestSeat && minDist < 20) {
-            const pulseTime = Date.now() + serverOffset + 1000;
-            db.ref('show/currentCue').set({
-                type: "AUDIO",
-                file: TEST_PULSE_URL,
-                startTime: pulseTime,
-                originX: closestSeat.x,
-                originY: closestSeat.y,
-                radius: 0.2,
-                rolloff: "linear",
-                metadata: {
-                    purpose: "seat_test",
-                    seatId: closestSeat.id
-                }
-            });
-            conductorLog(`🔊 Seat test sent to ${closestSeat.id}`, 'info');
-            showToast(`🔊 Test pulse sent to ${closestSeat.id}`, false);
+        const dist = Math.sqrt(Math.pow(mouseX - screenX, 2) + Math.pow(mouseY - screenY, 2));
+        if (dist < minDist) {
+            minDist = dist;
+            closestSeat = seat;
         }
     });
+
+    if (closestSeat && minDist < 20) {
+        // If it's a patron seat (not a pillar), trigger oboe call
+        if (!closestSeat.id.startsWith('PILLAR_')) {
+            // Trigger oboe call for this seat
+            triggerOboeCall(closestSeat.id);
+        } else {
+            // For pillars, you could optionally trigger tuba? Or just ignore.
+            conductorLog(`⚠️ Clicked on pillar ${closestSeat.id}, not a patron device.`, 'info');
+        }
+    }
+});
+
+    // Function to trigger oboe call for a given seat
+    async function triggerOboeCall(seatId) {
+        const oboeData = await loadOboeData();
+        if (!oboeData) {
+            conductorLog("❌ No oboe data available", 'error');
+            showToast("No oboe data available", true);
+            return;
+        }
+        const now = Date.now() + serverOffset;
+        const startTime = now + 2000; // 2s buffer
+        const responseWindowMs = 5000;
+
+        // Get expected neighbors for this seat
+        const neighborSnap = await db.ref(`neighbor_map/${seatId}`).once('value');
+        const expectedNeighbors = neighborSnap.val() || [];
+
+        await db.ref('show/currentCue').set({
+            type: "SPEAKER_CAL",
+            instrument: "oboe",
+            audio_url: oboeData.audio_url,
+            notes: oboeData.notes,
+            targetSeat: seatId,
+            startTime: startTime,
+            total_duration_ms: oboeData.total_duration_ms,
+            responseWindowMs: responseWindowMs,
+            expectedNeighbors: expectedNeighbors
+        });
+
+        // Update UI
+        document.querySelector('.last-oboe').innerText = `${seatId} at ${new Date(startTime).toLocaleTimeString()}`;
+        document.querySelector('.neighbor-progress').innerText = `0/${expectedNeighbors.length}`;
+        document.querySelector('.duet-status').innerText = "Waiting for oboe to play...";
+        conductorLog(`🎵 Oboe call triggered for ${seatId} (expecting ${expectedNeighbors.length} neighbors)`, 'match');
+    }
 
     // Initialize everything
     window.onload = async () => {
