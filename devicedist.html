@@ -434,7 +434,19 @@
 
         try {
             const seatConfigSnap = await db.ref('seat_config').once('value');
-            seatData = seatConfigSnap.val() || {};
+            const seatConfig = seatConfigSnap.val();
+            if (seatConfig && seatConfig.seats) {
+                // Build mapping from seat ID to { x, y, section }
+                seatData = {};
+                seatConfig.seats.forEach(s => {
+                    seatData[s.id] = { x: s.x, y: s.y, section: s.section };
+                });
+                log(`📋 Loaded seat coordinates for ${Object.keys(seatData).length} seats`);
+            } else {
+                // Fallback for older format (just in case)
+                seatData = seatConfig || {};
+                log(`⚠️ seat_config missing 'seats' array; using raw data`);
+            }
         } catch (e) {
             log(`⚠️ Could not load seat data: ${e.message}`);
         }
