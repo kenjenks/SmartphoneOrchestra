@@ -163,6 +163,10 @@
         let currentSessionId = null;
         let pillarConfig = {};
 
+        // Hardware priming state
+        let primedBuffers = new Set();
+        let primePromise = null;
+
         // Constants
         const SPEED_OF_SOUND = 343;
         const HEARTBEAT_INTERVAL_MS = 10000;
@@ -174,12 +178,64 @@
             console.log(`[${new Date(timestamp).toISOString().substr(11, 12)}] [${pillarId}] ${message}`);
         }
 
-        // ==================== CLOCK SYNC ====================
+        // ==================== CLOCK SYNC WITH LOGGING ====================
+        let lastLoggedOffset = 0;
         db.ref(".info/serverTimeOffset").on("value", snap => {
-            serverOffset = snap.val() || 0;
+            const newOffset = snap.val() || 0;
+            if (Math.abs(newOffset - lastLoggedOffset) > 50) {
+                log(`🕰️ Server offset changed from ${lastLoggedOffset} to ${newOffset}ms`);
+                lastLoggedOffset = newOffset;
+            }
+            serverOffset = newOffset;
             document.getElementById('sync-ind').className = 'indicator active';
-            log(`⏱️ Server offset: ${serverOffset}ms`);
         });
+
+        // ==================== HARDWARE PRIMING ====================
+        async function primeWithWaveform(audioUrl) {
+            if (!audioCtx || audioCtx.state !== 'running') {
+                log(`⚠️ Cannot prime – audio context not running`, 'warn');
+                return false;
+            }
+            if (primedBuffers.has(audioUrl)) {
+                log(`🔊 Already primed for ${audioUrl.split('/').pop()}`, 'debug');
+                return true;
+            }
+
+            try {
+                // Fetch and decode the audio file
+                const response = await fetch(audioUrl);
+                const arrayBuffer = await response.arrayBuffer();
+                const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+
+                // Create a short prime snippet (first 0.1 seconds of the actual waveform)
+                const durationSec = Math.min(0.1, audioBuffer.duration);
+                const sampleRate = audioBuffer.sampleRate;
+                const samples = Math.floor(durationSec * sampleRate);
+                const primeBuffer = audioCtx.createBuffer(1, samples, sampleRate);
+                const srcData = audioBuffer.getChannelData(0);
+                const dstData = primeBuffer.getChannelData(0);
+                for (let i = 0; i < samples; i++) {
+                    dstData[i] = srcData[i];
+                }
+
+                // Play at very low volume
+                const source = audioCtx.createBufferSource();
+                source.buffer = primeBuffer;
+                const gainNode = audioCtx.createGain();
+                gainNode.gain.value = 0.001; // 0.1% volume
+                source.connect(gainNode);
+                gainNode.connect(audioCtx.destination);
+                source.start();
+                source.stop(audioCtx.currentTime + durationSec);
+
+                primedBuffers.add(audioUrl);
+                log(`🔊 Primed hardware with ${durationSec*1000}ms of actual waveform (gain=0.001)`);
+                return true;
+            } catch (e) {
+                log(`❌ Priming failed for ${audioUrl.split('/').pop()}: ${e.message}`, 'error');
+                return false;
+            }
+        }
 
         // ==================== IDENTITY RESOLUTION ====================
         async function resolveIdentity() {
@@ -298,8 +354,8 @@
             document.getElementById('visualizer-fill').style.width = '0%';
         }
 
-        // ==================== PLAY PILLAR AUDIO ====================
-        function playPillarAudio(audioUrl) {
+        // ==================== PLAY PILLAR AUDIO (with priming) ====================
+        async function playPillarAudio(audioUrl) {
             if (!audioUrl) {
                 audioUrl = pillarConfig[mySeat.id]?.audioUrl;
             }
@@ -307,6 +363,9 @@
                 log(`❌ No audio URL for ${mySeat.id}`);
                 return;
             }
+
+            // Prime the hardware with the actual waveform before playing
+            await primeWithWaveform(audioUrl);
 
             try {
                 if (pillarAudioElement) {
@@ -424,6 +483,7 @@
                 activeTimeout = null;
             }
 
+            // Increased tolerance to 5000ms (from 1000ms)
             if (delayMs > 0) {
                 activeTimeout = setTimeout(() => {
                     currentPlaybackType = type;
@@ -431,7 +491,7 @@
                     playPillarAudio(urlToPlay);
                     activeTimeout = null;
                 }, delayMs);
-            } else if (delayMs > -1000) {
+            } else if (delayMs > -5000) {
                 log(`⚠️ Playback is ${Math.round(-delayMs)}ms late, playing immediately`);
                 currentPlaybackType = type;
                 currentPlaybackStartTime = startTime;
@@ -488,7 +548,7 @@
         }
 
         // ==================== TUNING LISTENER ====================
-         {
+        function listenForTuning() {
             db.ref('tuning/current').on('value', snap => {
                 const schedule = snap.val();
 
@@ -509,7 +569,6 @@
                 if (schedule.type === 'MIC_CAL' && schedule.instrument === 'tuba' && schedule.pillar === mySeat.id) {
                     log(`📯 Tuba calibration from ${schedule.pillar}`);
                     const audioUrl = schedule.audio_url;
-                    // Use the provided audio URL instead of the pillar's default
                     stopPlayback();
                     schedulePlayback(schedule.startTime, audioUrl, 'tuba_cal');
                     return;
@@ -627,6 +686,11 @@
             log(`🔊 Pillar ${mySeat.id} activated`);
             log(`   Audio: ${myConfig?.audioUrl?.split('/').pop() || 'none'}`);
             log(`   Speaker delay: ${myConfig?.speakerDelayMs || 45}ms`);
+
+            // Prime the pillar's audio hardware with its own waveform (if URL exists)
+            if (myConfig && myConfig.audioUrl) {
+                await primeWithWaveform(myConfig.audioUrl);
+            }
 
             setTimeout(() => playTestTone(), 500);
 
