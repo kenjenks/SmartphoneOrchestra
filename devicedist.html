@@ -200,6 +200,42 @@
     let diagnoseMode = false;
 
     // ============================================================================
+    // AUDIO HARDWARE PRIMING
+    // ============================================================================
+    let primedBuffers = new Set();
+
+    async function primeBuffer(buffer, options = {}) {
+        if (!audioCtx || audioCtx.state !== 'running') {
+            log(`⚠️ Cannot prime – audio context not running`, 'warn');
+            return false;
+        }
+        if (primedBuffers.has(buffer)) {
+            return true;
+        }
+        const gainValue = options.gain || 0.0001;   // inaudible
+        const durationSec = options.duration || 0.05; // 50 ms
+        const playDuration = Math.min(durationSec, buffer.duration);
+        try {
+            const source = audioCtx.createBufferSource();
+            source.buffer = buffer;
+            const gainNode = audioCtx.createGain();
+            gainNode.gain.value = gainValue;
+            source.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            const now = audioCtx.currentTime;
+            source.start(now);
+            source.stop(now + playDuration);
+            primedBuffers.add(buffer);
+            log(`🔊 Primed hardware (${playDuration*1000}ms at gain ${gainValue})`, 'info');
+            await new Promise(r => setTimeout(r, playDuration * 1000 + 10));
+            return true;
+        } catch (e) {
+            log(`❌ Priming failed: ${e.message}`, 'error');
+            return false;
+        }
+    }
+
+    // ============================================================================
     // PERIODIC LOGGING
     // ============================================================================
     let periodicLogInterval = null;
@@ -374,8 +410,15 @@
     firebase.initializeApp(firebaseConfig);
     const db = firebase.database();
 
+    // Monitor server offset changes
+    let lastLoggedOffset = 0;
     db.ref(".info/serverTimeOffset").on("value", snap => {
-        serverOffset = snap.val() || 0;
+        const newOffset = snap.val() || 0;
+        if (Math.abs(newOffset - lastLoggedOffset) > 50) {
+            log(`🕰️ Server offset changed from ${lastLoggedOffset} to ${newOffset}ms`, 'info');
+            lastLoggedOffset = newOffset;
+        }
+        serverOffset = newOffset;
         updateDeviceStatusDisplay();
     });
 
@@ -436,14 +479,12 @@
             const seatConfigSnap = await db.ref('seat_config').once('value');
             const seatConfig = seatConfigSnap.val();
             if (seatConfig && seatConfig.seats) {
-                // Build mapping from seat ID to { x, y, section }
                 seatData = {};
                 seatConfig.seats.forEach(s => {
                     seatData[s.id] = { x: s.x, y: s.y, section: s.section };
                 });
                 log(`📋 Loaded seat coordinates for ${Object.keys(seatData).length} seats`);
             } else {
-                // Fallback for older format (just in case)
                 seatData = seatConfig || {};
                 log(`⚠️ seat_config missing 'seats' array; using raw data`);
             }
@@ -619,11 +660,10 @@
         const recordingBuffer = new AudioBuffer({ numberOfChannels: 1, length: length, sampleRate: sampleRate });
         const recordChannel = recordingBuffer.getChannelData(0);
 
-        // Create a temporary source from the mic stream
         const source = audioCtx.createMediaStreamSource(micStream);
         const processor = audioCtx.createScriptProcessor(4096, 1, 1);
         source.connect(processor);
-        processor.connect(audioCtx.destination); // needed to keep the processor alive
+        processor.connect(audioCtx.destination);
 
         let writeIndex = 0;
         const startTime = audioCtx.currentTime;
@@ -652,15 +692,13 @@
     }
 
     function crossCorrelate(template, recorded) {
-        // Assume both are mono AudioBuffers
         const t = template.getChannelData(0);
         const r = recorded.getChannelData(0);
         const n = r.length;
         const m = t.length;
-        if (n < m) return 0; // template longer than recording
+        if (n < m) return 0;
         let bestLag = 0;
         let maxCorr = -Infinity;
-        // Only search lags where the template fits entirely within the recording
         for (let lag = 0; lag <= n - m; lag++) {
             let sum = 0;
             for (let i = 0; i < m; i++) {
@@ -697,7 +735,7 @@
     }
 
     // ============================================================================
-    // DEVICE‑SPECIFIC BUFFER CREATION (smart fades)
+    // DEVICE‑SPECIFIC BUFFER CREATION
     // ============================================================================
     function createDeviceBuffer(originalBuffer, assignedNotes) {
         const sampleRate = originalBuffer.sampleRate;
@@ -767,12 +805,11 @@
             else missingCount++;
             log(`DIAGNOSTIC: assigned note ${note.noteIndex} (${note.pitch}) – RMS = ${rms.toFixed(4)} → ${status}`);
         }
-        // ... unassigned notes check ...
         log(`🔬 Diagnostic summary: ${presentCount} present, ${missingCount} missing out of ${assignedNotes.length} assigned notes.`);
     }
 
     // ============================================================================
-    // PLAYBACK (constant gain, seek on correction)
+    // PLAYBACK (with priming)
     // ============================================================================
     let activeStream = null;
     let allStreams = [];
@@ -851,7 +888,7 @@
     }
 
     // ============================================================================
-    // CORRECTION WITH REST SCHEDULING (for piccolo tuning)
+    // CORRECTION WITH REST SCHEDULING
     // ============================================================================
     function findNextRestPeriod(songPosMs) {
         for (const rest of restPeriods) {
@@ -928,7 +965,7 @@
     }
 
     // ============================================================================
-    // REAL-TIME EVALUATION (for piccolo tuning)
+    // REAL-TIME EVALUATION
     // ============================================================================
     function shouldIterate(medianShift, stdDev, sampleCount) {
         const absErr = Math.abs(medianShift);
@@ -988,7 +1025,7 @@
     }
 
     // ============================================================================
-    // DETECTION LOOP (for piccolo tuning – neighbor detection)
+    // DETECTION LOOP
     // ============================================================================
     function detectNeighborNotes() {
         if (!isMicActive || !analyser || !frequencyData) { requestAnimationFrame(detectNeighborNotes); return; }
@@ -1018,7 +1055,6 @@
         const songPos = tuningStartTime ? now - tuningStartTime : 0;
         const isPhase2 = songPos >= phase1EndMs;
 
-        // Only do neighbor detection (Phase 2) – Phase 1 pillar detection is now waveform-based
         if (!isHappy && isPhase2 && tuningStartTime) {
             processDetectionWindows(now, piccoloEnergy);
             if (now - lastEvaluationTime > EVALUATION_INTERVAL_MS) {
@@ -1030,10 +1066,6 @@
         requestAnimationFrame(detectNeighborNotes);
     }
 
-    // (processDetectionWindows, reportMeasurement, etc. remain unchanged)
-    // ============================================================================
-    // PHASE 2B: NEIGHBOR DETECTION + SCHEDULED RECORDING (unchanged)
-    // ============================================================================
     function processDetectionWindows(now, piccoloEnergy) {
         if (!phase1Complete || isHappy) return;
         if (!noteSchedule.length) return;
@@ -1098,7 +1130,6 @@
     }
 
     async function captureRecordingWindow(expectedNoteTime, windowMs) {
-        // ... (unchanged)
         if (!analyser || !frequencyData) return null;
         const frames = [];
         const startTime = expectedNoteTime - windowMs/2;
@@ -1145,11 +1176,13 @@
         const recordingDuration = recordingEnd - recordingStart;
         const nowWall = Date.now() + serverOffset;
         const delayMs = recordingStart - nowWall;
+        log(`🎙️ Oboe recording: expectedStart=${expectedStart}, recordingStart=${recordingStart}, nowWall=${nowWall}, delay=${delayMs.toFixed(1)}ms`, 'debug');
         if (delayMs > 0 && delayMs < 30000) {
             setTimeout(async () => {
-                log(`🎙️ Recording oboe window (${recordingDuration}ms)...`);
+                log(`🔴 Oboe recording START at ${Date.now()+serverOffset}`, 'info');
                 const recorded = await recordAudioBuffer(recordingDuration);
                 const offset = crossCorrelate(oboeBuffer, recorded);
+                log(`📐 Cross-correlation offset = ${offset.toFixed(1)}ms`, 'debug');
                 const actualOnset = recordingStart + offset;
                 const rawDelay = actualOnset - expectedStart;
                 const targetSeatData = seatData[targetSeat];
@@ -1173,7 +1206,7 @@
     }
 
     function startListeningForOboe(cue) {
-        startOboeCalibration(cue); // neighbor also records and correlates
+        startOboeCalibration(cue);
     }
 
     function reportOboeDetection(targetSeat, noteIndex, speakerDelay, calibrationId, rawDelay, propMs) {
@@ -1553,6 +1586,9 @@
                 deviceBuffer = createDeviceBuffer(bufferCache[PICCOLO_URL], assignedNotes);
                 log(`✅ Device buffer built, duration: ${deviceBuffer.duration.toFixed(2)}s`);
                 if (diagnoseMode) diagnoseBuffer(deviceBuffer, assignedNotes);
+
+                // PRIME THE HARDWARE for tuning movement
+                await primeBuffer(deviceBuffer, { gain: 0.0005, duration: 0.08 });
             }
 
             if (!isListenOnlyMode) {
@@ -1644,8 +1680,11 @@
                 if (delay > 0) {
                     const tid = setTimeout(() => playSpatialCue(asset), delay);
                     activeTimeouts.push(tid);
-                } else if (delay > -1000) {
+                } else if (delay > -5000) {   // Increased tolerance to 5 seconds
+                    log(`⚠️ Cue ${asset.id} is ${Math.round(-delay)}ms late, playing immediately`, 'warn');
                     playSpatialCue(asset);
+                } else {
+                    log(`❌ Cue ${asset.id} too late (${Math.round(-delay)}ms), skipping`, 'error');
                 }
             });
         });
@@ -1653,8 +1692,11 @@
     async function playSpatialCue(cue) {
         const url = cue.audio_url;
         if (!url || !bufferCache[url]) return;
+        const buffer = bufferCache[url];
+        // Prime the hardware for show cues
+        await primeBuffer(buffer);
         const source = audioCtx.createBufferSource();
-        source.buffer = bufferCache[url];
+        source.buffer = buffer;
         const gain = audioCtx.createGain();
         gain.gain.setValueAtTime(1.0, audioCtx.currentTime);
         source.connect(gain);
@@ -1691,6 +1733,8 @@
             } else if (cue.action === 'GO') {
                 handleMovementStart(cue);
             } else if (cue.type === 'SPEAKER_CAL' && cue.instrument === 'oboe') {
+                const nowWall = Date.now() + serverOffset;
+                log(`📨 Oboe cue received at ${nowWall}, scheduled startTime=${cue.startTime}, delay=${(cue.startTime - nowWall).toFixed(1)}ms`, 'debug');
                 if (mySeat.id === cue.targetSeat) {
                     // This device is the target – play the oboe
                     const oboeUrl = cue.audio_url;
@@ -1704,33 +1748,38 @@
                             return;
                         }
                     }
-                    const nowWall = Date.now() + serverOffset;
+                    const buffer = bufferCache[oboeUrl];
+                    // Prime the hardware for oboe playback
+                    await primeBuffer(buffer);
                     const startDelay = cue.startTime - nowWall - (currentSpeakerDelay || 0) - (myMicDelayMs || 0);
-                    if (startDelay > 0) {
+                    log(`🔊 Oboe playback startDelay=${startDelay.toFixed(1)}ms`, 'debug');
+                    if (startDelay > 0 && startDelay < 30000) {
                         setTimeout(() => {
                             const source = audioCtx.createBufferSource();
-                            source.buffer = bufferCache[oboeUrl];
+                            source.buffer = buffer;
                             const gain = audioCtx.createGain();
                             gain.gain.value = MASTER_PLAYBACK_GAIN;
                             source.connect(gain).connect(masterGain || audioCtx.destination);
                             source.start(0);
                             log(`🎵 Oboe sequence playing (${cue.notes.length} notes)`);
                         }, startDelay);
-                    } else if (startDelay > -1000) {
+                    } else if (startDelay > -5000) {  // Increased tolerance to 5 seconds
+                        log(`⚠️ Oboe start is ${Math.round(-startDelay)}ms late, playing immediately`, 'warn');
                         const source = audioCtx.createBufferSource();
-                        source.buffer = bufferCache[oboeUrl];
+                        source.buffer = buffer;
                         const gain = audioCtx.createGain();
                         gain.gain.value = MASTER_PLAYBACK_GAIN;
                         source.connect(gain).connect(masterGain || audioCtx.destination);
                         source.start(0);
-                        log(`🎵 Oboe sequence playing (${cue.notes.length} notes)`);
+                        log(`🎵 Oboe sequence playing (${cue.notes.length} notes) - LATE`);
                     } else {
-                        log(`❌ Oboe start is too late (${Math.round(-startDelay)}ms), skipping`);
+                        log(`❌ Oboe start is too late (${Math.round(-startDelay)}ms), skipping`, 'error');
                     }
                 } else {
                     // Check if we are a neighbor of the target seat
                     const neighborSnap = await db.ref(`neighbor_map/${cue.targetSeat}`).once('value');
                     const neighbors = neighborSnap.val() || [];
+                    log(`🔍 Neighbor check: mySeat=${mySeat.id}, targetNeighbors=${neighbors.join(',')}, amINeighbor=${neighbors.includes(mySeat.id)}`, 'debug');
                     if (neighbors.includes(mySeat.id)) {
                         log(`👂 Listening for oboe calibration from ${cue.targetSeat}`);
                         startListeningForOboe(cue);
