@@ -1234,52 +1234,66 @@
         }
         const expectedStart = sched.startTime;
         const duration = sched.total_duration_ms;
+        // Recording window: start 100ms before expected start (pre‑roll), end after duration + post‑roll
         const recordingStart = expectedStart - RECORDING_PRE_MS;
         const recordingEnd = expectedStart + duration + RECORDING_POST_MS;
         const recordingDuration = recordingEnd - recordingStart;
         const nowWall = Date.now() + serverOffset;
         const delayMs = recordingStart - nowWall;
+
+        log(`🎙️ Tuba recording: expectedStart=${expectedStart}, recordingStart=${recordingStart}, delay=${delayMs.toFixed(1)}ms`, 'debug');
+
         if (delayMs > 0 && delayMs < 30000) {
             setTimeout(async () => {
-                log(`🎙️ Recording tuba window (${recordingDuration}ms)...`);
+                log(`🔴 Tuba recording START at ${Date.now()+serverOffset}`, 'info');
                 const recorded = await recordAudioBuffer(recordingDuration);
                 const offset = crossCorrelate(tubaBuffer, recorded);
+                log(`📐 Cross-correlation offset = ${offset.toFixed(1)}ms`, 'debug');
+
                 const actualOnset = recordingStart + offset;
                 const rawDelay = actualOnset - expectedStart;
+
                 const pillar = pillarData[pillarId];
-                if (pillar) {
-                    const dx = mySeat.x - pillar.x;
-                    const dy = mySeat.y - pillar.y;
-                    const dist = Math.sqrt(dx*dx + dy*dy);
-                    const propMs = (dist / SPEED_OF_SOUND) * 1000;
-                    const micDelay = rawDelay - pillar.speakerDelayMs - propMs;
-                    if (micDelay >= MIC_DELAY_SANITY_MIN && micDelay <= MIC_DELAY_SANITY_MAX) {
-                        micDelaySamples.push(micDelay);
-                        if (micDelaySamples.length >= MIN_MIC_SAMPLES) {
-                            myMicDelayMs = calculateMedian(micDelaySamples);
-                            log(`🎤 Mic delay (tuba): ${myMicDelayMs.toFixed(1)}ms (${micDelaySamples.length} detections)`);
-                            saveCalibration();
-                            db.ref(`devices/${mySeat.id}/mic_cal_result`).set({
-                                micDelayMs: myMicDelayMs,
-                                source: 'tuba',
-                                timestamp: Date.now() + serverOffset
-                            });
-                        }
-                    } else {
-                        log(`⚠️ Mic delay ${micDelay.toFixed(1)}ms out of range, ignoring`);
+                if (!pillar) {
+                    log(`⚠️ No coordinates for pillar ${pillarId}`);
+                    return;
+                }
+
+                const dx = mySeat.x - pillar.x;
+                const dy = mySeat.y - pillar.y;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+                const propMs = (dist / SPEED_OF_SOUND) * 1000;
+
+                // CORRECTED: pillar already compensates its speaker delay, so we do NOT subtract it again.
+                const micDelay = rawDelay - propMs;
+
+                log(`📊 rawDelay=${rawDelay.toFixed(1)}ms, propMs=${propMs.toFixed(1)}ms, micDelay=${micDelay.toFixed(1)}ms`);
+
+                // Sanity check – you may want to widen the range or remove it entirely
+                // for debugging. Currently it rejects values outside [0,150]ms.
+                if (micDelay >= MIC_DELAY_SANITY_MIN && micDelay <= MIC_DELAY_SANITY_MAX) {
+                    micDelaySamples.push(micDelay);
+                    if (micDelaySamples.length >= MIN_MIC_SAMPLES) {
+                        myMicDelayMs = calculateMedian(micDelaySamples);
+                        log(`🎤 Mic delay (tuba): ${myMicDelayMs.toFixed(1)}ms (${micDelaySamples.length} detections)`);
+                        saveCalibration();
+                        db.ref(`devices/${mySeat.id}/mic_cal_result`).set({
+                            micDelayMs: myMicDelayMs,
+                            source: 'tuba',
+                            timestamp: Date.now() + serverOffset
+                        });
                     }
                 } else {
-                    log(`⚠️ No coordinates for pillar ${pillarId}`);
+                    log(`⚠️ Mic delay ${micDelay.toFixed(1)}ms out of range [${MIC_DELAY_SANITY_MIN}, ${MIC_DELAY_SANITY_MAX}], ignoring`);
                 }
+
+                log(`🔇 Tuba calibration finished`);
             }, delayMs);
         } else if (delayMs > -1000) {
             log(`⚠️ Tuba recording start too late (${Math.round(-delayMs)}ms)`, 'warn');
         } else {
             log(`❌ Tuba recording start too early (${Math.round(-delayMs)}ms)`, 'warn');
         }
-        setTimeout(() => {
-            log(`🔇 Tuba calibration finished`);
-        }, recordingDuration + 1000);
     }
 
     // ============================================================================
