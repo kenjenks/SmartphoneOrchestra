@@ -1668,7 +1668,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             return;
         }
         const now = Date.now() + serverOffset;
-        const startTime = now + 1000; // 1s buffer
+        const startTime = now + 2000; // 2s buffer
 
         // Write to tuning/current for pillars to pick up
         await db.ref('tuning/current').set({
