@@ -340,11 +340,11 @@ Operational SOP for Admin:
 
             seats.forEach(seatId => {
                 const entry = config.neighborMap[seatId];
-                const neighborCount = entry.neighbors?.length || 0;
-                const pillarCount = entry.pillars?.length || 0;
+                const list = Array.isArray(entry) ? entry : (entry?.neighbors || []);
+                const pillarCount = Array.isArray(entry) ? 0 : (entry?.pillars?.length || 0);
                 html += `<tr>
                     <td style="color:#00ffcc;">${seatId}</td>
-                    <td>${neighborCount} within 2m</td>
+                    <td>${list.length} within 2m: ${list.join(', ')}</td>
                     <td>${pillarCount}</td>
                 </tr>`;
             });
