@@ -575,6 +575,7 @@ Operational SOP for Admin:
                                 id: other.id,
                                 dist: Math.sqrt(Math.pow(currentSeat.x - other.x, 2) + Math.pow(currentSeat.y - other.y, 2))
                             }))
+                            .filter(n => n.dist <= 2.0)
                             .sort((a, b) => a.dist - b.dist)
                             .slice(0, 6)
                             .map(n => n.id);
