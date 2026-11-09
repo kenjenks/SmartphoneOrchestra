@@ -28,6 +28,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
     <title>SmartphoneOrchestra SM Conductor</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
 
     <style>
         body { margin: 0; background: #1a1a1a; color: #eee; font-family: 'Segoe UI', sans-serif; display: flex; height: 100vh; overflow: hidden; }
@@ -388,6 +389,44 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
 
     firebase.initializeApp(firebaseConfig);
     const db = firebase.database();
+
+    // ==================== CREW SIGN-IN (required by database rules) ====================
+    // Writes to configs, show and tuning are allowed only for IDs listed as "crew"
+    // under roles/ in the database. Reads stay open, so listeners need no change.
+    async function requireCrew() {
+        const auth = firebase.auth();
+        await new Promise(r => { const off = auth.onAuthStateChanged(() => { off(); r(); }); });
+        if (!auth.currentUser) {
+            await new Promise(resolve => {
+                const btn = document.createElement('button');
+                btn.textContent = 'Sign in with Google';
+                btn.style.cssText = 'position:fixed;top:40%;left:50%;transform:translateX(-50%);z-index:99999;' +
+                    'padding:18px 30px;font-size:1.1rem;background:#00ffcc;color:#000;border:none;border-radius:8px;font-weight:bold;cursor:pointer;';
+                btn.onclick = async () => {
+                    try {
+                        await auth.signInWithPopup(new firebase.auth.GoogleAuthProvider());
+                        btn.remove();
+                        resolve();
+                    } catch (e) { btn.textContent = 'Sign-in failed (' + e.code + '). Click to retry.'; }
+                };
+                document.body.appendChild(btn);
+            });
+        }
+        const user = auth.currentUser;
+        const role = (await db.ref('roles/' + user.uid).once('value')).val();
+        if (role !== 'crew') {
+            const box = document.createElement('div');
+            box.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#000;color:#f66;padding:30px;font-family:monospace;';
+            box.innerHTML = '<h2>Not authorized to change the show</h2>' +
+                '<p>Signed in as ' + (user.email || 'unknown') + '</p>' +
+                '<p>In the Firebase console, open Realtime Database &rarr; Data, and add this under <b>roles</b> with the value "crew":</p>' +
+                '<p style="color:#0fc;font-size:1.2rem;user-select:all">' + user.uid + '</p>' +
+                '<button onclick="firebase.auth().signOut().then(()=>location.reload())" style="padding:10px 20px;margin-top:10px">Sign out</button>';
+            document.body.appendChild(box);
+            throw new Error('Not authorized');
+        }
+        return user;
+    }
 
     // --- MASTER STATE ---
     let MAX_LOG_ENTRIES = 5000;
@@ -1838,6 +1877,7 @@ canvas.addEventListener('click', (e) => {
 
     // Initialize everything
     window.onload = async () => {
+        await requireCrew();
         await loadSeatConfig();
         await loadTuningConfig();
         await loadMovements();

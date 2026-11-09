@@ -35,6 +35,7 @@ Operational SOP for Admin:
     <title>Smartphone Orchestra: Control Center</title>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #050505; color: #eee; padding: 20px; line-height: 1.4; }
         .dashboard { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
@@ -206,6 +207,44 @@ Operational SOP for Admin:
 
         firebase.initializeApp(firebaseConfig);
         const db = firebase.database();
+
+    // ==================== CREW SIGN-IN (required by database rules) ====================
+    // Writes to configs, show and tuning are allowed only for IDs listed as "crew"
+    // under roles/ in the database. Reads stay open, so listeners need no change.
+    async function requireCrew() {
+        const auth = firebase.auth();
+        await new Promise(r => { const off = auth.onAuthStateChanged(() => { off(); r(); }); });
+        if (!auth.currentUser) {
+            await new Promise(resolve => {
+                const btn = document.createElement('button');
+                btn.textContent = 'Sign in with Google';
+                btn.style.cssText = 'position:fixed;top:40%;left:50%;transform:translateX(-50%);z-index:99999;' +
+                    'padding:18px 30px;font-size:1.1rem;background:#00ffcc;color:#000;border:none;border-radius:8px;font-weight:bold;cursor:pointer;';
+                btn.onclick = async () => {
+                    try {
+                        await auth.signInWithPopup(new firebase.auth.GoogleAuthProvider());
+                        btn.remove();
+                        resolve();
+                    } catch (e) { btn.textContent = 'Sign-in failed (' + e.code + '). Click to retry.'; }
+                };
+                document.body.appendChild(btn);
+            });
+        }
+        const user = auth.currentUser;
+        const role = (await db.ref('roles/' + user.uid).once('value')).val();
+        if (role !== 'crew') {
+            const box = document.createElement('div');
+            box.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#000;color:#f66;padding:30px;font-family:monospace;';
+            box.innerHTML = '<h2>Not authorized to change the show</h2>' +
+                '<p>Signed in as ' + (user.email || 'unknown') + '</p>' +
+                '<p>In the Firebase console, open Realtime Database &rarr; Data, and add this under <b>roles</b> with the value "crew":</p>' +
+                '<p style="color:#0fc;font-size:1.2rem;user-select:all">' + user.uid + '</p>' +
+                '<button onclick="firebase.auth().signOut().then(()=>location.reload())" style="padding:10px 20px;margin-top:10px">Sign out</button>';
+            document.body.appendChild(box);
+            throw new Error('Not authorized');
+        }
+        return user;
+    }
 
         // --- INITIAL DATA CHECK ---
         async function checkExistingData() {
@@ -793,9 +832,7 @@ Operational SOP for Admin:
 
         async function purgeEverything() {
             if (confirm("DANGER: This will wipe EVERYTHING. Proceed?")) {
-                await db.ref('/').remove();
-                log("ACTION: DATABASE WIPE COMPLETE.");
-                location.reload();
+                log("⛔ Whole-database wipe is blocked by the security rules. Use WIPE REALTIME DATA, or delete nodes in the Firebase console.");
             }
         }
 
@@ -821,6 +858,8 @@ Operational SOP for Admin:
         // Initialize everything - check for existing data on load
         window.onload = async () => {
             log("🚀 Admin panel initializing...");
+            const user = await requireCrew();
+            log(`🔐 Signed in as ${user.email}`);
             await checkExistingData();
         };
     </script>
