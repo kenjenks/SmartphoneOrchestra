@@ -336,6 +336,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
                     <span>ID</span>
                     <span>MIC</span>
                     <span>SPEAKER</span>
+                    <span>POWER</span>
                     <span>STATUS</span>
                     <span></span>
                 </div>
@@ -1186,7 +1187,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
 
     function updatePerformanceRegistry() {
         const registry = document.getElementById('performance-registry');
-        registry.innerHTML = '<div class="perf-row" style="font-weight:bold"><span>ID</span><span>MIC</span><span>SPEAKER</span><span>STATUS</span><span></span></div>';
+        registry.innerHTML = '<div class="perf-row" style="font-weight:bold"><span>ID</span><span>MIC</span><span>SPEAKER</span><span>POWER</span><span>STATUS</span><span></span></div>';
 
         const sortedDevices = Object.entries(deviceData).sort((a, b) => {
             const statusOrder = {
@@ -1211,6 +1212,19 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
                 row.classList.add('warning');
             }
 
+            // Power: battery, screen wake lock, page visible, audio engine (patron phones report these)
+            const lowBattery = typeof dev.battery === 'number' && dev.battery <= 15 && !dev.charging;
+            const atRisk = lowBattery || dev.wakeLock === 'released' || dev.wakeLock === 'failed' ||
+                           dev.visible === false || (dev.audio && dev.audio !== 'running' && dev.audio !== 'none');
+            if (atRisk && !row.classList.contains('critical')) row.classList.add('warning');
+            const batt = typeof dev.battery === 'number'
+                ? `<span style="color:${lowBattery ? '#ff4444' : dev.battery <= 30 ? '#ffcc00' : 'inherit'}">${dev.charging ? '⚡' : ''}${dev.battery}%</span>`
+                : '<span style="color:#666">--</span>';
+            const wake = { held: '🔆', released: '🔅', failed: '🔅', unsupported: '❔' }[dev.wakeLock] || '';
+            const power = `${batt} <span title="screen wake lock: ${dev.wakeLock || 'unknown'}">${wake}</span>` +
+                          (dev.visible === false ? ' <span title="page hidden">🙈</span>' : '') +
+                          (dev.audio && dev.audio !== 'running' && dev.audio !== 'none' ? ` <span title="audio ${dev.audio}">🔇</span>` : '');
+
             let statusIcon = '';
             let statusText = dev.status || 'IDLE';
 
@@ -1233,6 +1247,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
                 <span style="font-family: monospace; min-width: 60px;">${id}</span>
                 <span style="min-width: 45px;">${micDelay}</span>
                 <span style="min-width: 55px;">${speakerDelay}</span>
+                <span style="min-width: 70px;">${power}</span>
                 <span class="status-cell">
                     <span style="font-size: 14px;">${statusIcon}</span>
                     <span>${statusText}</span>
@@ -1459,27 +1474,42 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         const activePatrons = activeDevices.filter(d => !d.isPillar);
         const activePillarsList = activeDevices.filter(d => d.isPillar);
 
-        const calibratedPatrons = activePatrons.filter(d => d.calibrated === true);
-        const uncalibratedPatrons = activePatrons.filter(d => d.calibrated !== true);
+        let calibratedPatrons = activePatrons.filter(d => d.calibrated === true);
+        let uncalibratedPatrons = activePatrons.filter(d => d.calibrated !== true);
+        const pillarsOnly = activePatrons.length === 0;
 
         conductorLog(`👥 Active patrons: ${activePatrons.length} total`);
         conductorLog(`   😊 Calibrated: ${calibratedPatrons.length} (will listen only)`);
         conductorLog(`   🎵 Uncalibrated: ${uncalibratedPatrons.length} (will play notes)`);
         conductorLog(`🏛️ Active pillars: ${activePillarsList.length}`);
 
-        if (uncalibratedPatrons.length === 0) {
-            const msg = `All ${activePatrons.length} patron devices are already calibrated.\n\nNo tuning needed. You can start the show when ready.`;
-            conductorLog("✅ All patrons already calibrated! No tuning needed.");
-            alert(msg);
-            return;
+        if (pillarsOnly) {
+            // No patron phones: run the pillar calibration on its own (reset_pillar.html on the tablets)
+            if (!activePillarsList.length) {
+                alert("No pillars or patron phones are online.");
+                return;
+            }
+            if (!confirm(`No patron phones are connected.\n\nRun the PILLAR calibration only, with the ${activePillarsList.length} pillar(s) online?`)) {
+                conductorLog("Tuning cancelled");
+                return;
+            }
+            conductorLog(`🏛️ Pillar-only calibration (${activePillarsList.length} pillars, no patron phones)`);
+        } else if (uncalibratedPatrons.length === 0) {
+            if (!confirm(`All ${activePatrons.length} patron phones are already calibrated.\n\nRe-run the calibration anyway? (OK = re-tune every phone and the pillars, Cancel = keep the current calibration)`)) {
+                conductorLog("✅ All patrons already calibrated; re-run cancelled.");
+                return;
+            }
+            conductorLog(`🔁 Re-running calibration for all ${activePatrons.length} patrons`);
+            uncalibratedPatrons = activePatrons;
+            calibratedPatrons = [];
         }
 
-        const patronDeviceOrder = createSpiralPath(uncalibratedPatrons);
-        if (patronDeviceOrder.length === 0) {
+        const patronDeviceOrder = pillarsOnly ? [] : createSpiralPath(uncalibratedPatrons);
+        if (!pillarsOnly && patronDeviceOrder.length === 0) {
             conductorLog("No uncalibrated patrons available for spiral path", 'error');
             return;
         }
-        conductorLog(`🌀 Spiral order (uncalibrated patrons): ${patronDeviceOrder.join(', ')}`);
+        if (!pillarsOnly) conductorLog(`🌀 Spiral order (uncalibrated patrons): ${patronDeviceOrder.join(', ')}`);
 
         const activePillarIds = activePillarsList.map(p => p.id);
         conductorLog(`🏛️ Active pillars: ${activePillarIds.length > 0 ? activePillarIds.join(', ') : 'none'}`);
@@ -1487,7 +1517,9 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         const fullDeviceOrder = [...activePillarIds, ...uncalibratedPatrons.map(d => d.id), ...calibratedPatrons.map(d => d.id)];
         conductorLog(`📋 Full device order (${fullDeviceOrder.length} devices): ${fullDeviceOrder.join(', ')}`);
 
-        const tuningSchedule = distributeNotes(patronDeviceOrder);
+        const tuningSchedule = pillarsOnly
+            ? { deviceOrder: [], notes: [], totalNotes: 0, deviceCount: 0 }   // pillars play their own tracks
+            : distributeNotes(patronDeviceOrder);
         if (!tuningSchedule) {
             conductorLog("Failed to distribute notes", 'error');
             return;
