@@ -12,6 +12,9 @@ Survey Purge: During setup, you might do several "test walks." This button allow
 
 Database Health: Keeping the devices node empty when the show isn't running prevents Firebase from racking up unnecessary "Simultaneous Connection" charges.
 
+Upload checks (config.js): pillar and seat uploads are checked before saving. Errors (missing audioUrl, seats closer than 0.4 m,
+seats far outside the pillars, PILLAR_ rows that disagree with pillar_config) block the upload; warnings ask first.
+
 Seat Configuration: Upload seat_config.tsv to define seat positions for spatial audio calculations. Also computes neighbor map for distributed calibration using the section column from TSV.
 
 Tuning Mode Configuration: Upload tuning_mode.json for the piccolo "Jesu, Joy of Man's Desiring" calibration sequence.
@@ -36,6 +39,7 @@ Operational SOP for Admin:
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
+    <script src="config.js"></script>
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #050505; color: #eee; padding: 20px; line-height: 1.4; }
         .dashboard { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
@@ -120,6 +124,7 @@ Operational SOP for Admin:
             <div class="button-group">
                 <button class="btn download-btn" onclick="downloadSeatConfig()">Download seat_config.tsv</button>
                 <button class="btn download-btn" onclick="downloadTuningConfig()">Download tuning_mode.json</button>
+                <button class="btn btn-success" onclick="checkLiveConfigs()">Check live configs</button>
             </div>
 
             <div class="config-status">
@@ -193,58 +198,29 @@ Operational SOP for Admin:
     <div id="log"></div>
 
     <script>
-        // PROTECTED BLOCK: Firebase Configuration
-        // Security restricted to authorized domains in Google Cloud Console
-        const firebaseConfig = {
-            apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
-            authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
-            databaseURL: "https://smartphoneorchestra-dwt-default-rtdb.firebaseio.com/",
-            projectId: "smartphoneorchestra-dwt",
-            storageBucket: "smartphoneorchestra-dwt.firebasestorage.app",
-            messagingSenderId: "722537253165",
-            appId: "1:722537253165:web:8e8b6495bd508de35b2ba4"
-        };
+        // Firebase setup, clock, sign-in and config checks live in config.js
+        const db = SO.db;
 
-        firebase.initializeApp(firebaseConfig);
-        const db = firebase.database();
-
-    // ==================== CREW SIGN-IN (required by database rules) ====================
-    // Writes to configs, show and tuning are allowed only for IDs listed as "crew"
-    // under roles/ in the database. Reads stay open, so listeners need no change.
-    async function requireCrew() {
-        const auth = firebase.auth();
-        await new Promise(r => { const off = auth.onAuthStateChanged(() => { off(); r(); }); });
-        if (!auth.currentUser) {
-            await new Promise(resolve => {
-                const btn = document.createElement('button');
-                btn.textContent = 'Sign in with Google';
-                btn.style.cssText = 'position:fixed;top:40%;left:50%;transform:translateX(-50%);z-index:99999;' +
-                    'padding:18px 30px;font-size:1.1rem;background:#00ffcc;color:#000;border:none;border-radius:8px;font-weight:bold;cursor:pointer;';
-                btn.onclick = async () => {
-                    try {
-                        await auth.signInWithPopup(new firebase.auth.GoogleAuthProvider());
-                        btn.remove();
-                        resolve();
-                    } catch (e) { btn.textContent = 'Sign-in failed (' + e.code + '). Click to retry.'; }
-                };
-                document.body.appendChild(btn);
-            });
+        // Shows check results in the log. Errors block; warnings ask first.
+        function reviewChecks(label, result) {
+            result.errors.forEach(e => log(`❌ ${label}: ${e}`));
+            result.warnings.forEach(w => log(`⚠️ ${label}: ${w}`));
+            if (result.errors.length) {
+                log(`⛔ ${label} NOT uploaded: fix the ${result.errors.length} error(s) above and upload again.`);
+                return false;
+            }
+            if (result.warnings.length) {
+                const list = result.warnings.slice(0, 8).map(w => '• ' + w).join('\n\n');
+                const more = result.warnings.length > 8 ? `\n\n…and ${result.warnings.length - 8} more (see the log).` : '';
+                if (!confirm(`${label}: ${result.warnings.length} warning(s)\n\n${list}${more}\n\nUpload anyway?`)) {
+                    log(`↩️ ${label} upload cancelled.`);
+                    return false;
+                }
+            } else {
+                log(`✅ ${label}: all checks passed.`);
+            }
+            return true;
         }
-        const user = auth.currentUser;
-        const role = (await db.ref('roles/' + user.uid).once('value')).val();
-        if (role !== 'crew') {
-            const box = document.createElement('div');
-            box.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#000;color:#f66;padding:30px;font-family:monospace;';
-            box.innerHTML = '<h2>Not authorized to change the show</h2>' +
-                '<p>Signed in as ' + (user.email || 'unknown') + '</p>' +
-                '<p>In the Firebase console, open Realtime Database &rarr; Data, and add this under <b>roles</b> with the value "crew":</p>' +
-                '<p style="color:#0fc;font-size:1.2rem;user-select:all">' + user.uid + '</p>' +
-                '<button onclick="firebase.auth().signOut().then(()=>location.reload())" style="padding:10px 20px;margin-top:10px">Sign out</button>';
-            document.body.appendChild(box);
-            throw new Error('Not authorized');
-        }
-        return user;
-    }
 
         // --- INITIAL DATA CHECK ---
         async function checkExistingData() {
@@ -547,102 +523,69 @@ Operational SOP for Admin:
             reader.onload = async (e) => {
                 try {
                     const data = JSON.parse(e.target.result);
-                    if (!data.pillars) throw new Error("Invalid Format: Missing 'pillars' key.");
+                    if (!reviewChecks('pillar_config', SO.validatePillarConfig(data))) return;
                     log(`Uploading config for ${data.pillars.length} pillars...`);
                     await db.ref('pillar_config').set(data);
                     log("SUCCESS: Pillar coordinates live.");
+
+                    // Re-check the seats already in the cloud against the new pillar positions
+                    const seatCfg = await SO.loadSeatConfig();
+                    if (seatCfg) {
+                        const r = SO.validateSeatConfig(seatCfg.seats, SO.normalizePillarConfig(data), seatCfg.neighbors);
+                        r.errors.concat(r.warnings).forEach(m => log(`⚠️ Current seat_config vs new pillars: ${m}`));
+                    }
                 } catch (err) { log(`ERROR: ${err.message}`); }
+                finally { input.value = ''; }
             };
             reader.readAsText(file);
         }
 
         async function uploadSeatConfig() {
-            const file = document.getElementById('seat-config-input').files[0];
+            const input = document.getElementById('seat-config-input');
+            const file = input.files[0];
             if (!file) return;
 
             const reader = new FileReader();
             reader.onload = async (e) => {
                 try {
-                    const text = e.target.result;
-                    const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
+                    const { seats, errors: parseErrors } = SO.parseSeatTsv(e.target.result);
+                    log(`Parsed ${seats.length} seats from ${file.name}.`);
 
-                    // 1. Header Parsing with .trim() to remove hidden \r characters
-                    const headers = lines[0].split('\t').map(h => h.trim().toLowerCase());
-                    log(`Parsing headers: [${headers.join(', ')}]`);
+                    const pillarCfg = await SO.loadPillarConfig();
+                    const neighborMap = SO.computeNeighborMap(seats);
+                    const result = SO.validateSeatConfig(seats, pillarCfg, neighborMap);
+                    result.errors = parseErrors.concat(result.errors);
+                    if (!reviewChecks('seat_config', result)) return;
 
-                    const idIdx = headers.findIndex(h => h.includes('id') || h.includes('seat'));
-                    const xIdx = headers.indexOf('x');
-                    const yIdx = headers.indexOf('y');
-                    const sectionIdx = headers.findIndex(h => h.includes('section'));
-
-                    if (idIdx === -1 || xIdx === -1 || yIdx === -1) {
-                        log("ERROR: TSV must have 'id' (or 'seat_id'), 'x', and 'y' columns.");
-                        return;
-                    }
-
-                    // 2. Data Parsing
-                    const seats = [];
-                    for (let i = 1; i < lines.length; i++) {
-                        const cols = lines[i].split('\t').map(c => c.trim());
-
-                        const id = cols[idIdx];
-                        const x = parseFloat(cols[xIdx]);
-                        const y = parseFloat(cols[yIdx]);
-                        const section = sectionIdx !== -1 ? cols[sectionIdx] : 'Orchestra';
-
-                        if (!id || isNaN(x) || isNaN(y)) {
-                            log(`⚠️ Skipping row ${i+1}: Invalid data (${id}, ${x}, ${y})`);
-                            continue;
-                        }
-
-                        seats.push({ id, x, y, section });
-                    }
-
-                    if (seats.length === 0) {
-                        log("ERROR: No valid seats found in file.");
-                        return;
-                    }
-
-                    log(`✅ Parsed ${seats.length} seats. Generating neighbor map...`);
-
-                    // 3. Neighbor Map Calculation (6 closest in same section)
-                    const neighborMap = {};
-                    seats.forEach(currentSeat => {
-                        const neighbors = seats
-                            .filter(other => other.id !== currentSeat.id && other.section === currentSeat.section)
-                            .map(other => ({
-                                id: other.id,
-                                dist: Math.sqrt(Math.pow(currentSeat.x - other.x, 2) + Math.pow(currentSeat.y - other.y, 2))
-                            }))
-                            .filter(n => n.dist <= 2.0)
-                            .sort((a, b) => a.dist - b.dist)
-                            .slice(0, 6)
-                            .map(n => n.id);
-
-                        neighborMap[currentSeat.id] = neighbors;
-                    });
-
-                    // 4. Firebase Upload
                     log("📡 Uploading to Firebase...");
-
-                    // Store seat config with seats array and neighborMap
-                    await db.ref('seat_config').set({
-                        seats: seats,
-                        neighborMap: neighborMap
-                    });
-
-                    // Also store neighborMap separately for backward compatibility (optional)
-                    await db.ref('neighbor_map').set(neighborMap);
-
+                    await db.ref('seat_config').set({ seats: seats, neighborMap: neighborMap });
+                    await db.ref('neighbor_map').set(neighborMap);   // older pages read this copy
                     log("🎉 SUCCESS: Seat Config and Neighbor Map are live.");
-                    document.getElementById('seat-status').innerText = "Loaded";
-
                 } catch (err) {
                     log(`❌ Critical Upload Error: ${err.message}`);
                     console.error(err);
+                } finally {
+                    input.value = '';
                 }
             };
             reader.readAsText(file);
+        }
+
+        // Re-runs every check on what is in Firebase now, without changing anything.
+        async function checkLiveConfigs() {
+            log("🔍 Checking the configs currently in Firebase...");
+            const snap = await db.ref('pillar_config').once('value');
+            const rawPillars = snap.val();
+            if (rawPillars) reviewReport('pillar_config', SO.validatePillarConfig(rawPillars));
+            else log("❌ pillar_config: not uploaded.");
+            const seatCfg = await SO.loadSeatConfig();
+            if (seatCfg) reviewReport('seat_config', SO.validateSeatConfig(seatCfg.seats, SO.normalizePillarConfig(rawPillars), SO.computeNeighborMap(seatCfg.seats)));
+            else log("❌ seat_config: not uploaded.");
+        }
+        function reviewReport(label, r) {
+            r.errors.forEach(e => log(`❌ ${label}: ${e}`));
+            r.warnings.forEach(w => log(`⚠️ ${label}: ${w}`));
+            if (!r.errors.length && !r.warnings.length) log(`✅ ${label}: all checks passed.`);
         }
 
         async function uploadTuningConfig(input) {
@@ -858,7 +801,7 @@ Operational SOP for Admin:
         // Initialize everything - check for existing data on load
         window.onload = async () => {
             log("🚀 Admin panel initializing...");
-            const user = await requireCrew();
+            const user = await SO.requireCrew();
             log(`🔐 Signed in as ${user.email}`);
             await checkExistingData();
         };

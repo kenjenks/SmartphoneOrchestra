@@ -1,0 +1,374 @@
+/*
+ * config.js — shared setup for every Smartphone Orchestra page.
+ *
+ * Load it after the Firebase scripts and before the page's own script:
+ *
+ *   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+ *   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
+ *   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>  (crew pages only)
+ *   <script src="config.js"></script>
+ *
+ * Then, in the page:   const db = SO.db;
+ *
+ * Everything lives on one global object, SO:
+ *   SO.db, SO.now(), SO.serverOffset, SO.onClockSync(fn)
+ *   SO.requireCrew()                         sign-in gate for admin / conductor
+ *   SO.loadPillarConfig(), SO.loadSeatConfig(), SO.getSeat(id), SO.loadTuningMode()
+ *   SO.parseSeatTsv(text), SO.computeNeighborMap(seats)
+ *   SO.validatePillarConfig(data), SO.validateSeatConfig(seats, pillarConfig)
+ *
+ * Validators return { errors: [...], warnings: [...] }.
+ * Errors mean "refuse the upload". Warnings mean "ask before uploading".
+ *
+ * Loaders never invent values. If a pillar has no speakerDelayMs, the loader
+ * returns null for it and lists a warning, so each page decides what to do
+ * instead of silently using 45 ms.
+ */
+(function () {
+    'use strict';
+
+    // ---------------------------------------------------------------- Firebase
+    const FIREBASE_CONFIG = {
+        apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
+        authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
+        databaseURL: "https://smartphoneorchestra-dwt-default-rtdb.firebaseio.com/",
+        projectId: "smartphoneorchestra-dwt",
+        storageBucket: "smartphoneorchestra-dwt.firebasestorage.app",
+        messagingSenderId: "722537253165",
+        appId: "1:722537253165:web:8e8b6495bd508de35b2ba4"
+    };
+    if (!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG);
+    const db = firebase.database();
+
+    // ---------------------------------------------------------------- Limits
+    const LIMITS = {
+        MIN_SEAT_SPACING_M: 0.4,        // closer than this: almost certainly a units error
+        NEIGHBOR_RADIUS_M: 2.0,
+        MAX_NEIGHBORS: 6,
+        OUTSIDE_PILLARS_WARN_M: 0.25,   // further outside the pillar outline than this: warn
+        OUTSIDE_PILLARS_ERROR_M: 5.0,   // further than this: refuse (wrong units or wrong room)
+        PILLAR_ROW_MISMATCH_M: 0.25,    // PILLAR_ rows in the TSV vs pillar_config
+        SPEAKER_DELAY_MS: [0, 500],
+        MIC_DELAY_MS: [0, 200],
+        SPEED_OF_SOUND: [320, 360],
+        MIN_PILLAR_SPAN_M: 3.0          // pillars closer together than this: units error
+    };
+    const BAD_KEY = /[.$#\[\]\/]/;      // characters Firebase does not allow in keys
+
+    // ---------------------------------------------------------------- Clock
+    let serverOffset = 0;
+    let clockSynced = false;
+    const clockListeners = [];
+    db.ref('.info/serverTimeOffset').on('value', snap => {
+        serverOffset = snap.val() || 0;
+        clockSynced = true;
+        clockListeners.forEach(fn => { try { fn(serverOffset); } catch (e) { console.error(e); } });
+    });
+    function now() { return Date.now() + serverOffset; }
+    function onClockSync(fn) {
+        clockListeners.push(fn);
+        if (clockSynced) fn(serverOffset);
+    }
+
+    // ---------------------------------------------------------------- Geometry
+    const isNum = v => typeof v === 'number' && isFinite(v);
+    const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+    const isPillarId = id => typeof id === 'string' && id.startsWith('PILLAR_');
+
+    // Pillars as a polygon, ordered by angle around their centre (so the file's order doesn't matter).
+    function pillarPolygon(pillars) {
+        const pts = pillars.filter(p => isNum(p.x) && isNum(p.y));
+        if (pts.length < 3) return null;
+        const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
+        const cy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
+        return pts.map(p => ({ x: p.x, y: p.y, a: Math.atan2(p.y - cy, p.x - cx) }))
+                  .sort((p, q) => p.a - q.a);
+    }
+    function pointInPolygon(pt, poly) {
+        let inside = false;
+        for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+            const a = poly[i], b = poly[j];
+            if ((a.y > pt.y) !== (b.y > pt.y) &&
+                pt.x < (b.x - a.x) * (pt.y - a.y) / (b.y - a.y) + a.x) inside = !inside;
+        }
+        return inside;
+    }
+    function distToSegment(p, a, b) {
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const len2 = dx * dx + dy * dy;
+        const t = len2 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2)) : 0;
+        return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+    }
+    // 0 if inside the pillar outline, otherwise metres outside it.
+    function distanceOutside(pt, poly) {
+        if (pointInPolygon(pt, poly)) return 0;
+        let d = Infinity;
+        for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) d = Math.min(d, distToSegment(pt, poly[i], poly[j]));
+        return d;
+    }
+
+    // ---------------------------------------------------------------- Pillar config
+    function validatePillarConfig(data) {
+        const errors = [], warnings = [];
+        if (!data || !Array.isArray(data.pillars) || data.pillars.length === 0) {
+            errors.push("No 'pillars' list found.");
+            return { errors, warnings };
+        }
+        const seen = new Set();
+        data.pillars.forEach((p, i) => {
+            const name = (p && p.id) || `pillar #${i + 1}`;
+            if (!p || typeof p.id !== 'string' || !p.id) { errors.push(`${name}: missing id.`); return; }
+            if (!isPillarId(p.id)) errors.push(`${name}: id must start with PILLAR_.`);
+            if (BAD_KEY.test(p.id)) errors.push(`${name}: id contains . $ # [ ] or /, which Firebase does not allow.`);
+            if (seen.has(p.id)) errors.push(`${name}: listed twice.`);
+            seen.add(p.id);
+            if (!isNum(p.x) || !isNum(p.y)) errors.push(`${name}: x and y must be numbers (metres).`);
+            if (typeof p.audioUrl !== 'string' || !/^https:\/\//.test(p.audioUrl))
+                errors.push(`${name}: missing audioUrl (ePillar cannot activate without it).`);
+            if (p.speakerDelayMs === undefined) warnings.push(`${name}: no speakerDelayMs. Pages will fall back to a guess (45 ms).`);
+            else if (!isNum(p.speakerDelayMs) || p.speakerDelayMs < LIMITS.SPEAKER_DELAY_MS[0] || p.speakerDelayMs > LIMITS.SPEAKER_DELAY_MS[1])
+                errors.push(`${name}: speakerDelayMs ${p.speakerDelayMs} is outside ${LIMITS.SPEAKER_DELAY_MS.join('–')} ms.`);
+            if (p.micDelayMs === undefined) warnings.push(`${name}: no micDelayMs. Pages will fall back to a guess (18 ms).`);
+            else if (!isNum(p.micDelayMs) || p.micDelayMs < LIMITS.MIC_DELAY_MS[0] || p.micDelayMs > LIMITS.MIC_DELAY_MS[1])
+                errors.push(`${name}: micDelayMs ${p.micDelayMs} is outside ${LIMITS.MIC_DELAY_MS.join('–')} ms.`);
+            if (!isNum(p.preferred_freq)) warnings.push(`${name}: no preferred_freq (needed only for the seat survey beacons).`);
+        });
+        if (data.pillars.length !== 4) warnings.push(`Expected 4 pillars, found ${data.pillars.length}.`);
+        if (data.speed_of_sound === undefined) warnings.push('No speed_of_sound; pages will use 343 m/s.');
+        else if (!isNum(data.speed_of_sound) || data.speed_of_sound < LIMITS.SPEED_OF_SOUND[0] || data.speed_of_sound > LIMITS.SPEED_OF_SOUND[1])
+            errors.push(`speed_of_sound ${data.speed_of_sound} is outside ${LIMITS.SPEED_OF_SOUND.join('–')} m/s.`);
+
+        const pts = data.pillars.filter(p => p && isNum(p.x) && isNum(p.y));
+        let span = 0;
+        for (let i = 0; i < pts.length; i++) for (let j = i + 1; j < pts.length; j++) span = Math.max(span, dist(pts[i], pts[j]));
+        if (pts.length >= 2 && span < LIMITS.MIN_PILLAR_SPAN_M)
+            errors.push(`The pillars are at most ${span.toFixed(2)} m apart. Coordinates must be in metres.`);
+        return { errors, warnings };
+    }
+
+    // Returns { pillars: {id: {...}}, list: [...], speedOfSound, warnings } or null.
+    function normalizePillarConfig(data) {
+        if (!data || !Array.isArray(data.pillars)) return null;
+        const { warnings } = validatePillarConfig(data);
+        const pillars = {};
+        const list = data.pillars.map(p => {
+            const n = {
+                id: p.id, label: p.label || p.id, x: p.x, y: p.y,
+                audioUrl: p.audioUrl || null,
+                speakerDelayMs: isNum(p.speakerDelayMs) ? p.speakerDelayMs : null,
+                micDelayMs: isNum(p.micDelayMs) ? p.micDelayMs : null,
+                preferred_freq: isNum(p.preferred_freq) ? p.preferred_freq : null,
+                stagger: isNum(p.stagger) ? p.stagger : 0
+            };
+            pillars[p.id] = n;
+            return n;
+        });
+        return {
+            pillars, list,
+            speedOfSound: isNum(data.speed_of_sound) ? data.speed_of_sound : 343,
+            warnings
+        };
+    }
+    async function loadPillarConfig() {
+        const snap = await db.ref('pillar_config').once('value');
+        const cfg = normalizePillarConfig(snap.val());
+        if (cfg) cfg.warnings.forEach(w => console.warn('[pillar_config] ' + w));
+        return cfg;
+    }
+
+    // ---------------------------------------------------------------- Seat config
+    // Parses seat_config.tsv. Needs columns seat_id (or id), x, y; section is optional.
+    function parseSeatTsv(text) {
+        const errors = [];
+        const lines = String(text).split(/\r?\n/).filter(l => l.trim().length > 0);
+        if (lines.length < 2) return { seats: [], errors: ['The file has no data rows.'] };
+        const headers = lines[0].split('\t').map(h => h.trim().toLowerCase());
+        let idIdx = headers.indexOf('seat_id');
+        if (idIdx === -1) idIdx = headers.indexOf('id');
+        const xIdx = headers.indexOf('x'), yIdx = headers.indexOf('y');
+        const sectionIdx = headers.indexOf('section');
+        if (idIdx === -1 || xIdx === -1 || yIdx === -1) {
+            return { seats: [], errors: [`Header must include seat_id, x and y (tab-separated). Found: ${headers.join(', ')}`] };
+        }
+        const seats = [];
+        for (let i = 1; i < lines.length; i++) {
+            const cols = lines[i].split('\t').map(c => c.trim());
+            const id = cols[idIdx];
+            const x = parseFloat(cols[xIdx]), y = parseFloat(cols[yIdx]);
+            if (!id || !isFinite(x) || !isFinite(y)) {
+                errors.push(`Line ${i + 1}: could not read seat id, x and y (${lines[i].trim()}).`);
+                continue;
+            }
+            seats.push({ id, x, y, section: (sectionIdx !== -1 && cols[sectionIdx]) || 'Orchestra' });
+        }
+        return { seats, errors };
+    }
+
+    // Neighbours: up to 6 closest seats in the same section within 2 m. Pillar rows get none.
+    function computeNeighborMap(seats) {
+        const map = {};
+        const patrons = seats.filter(s => !isPillarId(s.id));
+        seats.forEach(s => { map[s.id] = []; });
+        patrons.forEach(s => {
+            map[s.id] = patrons
+                .filter(o => o.id !== s.id && o.section === s.section)
+                .map(o => ({ id: o.id, d: dist(s, o) }))
+                .filter(n => n.d <= LIMITS.NEIGHBOR_RADIUS_M)
+                .sort((a, b) => a.d - b.d)
+                .slice(0, LIMITS.MAX_NEIGHBORS)
+                .map(n => n.id);
+        });
+        return map;
+    }
+
+    // pillarCfg may be raw pillar_config data or the result of normalizePillarConfig; null skips pillar checks.
+    function validateSeatConfig(seats, pillarCfg, neighborMap) {
+        const errors = [], warnings = [];
+        if (!Array.isArray(seats) || seats.length === 0) return { errors: ['No seats found.'], warnings };
+
+        // IDs
+        const seen = new Set();
+        seats.forEach(s => {
+            if (BAD_KEY.test(s.id)) errors.push(`Seat ${s.id}: id contains . $ # [ ] or /, which Firebase does not allow.`);
+            if (seen.has(s.id)) errors.push(`Seat ${s.id} is listed twice.`);
+            seen.add(s.id);
+        });
+
+        const patrons = seats.filter(s => !isPillarId(s.id));
+        const pillarRows = seats.filter(s => isPillarId(s.id));
+
+        // Spacing: catches the 10x units error
+        const tooClose = [];
+        for (let i = 0; i < patrons.length; i++) {
+            for (let j = i + 1; j < patrons.length; j++) {
+                const d = dist(patrons[i], patrons[j]);
+                if (d < LIMITS.MIN_SEAT_SPACING_M) tooClose.push(`${patrons[i].id}–${patrons[j].id} ${d.toFixed(2)} m`);
+            }
+        }
+        if (tooClose.length) {
+            errors.push(`${tooClose.length} pair(s) of seats are closer than ${LIMITS.MIN_SEAT_SPACING_M} m ` +
+                `(${tooClose.slice(0, 5).join('; ')}${tooClose.length > 5 ? '; …' : ''}). ` +
+                `Coordinates must be in metres; a 10× scale error looks like this.`);
+        }
+
+        // Against the pillars
+        const list = pillarCfg ? (pillarCfg.list || pillarCfg.pillars) : null;
+        if (!Array.isArray(list) || list.length < 3) {
+            warnings.push('No pillar config loaded, so seats were not checked against the pillar positions.');
+        } else {
+            const poly = pillarPolygon(list);
+            const far = [], near = [];
+            patrons.forEach(s => {
+                const d = distanceOutside(s, poly);
+                if (d > LIMITS.OUTSIDE_PILLARS_ERROR_M) far.push(`${s.id} (${d.toFixed(1)} m)`);
+                else if (d > LIMITS.OUTSIDE_PILLARS_WARN_M) near.push(`${s.id} (${d.toFixed(2)} m)`);
+            });
+            if (far.length) errors.push(`${far.length} seat(s) are more than ${LIMITS.OUTSIDE_PILLARS_ERROR_M} m outside the area enclosed by the pillars: ` +
+                `${far.slice(0, 8).join(', ')}${far.length > 8 ? ', …' : ''}. Check units, and that pillar_config is for this room.`);
+            if (near.length) warnings.push(`${near.length} seat(s) are outside the area enclosed by the pillars: ` +
+                `${near.slice(0, 8).join(', ')}${near.length > 8 ? ', …' : ''}. Spatial effects there will be less accurate.`);
+
+            // PILLAR_ rows in the TSV should match pillar_config
+            const byId = {};
+            list.forEach(p => { byId[p.id] = p; });
+            pillarRows.forEach(r => {
+                const p = byId[r.id];
+                if (!p) warnings.push(`Seat file has a row for ${r.id}, which is not in pillar_config.`);
+                else if (dist(r, p) > LIMITS.PILLAR_ROW_MISMATCH_M)
+                    errors.push(`${r.id} is at (${r.x}, ${r.y}) in the seat file but (${p.x}, ${p.y}) in pillar_config.`);
+            });
+        }
+
+        // Neighbours
+        const nmap = neighborMap || computeNeighborMap(seats);
+        const lonely = patrons.filter(s => !(nmap[s.id] && nmap[s.id].length));
+        if (lonely.length) warnings.push(`${lonely.length} seat(s) have no neighbour within ${LIMITS.NEIGHBOR_RADIUS_M} m and will calibrate from the pillars only: ` +
+            `${lonely.slice(0, 10).map(s => s.id).join(', ')}${lonely.length > 10 ? ', …' : ''}.`);
+
+        return { errors, warnings };
+    }
+
+    // Accepts seats stored as an array or as an object keyed by id, and neighbour
+    // entries stored as plain lists or as { neighbors: [...] }.
+    function normalizeSeatConfig(data) {
+        if (!data || !data.seats) return null;
+        const raw = Array.isArray(data.seats) ? data.seats : Object.keys(data.seats).map(k => ({ id: k, ...data.seats[k] }));
+        const seats = raw.filter(s => s && s.id).map(s => ({ id: s.id, x: s.x, y: s.y, section: s.section || 'Orchestra' }));
+        const byId = {};
+        seats.forEach(s => { byId[s.id] = s; });
+        const neighbors = {};
+        const nm = data.neighborMap || {};
+        Object.keys(nm).forEach(k => {
+            const e = nm[k];
+            neighbors[k] = Array.isArray(e) ? e : (e && Array.isArray(e.neighbors) ? e.neighbors : []);
+        });
+        return { seats, byId, neighbors };
+    }
+    let seatCache = null;
+    async function loadSeatConfig() {
+        const snap = await db.ref('seat_config').once('value');
+        seatCache = normalizeSeatConfig(snap.val());
+        return seatCache;
+    }
+    async function getSeat(id) {
+        if (!seatCache) await loadSeatConfig();
+        return seatCache ? seatCache.byId[id] || null : null;
+    }
+
+    // ---------------------------------------------------------------- Tuning mode
+    async function loadTuningMode() {
+        const snap = await db.ref('tuning_mode').once('value');
+        return snap.val();
+    }
+
+    // ---------------------------------------------------------------- Crew sign-in
+    // Only pages that change configs, cues or tuning need this (admin, conductor).
+    // Needs firebase-auth-compat.js on the page.
+    async function requireCrew() {
+        if (!firebase.auth) throw new Error('requireCrew needs firebase-auth-compat.js on this page.');
+        const auth = firebase.auth();
+        await new Promise(r => { const off = auth.onAuthStateChanged(() => { off(); r(); }); });
+        if (!auth.currentUser) {
+            await new Promise(resolve => {
+                const btn = document.createElement('button');
+                btn.textContent = 'Sign in with Google';
+                btn.style.cssText = 'position:fixed;top:40%;left:50%;transform:translateX(-50%);z-index:99999;' +
+                    'padding:18px 30px;font-size:1.1rem;background:#00ffcc;color:#000;border:none;border-radius:8px;font-weight:bold;cursor:pointer;';
+                btn.onclick = async () => {
+                    try {
+                        await auth.signInWithPopup(new firebase.auth.GoogleAuthProvider());
+                        btn.remove();
+                        resolve();
+                    } catch (e) { btn.textContent = 'Sign-in failed (' + e.code + '). Click to retry.'; }
+                };
+                document.body.appendChild(btn);
+            });
+        }
+        const user = auth.currentUser;
+        const role = (await db.ref('roles/' + user.uid).once('value')).val();
+        if (role !== 'crew') {
+            const box = document.createElement('div');
+            box.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#000;color:#f66;padding:30px;font-family:monospace;';
+            box.innerHTML = '<h2>Not authorized to change the show</h2>' +
+                '<p>Signed in as ' + (user.email || 'unknown') + '</p>' +
+                '<p>In the Firebase console, open Realtime Database &rarr; Data, and add this under <b>roles</b> with the value "crew":</p>' +
+                '<p style="color:#0fc;font-size:1.2rem;user-select:all">' + user.uid + '</p>' +
+                '<button onclick="firebase.auth().signOut().then(()=>location.reload())" style="padding:10px 20px;margin-top:10px">Sign out</button>';
+            document.body.appendChild(box);
+            throw new Error('Not authorized');
+        }
+        return user;
+    }
+
+    // ---------------------------------------------------------------- Export
+    window.SO = {
+        FIREBASE_CONFIG, LIMITS, db,
+        now, onClockSync,
+        get serverOffset() { return serverOffset; },
+        requireCrew,
+        validatePillarConfig, normalizePillarConfig, loadPillarConfig,
+        parseSeatTsv, computeNeighborMap, validateSeatConfig, normalizeSeatConfig, loadSeatConfig, getSeat,
+        loadTuningMode,
+        geometry: { dist, pillarPolygon, distanceOutside }
+    };
+})();
