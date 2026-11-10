@@ -546,9 +546,7 @@
     async function preloadAudio(url) {
         if (bufferCache[url]) return bufferCache[url];
         try {
-            const res = await fetch(url);
-            const arrayBuf = await res.arrayBuffer();
-            const audioBuffer = await audioCtx.decodeAudioData(arrayBuf);
+            const audioBuffer = await SO.audio.getBuffer(audioCtx, url);   // shared decoder (config.js)
             bufferCache[url] = audioBuffer;
             return audioBuffer;
         } catch (e) {
@@ -563,14 +561,7 @@
         const audioBuffer = await preloadAudio(url);
         if (!audioBuffer) return;
 
-        const source = audioCtx.createBufferSource();
-        source.buffer = audioBuffer;
-        const gainNode = audioCtx.createGain();
-        gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
-        source.connect(gainNode);
-        gainNode.connect(masterGain || audioCtx.destination);
-        source.start(0);
-        source.stop(audioCtx.currentTime + (SILENT_WARMUP_MS / 1000));
+        SO.audio.primeBuffer(audioCtx, audioBuffer, { gain: 0, durationSec: SILENT_WARMUP_MS / 1000, destination: masterGain || audioCtx.destination });
         addLog(`🔇 Warm-up pulse for ${pillarId} (priming MP3 path)`);
     }
 
@@ -594,56 +585,39 @@
         addLog(`   Speaker delay: ${mySpeakerDelay}ms`);
         addLog(`   Net delay: ${delayMs.toFixed(1)}ms`);
 
-        if (delayMs > 0 && delayMs < 30000) {
-            // Calculate precise AudioContext time
-            const nowAudio = audioCtx.currentTime;
-            const audioDelaySec = delayMs / 1000;
-            const scheduledTime = nowAudio + audioDelaySec;
-
-            // Create and schedule source
-            const source = audioCtx.createBufferSource();
-            source.buffer = audioBuffer;
-
-            const gainNode = audioCtx.createGain();
-            gainNode.gain.setValueAtTime(0.8, scheduledTime);
-
-            source.connect(gainNode);
-            gainNode.connect(masterGain || audioCtx.destination);
-
-            // Schedule at exact AudioContext time
-            source.start(scheduledTime);
-
-            const scheduledServerTime = nowServer + delayMs;
-            const scheduledStr = new Date(scheduledServerTime).toISOString().substr(11, 12) + '.' + String(scheduledServerTime % 1000).padStart(3, '0');
-
-            addLog(`✅ Scheduled playback at AudioContext time: ${scheduledTime.toFixed(3)}s`);
-            addLog(`   Expected playback Firebase time: ${scheduledStr}`);
-
-            // Log to Firebase for cross-pillar sync verification
-            db.ref(`pillar_sync/${myId}/scheduled`).set({
-                targetTime: targetFirebaseTime,
-                scheduledTime: scheduledServerTime,
-                delayMs: delayMs,
-                speakerDelay: mySpeakerDelay,
-                timestamp: Date.now() + serverOffset
-            });
-
-            return { source, scheduledTime, gainNode };
-
-        } else if (delayMs <= 0 && delayMs > -1000) {
-            addLog(`⚠️ Playback is ${Math.abs(delayMs).toFixed(0)}ms late, playing immediately`, 'warn');
-            const source = audioCtx.createBufferSource();
-            source.buffer = audioBuffer;
-            const gainNode = audioCtx.createGain();
-            gainNode.gain.setValueAtTime(0.8, audioCtx.currentTime);
-            source.connect(gainNode);
-            gainNode.connect(masterGain || audioCtx.destination);
-            source.start(0);
-            return { source, scheduledTime: audioCtx.currentTime, gainNode };
-        } else {
+        if (delayMs >= 30000) {
             addLog(`❌ Delay too large (${delayMs.toFixed(0)}ms), skipping`, 'warn');
             return null;
         }
+
+        // Shared scheduler (config.js): audio-clock start; a late start (up to 1 s) joins part-way
+        const r = SO.audio.playAt(audioCtx, audioBuffer, targetFirebaseTime, {
+            leadMs: mySpeakerDelay,
+            lateLimitMs: 1000,
+            gain: 0.8,
+            destination: masterGain || audioCtx.destination
+        });
+        if (r.skipped) {
+            addLog(`❌ Playback skipped: ${r.reason}`, 'warn');
+            return null;
+        }
+        const scheduledServerTime = targetFirebaseTime - mySpeakerDelay + Math.max(0, r.lateMs);
+        if (r.lateMs > 0) addLog(`⚠️ Playback is ${Math.round(r.lateMs)}ms late, joining ${r.offset.toFixed(3)}s into the file`, 'warn');
+        const scheduledStr = new Date(scheduledServerTime).toISOString().substr(11, 12);
+        addLog(`✅ Scheduled playback at AudioContext time: ${r.when.toFixed(3)}s`);
+        addLog(`   Expected playback Firebase time: ${scheduledStr}`);
+
+        // Log to Firebase for cross-pillar sync verification
+        db.ref(`pillar_sync/${myId}/scheduled`).set({
+            targetTime: targetFirebaseTime,
+            scheduledTime: scheduledServerTime,
+            delayMs: delayMs,
+            lateJoinMs: Math.max(0, Math.round(r.lateMs)),
+            speakerDelay: mySpeakerDelay,
+            timestamp: Date.now() + serverOffset
+        });
+
+        return { source: r.source, scheduledTime: r.when, gainNode: r.gain };
     }
 
     // --------------------------------------------------------------

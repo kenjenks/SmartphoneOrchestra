@@ -16,6 +16,10 @@
  *   SO.loadPillarConfig(), SO.loadSeatConfig(), SO.getSeat(id), SO.loadTuningMode()
  *   SO.parseSeatTsv(text), SO.computeNeighborMap(seats)
  *   SO.validatePillarConfig(data), SO.validateSeatConfig(seats, pillarConfig)
+ *   SO.audio.getBuffer(ctx, url), SO.audio.playAt(ctx, buffer, serverMs, opts), SO.audio.primeBuffer(ctx, buffer)
+ *
+ * Every page plays sound files through SO.audio.playAt: decoded once, started with
+ * source.start(when) on the audio clock, joined part-way if the cue is late.
  *
  * Validators return { errors: [...], warnings: [...] }.
  * Errors mean "refuse the upload". Warnings mean "ask before uploading".
@@ -383,6 +387,81 @@
         return seatCache ? seatCache.byId[id] || null : null;
     }
 
+    // ---------------------------------------------------------------- Audio playback (shared)
+    // The one way every page plays a sound file at a server time:
+    //   decode once  →  convert server time to the audio clock  →  source.start(when, offset)
+    // No setTimeout and no <audio> element in the timing path.
+    const audioBuffers = new Map();   // url -> Promise<AudioBuffer>
+
+    // Downloads and decodes a file once per page; later calls reuse the same AudioBuffer.
+    function getBuffer(ctx, url) {
+        if (!audioBuffers.has(url)) {
+            const p = fetch(url)
+                .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status} for ${url.split('/').pop()}`); return r.arrayBuffer(); })
+                .then(ab => ctx.decodeAudioData(ab));
+            p.catch(() => audioBuffers.delete(url));   // a later call can retry
+            audioBuffers.set(url, p);
+        }
+        return audioBuffers.get(url);
+    }
+
+    // Server-clock time (ms) → audio-clock time (s), sampled at this moment.
+    function serverToAudioTime(ctx, serverMs) {
+        return ctx.currentTime + (serverMs - now()) / 1000;
+    }
+
+    /*
+     * playAt(ctx, buffer, serverMs, opts)
+     * Starts the buffer at server time (serverMs − leadMs), at position offsetSec in the file.
+     *   opts.leadMs       how much earlier than serverMs to start the source: the device's speaker
+     *                     delay, plus its mic delay on the paths that use it (default 0)
+     *   opts.offsetSec    position in the file to start from (default 0)
+     *   opts.joinLate     if the start time has passed: true (default) starts now, further into the
+     *                     file, so it stays in sync; false starts now at offsetSec
+     *   opts.lateLimitMs  later than this, skip it (default 5000)
+     *   opts.gain         gain value (default 1); opts.destination (default ctx.destination)
+     *   opts.duration     seconds to play (default: to the end); opts.loop
+     * Returns { source, gain, when, offset, lateMs }, or { skipped: true, reason, lateMs }.
+     */
+    function playAt(ctx, buffer, serverMs, opts = {}) {
+        const startServer = serverMs - (opts.leadMs || 0);
+        const lateMs = now() - startServer;
+        const lateLimit = opts.lateLimitMs ?? 5000;
+        if (lateMs > lateLimit) return { skipped: true, lateMs, reason: `${Math.round(lateMs)} ms late (limit ${lateLimit} ms)` };
+
+        let offset = opts.offsetSec || 0, when;
+        if (lateMs > 0) {
+            when = ctx.currentTime;
+            if (opts.joinLate !== false) offset += lateMs / 1000;
+        } else {
+            when = serverToAudioTime(ctx, startServer);
+        }
+        if (!opts.loop && offset >= buffer.duration) return { skipped: true, lateMs, reason: 'start point is past the end of the file' };
+
+        const source = ctx.createBufferSource();
+        source.buffer = buffer;
+        if (opts.loop) source.loop = true;
+        const gain = ctx.createGain();
+        gain.gain.value = opts.gain ?? 1;
+        source.connect(gain);
+        gain.connect(opts.destination || ctx.destination);
+        if (opts.duration) source.start(when, offset, opts.duration);
+        else source.start(when, offset);
+        return { source, gain, when, offset, lateMs };
+    }
+
+    // Plays the first ~0.1 s almost silently, right now, to wake the speaker path.
+    // Call it ahead of a cue, never inside the timed path.
+    function primeBuffer(ctx, buffer, { gain = 0.001, durationSec = 0.1, destination } = {}) {
+        const s = ctx.createBufferSource();
+        s.buffer = buffer;
+        const g = ctx.createGain();
+        g.gain.value = gain;
+        s.connect(g);
+        g.connect(destination || ctx.destination);
+        s.start(0, 0, Math.min(durationSec, buffer.duration));
+    }
+
     // ---------------------------------------------------------------- Tuning mode
     async function loadTuningMode() {
         const snap = await db.ref('tuning_mode').once('value');
@@ -438,6 +517,7 @@
         validatePillarConfig, normalizePillarConfig, loadPillarConfig, watchPillarConfig,
         parseSeatTsv, computeNeighborMap, validateSeatConfig, normalizeSeatConfig, loadSeatConfig, getSeat,
         loadTuningMode,
+        audio: { getBuffer, serverToAudioTime, playAt, primeBuffer },
         geometry: { dist, pillarPolygon, distanceOutside }
     };
 })();

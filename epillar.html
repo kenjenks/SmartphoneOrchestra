@@ -166,7 +166,6 @@
     let playDuration = 0;
     let startWatch = null;           // timer that updates the screen when the scheduled start arrives
     let scheduleToken = 0;           // bumps on every new cue or stop, so a slow download can't start a stale cue
-    const LATE_JOIN_LIMIT_MS = 5000; // later than this, skip the cue instead of joining it part-way
 
     // Constants
     const HEARTBEAT_INTERVAL_MS = 10000;
@@ -191,27 +190,9 @@
     });
 
     // ==================== AUDIO FILES (decoded once) ====================
-    // Downloads and decodes a file the first time it is needed, then reuses the AudioBuffer.
+    // Shared with every page through config.js: one download and decode per file.
     function getBuffer(url) {
-        if (!bufferCache.has(url)) {
-            const t0 = performance.now();
-            const p = fetch(url)
-                .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.arrayBuffer(); })
-                .then(ab => audioCtx.decodeAudioData(ab))
-                .then(buf => {
-                    log(`📦 Decoded ${url.split('/').pop()}: ${buf.duration.toFixed(1)} s in ${Math.round(performance.now() - t0)} ms`);
-                    return buf;
-                });
-            p.catch(() => bufferCache.delete(url));   // let a later cue retry
-            bufferCache.set(url, p);
-        }
-        return bufferCache.get(url);
-    }
-
-    // Converts a server-clock time (ms) to the audio clock (s). Same convention as reset_pillar.html,
-    // so the speakerDelayMs it measures applies to this playback path.
-    function serverToAudioTime(serverMs) {
-        return audioCtx.currentTime + (serverMs - (Date.now() + serverOffset)) / 1000;
+        return SO.audio.getBuffer(audioCtx, url);
     }
 
     // ==================== HARDWARE PRIMING ====================
@@ -224,12 +205,7 @@
         try {
             const buffer = await getBuffer(audioUrl);
             if (primedBuffers.has(audioUrl)) return true;
-            const source = audioCtx.createBufferSource();
-            source.buffer = buffer;
-            const gainNode = audioCtx.createGain();
-            gainNode.gain.value = 0.001; // 0.1% volume
-            source.connect(gainNode).connect(audioCtx.destination);
-            source.start(0, 0, Math.min(0.1, buffer.duration));
+            SO.audio.primeBuffer(audioCtx, buffer);   // 0.1 s at gain 0.001
             primedBuffers.add(audioUrl);
             log(`🔊 Primed hardware with 100 ms of ${audioUrl.split('/').pop()} (gain=0.001)`);
             return true;
@@ -245,13 +221,16 @@
         try {
             const movements = (await db.ref('show/movements').once('value')).val();
             const urls = new Set();
+            // this pillar's tuba calibration file (tuning_mode/tuba/audio_urls, keyed FL or PILLAR_FL)
+            const tuba = (await db.ref('tuning_mode/tuba/audio_urls').once('value')).val() || {};
+            Object.entries(tuba).forEach(([k, u]) => { if (u && (k === mySeat.id || 'PILLAR_' + k === mySeat.id)) urls.add(u); });
             (function scan(o) {
                 if (!o || typeof o !== 'object') return;
                 if (o.type === 'pillar' && o.id === mySeat.id && o.audio_url) urls.add(o.audio_url);
                 Object.values(o).forEach(scan);
             })(movements);
             if (!urls.size) return;
-            log(`📥 Preloading ${urls.size} show file(s) for ${mySeat.id}`);
+            log(`📥 Preloading ${urls.size} show/tuba file(s) for ${mySeat.id}`);
             for (const url of urls) await getBuffer(url).catch(e => log(`⚠️ Preload failed for ${url.split('/').pop()}: ${e.message}`));
         } catch (e) {
             log(`⚠️ Could not preload show files: ${e.message}`);
@@ -399,28 +378,15 @@
 
         const speakerDelay = myConfig?.speakerDelayMs ?? SO.FALLBACK.speakerDelayMs;
         const sourceStartServer = startTime - speakerDelay;          // when the source must start
-        const lateMs = (Date.now() + serverOffset) - sourceStartServer;
 
-        if (lateMs > LATE_JOIN_LIMIT_MS || lateMs / 1000 >= buffer.duration) {
-            log(`❌ Cue is ${Math.round(lateMs)} ms late, skipping (${type})`);
+        // Shared scheduler (config.js): audio-clock start, joins part-way if late, skips if > 5 s late
+        const r = SO.audio.playAt(audioCtx, buffer, startTime, { leadMs: speakerDelay, gain: 1.0 });
+        if (r.skipped) {
+            log(`❌ Cue skipped (${type}): ${r.reason}`);
             return;
         }
-
-        const source = audioCtx.createBufferSource();
-        source.buffer = buffer;
-        const gain = audioCtx.createGain();
-        gain.gain.value = 1.0;
-        source.connect(gain).connect(audioCtx.destination);
-
-        let when, offset = 0;
-        if (lateMs > 0) {
-            offset = lateMs / 1000;
-            when = audioCtx.currentTime;
-            log(`⚠️ Cue arrived ${Math.round(lateMs)} ms late: joining ${offset.toFixed(3)} s into the file to stay in sync`);
-        } else {
-            when = serverToAudioTime(sourceStartServer);
-        }
-        source.start(when, offset);
+        const { source, when, offset, lateMs } = r;
+        if (lateMs > 0) log(`⚠️ Cue arrived ${Math.round(lateMs)} ms late: joining ${offset.toFixed(3)} s into the file to stay in sync`);
 
         currentSource = source;
         playStartCtx = when - offset;

@@ -217,15 +217,7 @@
         const durationSec = options.duration || 0.05; // 50 ms
         const playDuration = Math.min(durationSec, buffer.duration);
         try {
-            const source = audioCtx.createBufferSource();
-            source.buffer = buffer;
-            const gainNode = audioCtx.createGain();
-            gainNode.gain.value = gainValue;
-            source.connect(gainNode);
-            gainNode.connect(audioCtx.destination);
-            const now = audioCtx.currentTime;
-            source.start(now);
-            source.stop(now + playDuration);
+            SO.audio.primeBuffer(audioCtx, buffer, { gain: gainValue, durationSec: playDuration });
             primedBuffers.add(buffer);
             log(`🔊 Primed hardware (${playDuration*1000}ms at gain ${gainValue})`, 'info');
             await new Promise(r => setTimeout(r, playDuration * 1000 + 10));
@@ -826,25 +818,28 @@
     let activeStream = null;
     let allStreams = [];
 
+    // Tuning piccolo: scheduled on the audio clock immediately (shared scheduler, config.js).
+    // A late start (up to 1 s) joins part-way through the file instead of starting from the top.
     function startContinuousPlayback(startTime, speakerDelay) {
         log(`🔍 startContinuousPlayback: isListenOnlyMode=${isListenOnlyMode}, hasDeviceBuffer=${!!deviceBuffer}`);
         if (isListenOnlyMode) { log(`🔇 Listen‑only mode`); return; }
         if (!deviceBuffer) { log(`❌ Device buffer not ready`); return; }
-        const nowWall = Date.now() + serverOffset;
         const adjStart = startTime - speakerDelay;
-        const delayMs = adjStart - nowWall;
+        const delayMs = adjStart - (Date.now() + serverOffset);
         log(`🔍 startContinuousPlayback: delayMs=${delayMs.toFixed(1)}`);
-        if (delayMs > 0 && delayMs < 30000) {
-            setTimeout(() => createNewPlaybackStream(adjStart, speakerDelay, 0), delayMs);
+        if (delayMs >= 30000) {
+            log(`❌ Playback start is ${Math.round(delayMs / 1000)} s away; not scheduling`, 'warn');
         } else if (delayMs > -1000) {
-            log(`⚠️ Playback ${Math.round(-delayMs)}ms late, starting immediately`, 'warn');
-            createNewPlaybackStream(adjStart, speakerDelay, 0);
+            if (delayMs < 0) log(`⚠️ Playback ${Math.round(-delayMs)}ms late, joining part-way to stay in sync`, 'warn');
+            createNewPlaybackStream(adjStart, speakerDelay, 0, true);
         } else {
             log(`❌ Playback too late (${Math.round(-delayMs)}ms)`, 'warn');
         }
     }
 
-    function createNewPlaybackStream(targetWallTime, speakerDelay, offsetMs = 0) {
+    // targetWallTime: server time at which file position offsetMs should start.
+    // joinLate false (used by corrections): if that time has passed, start now at offsetMs, as before.
+    function createNewPlaybackStream(targetWallTime, speakerDelay, offsetMs = 0, joinLate = false) {
         log(`🔍 createNewPlaybackStream: audioCtx.state=${audioCtx?.state}, hasDeviceBuffer=${!!deviceBuffer}, offsetMs=${offsetMs}`);
         if (!audioCtx || audioCtx.state !== 'running') {
             log(`⚠️ Audio context not running (state=${audioCtx?.state})`);
@@ -855,21 +850,21 @@
             return null;
         }
 
-        const nowAudio = audioCtx.currentTime;
         const nowWall = Date.now() + serverOffset;
-        const delaySec = (targetWallTime - nowWall) / 1000;
-        const startAudio = nowAudio + Math.max(0, delaySec);
-        const offsetSec = offsetMs / 1000;
-
-        const source = audioCtx.createBufferSource();
-        source.buffer = deviceBuffer;
-        source.loop = false;
-
-        const gain = audioCtx.createGain();
-        gain.gain.setValueAtTime(MASTER_PLAYBACK_GAIN, startAudio);
-        source.connect(gain);
-        gain.connect(masterGain || audioCtx.destination);
-        source.start(startAudio, offsetSec);
+        const r = SO.audio.playAt(audioCtx, deviceBuffer, targetWallTime, {
+            offsetSec: offsetMs / 1000,
+            joinLate,
+            lateLimitMs: Infinity,
+            gain: MASTER_PLAYBACK_GAIN,
+            destination: masterGain || audioCtx.destination
+        });
+        if (r.skipped) {
+            log(`⚠️ Playback stream not started: ${r.reason}`);
+            return null;
+        }
+        const { source, gain } = r;
+        const startAudio = r.when;
+        const offsetSec = r.offset;
 
         const streamId = allStreams.length + 1;
         const newStream = {
@@ -1472,9 +1467,7 @@
             let loaded = 0;
             for (const url of audioFiles) {
                 try {
-                    const res = await fetch(url);
-                    const buf = await res.arrayBuffer();
-                    bufferCache[url] = await audioCtx.decodeAudioData(buf);
+                    bufferCache[url] = await SO.audio.getBuffer(audioCtx, url);
                     loaded++;
                 } catch (e) {
                     log(`❌ Failed to load ${url.split('/').pop()}: ${e.message}`);
@@ -1490,9 +1483,7 @@
             const oboeData = tuningModeSnap.val()?.oboe;
             if (oboeData && oboeData.audio_url) {
                 try {
-                    const res = await fetch(oboeData.audio_url);
-                    const buf = await res.arrayBuffer();
-                    oboeBuffer = await audioCtx.decodeAudioData(buf);
+                    oboeBuffer = await SO.audio.getBuffer(audioCtx, oboeData.audio_url);   // shared cache: the oboe cue reuses it
                     log(`✅ Oboe waveform loaded (${oboeBuffer.duration.toFixed(2)}s)`);
                 } catch (e) {
                     log(`❌ Failed to load oboe waveform: ${e.message}`);
@@ -1506,9 +1497,7 @@
             if (tubaData && tubaData.audio_urls) {
                 for (const [pos, url] of Object.entries(tubaData.audio_urls)) {
                     try {
-                        const res = await fetch(url);
-                        const buf = await res.arrayBuffer();
-                        tubaBuffers[pos] = await audioCtx.decodeAudioData(buf);
+                        tubaBuffers[pos] = await SO.audio.getBuffer(audioCtx, url);
                         log(`✅ Tuba waveform loaded for ${pos} (${tubaBuffers[pos].duration.toFixed(2)}s)`);
                     } catch (e) {
                         log(`❌ Failed to load tuba waveform for ${pos}: ${e.message}`);
@@ -1686,7 +1675,10 @@
             if (cue.gainNode) {
                 const now = audioCtx.currentTime;
                 cue.gainNode.gain.linearRampToValueAtTime(0, now + 0.1);
-                setTimeout(() => { if (cue.gainNode) cue.gainNode.disconnect(); }, 150);
+                setTimeout(() => {
+                    try { if (cue.source) cue.source.stop(); } catch (e) {}
+                    if (cue.gainNode) cue.gainNode.disconnect();
+                }, 150);
             }
         });
         activeAudioCues = [];
@@ -1700,35 +1692,35 @@
             if (cue.type !== 'MASTER_MEDIA_SYNC') return;
             const offsetMs = (cue.time || 0) * 1000;
             const absTime = movementStartTime + offsetMs;
-            const delay = absTime - now - (currentSpeakerDelay || 0) - (myMicDelayMs || 0);
+            const leadMs = (currentSpeakerDelay || 0) + (myMicDelayMs || 0);   // speaker + mic delay (deliberate)
             (cue.assets || []).forEach(asset => {
                 if (asset.type === 'pillar') return;
-                if (delay > 0) {
-                    const tid = setTimeout(() => playSpatialCue(asset), delay);
-                    activeTimeouts.push(tid);
-                } else if (delay > -5000) {   // Increased tolerance to 5 seconds
-                    log(`⚠️ Cue ${asset.id} is ${Math.round(-delay)}ms late, playing immediately`, 'warn');
-                    playSpatialCue(asset);
-                } else {
-                    log(`❌ Cue ${asset.id} too late (${Math.round(-delay)}ms), skipping`, 'error');
-                }
+                playSpatialCue(asset, absTime, leadMs);
             });
         });
     }
-    async function playSpatialCue(cue) {
+    // Schedules one show asset on the audio clock (shared scheduler, config.js).
+    // Late cues (up to 5 s) join part-way so they stay in sync; later ones are skipped.
+    function playSpatialCue(cue, serverMs, leadMs) {
         const url = cue.audio_url;
-        if (!url || !bufferCache[url]) return;
+        if (!url || !bufferCache[url]) {
+            log(`⚠️ Cue ${cue.id}: audio not preloaded, skipping`, 'warn');
+            return;
+        }
         const buffer = bufferCache[url];
-        // Prime the hardware for show cues
-        await primeBuffer(buffer);
-        const source = audioCtx.createBufferSource();
-        source.buffer = buffer;
-        const gain = audioCtx.createGain();
-        gain.gain.setValueAtTime(1.0, audioCtx.currentTime);
-        source.connect(gain);
-        gain.connect(masterGain || audioCtx.destination);
-        source.start(0);
-        activeAudioCues.push({ ...cue, source, gainNode: gain });
+        if (!primedBuffers.has(buffer)) {          // wake the speaker now, well before the start
+            SO.audio.primeBuffer(audioCtx, buffer, { gain: 0.0001, durationSec: 0.05 });
+            primedBuffers.add(buffer);
+        }
+        const r = SO.audio.playAt(audioCtx, buffer, serverMs, {
+            leadMs, gain: 1.0, destination: masterGain || audioCtx.destination
+        });
+        if (r.skipped) {
+            log(`❌ Cue ${cue.id} skipped: ${r.reason}`, 'error');
+            return;
+        }
+        if (r.lateMs > 0) log(`⚠️ Cue ${cue.id} is ${Math.round(r.lateMs)}ms late, joined ${r.offset.toFixed(2)}s into the file`, 'warn');
+        activeAudioCues.push({ ...cue, source: r.source, gainNode: r.gain });
     }
     function frame(now) {
         const delta = now - lastFrameTime;
@@ -1766,9 +1758,7 @@
                     const oboeUrl = cue.audio_url;
                     if (!bufferCache[oboeUrl]) {
                         try {
-                            const res = await fetch(oboeUrl);
-                            const arrayBuf = await res.arrayBuffer();
-                            bufferCache[oboeUrl] = await audioCtx.decodeAudioData(arrayBuf);
+                            bufferCache[oboeUrl] = await SO.audio.getBuffer(audioCtx, oboeUrl);
                         } catch (e) {
                             log(`❌ Failed to load oboe audio: ${e.message}`);
                             return;
@@ -1777,30 +1767,13 @@
                     const buffer = bufferCache[oboeUrl];
                     // Prime the hardware for oboe playback
                     await primeBuffer(buffer);
-                    const startDelay = cue.startTime - nowWall - (currentSpeakerDelay || 0) - (myMicDelayMs || 0);
-                    log(`🔊 Oboe playback startDelay=${startDelay.toFixed(1)}ms`, 'debug');
-                    if (startDelay > 0 && startDelay < 30000) {
-                        setTimeout(() => {
-                            const source = audioCtx.createBufferSource();
-                            source.buffer = buffer;
-                            const gain = audioCtx.createGain();
-                            gain.gain.value = MASTER_PLAYBACK_GAIN;
-                            source.connect(gain).connect(masterGain || audioCtx.destination);
-                            source.start(0);
-                            log(`🎵 Oboe sequence playing (${cue.notes.length} notes)`);
-                        }, startDelay);
-                    } else if (startDelay > -5000) {  // Increased tolerance to 5 seconds
-                        log(`⚠️ Oboe start is ${Math.round(-startDelay)}ms late, playing immediately`, 'warn');
-                        const source = audioCtx.createBufferSource();
-                        source.buffer = buffer;
-                        const gain = audioCtx.createGain();
-                        gain.gain.value = MASTER_PLAYBACK_GAIN;
-                        source.connect(gain).connect(masterGain || audioCtx.destination);
-                        source.start(0);
-                        log(`🎵 Oboe sequence playing (${cue.notes.length} notes) - LATE`);
-                    } else {
-                        log(`❌ Oboe start is too late (${Math.round(-startDelay)}ms), skipping`, 'error');
-                    }
+                    const leadMs = (currentSpeakerDelay || 0) + (myMicDelayMs || 0);   // speaker + mic delay (deliberate)
+                    const r = SO.audio.playAt(audioCtx, buffer, cue.startTime, {
+                        leadMs, gain: MASTER_PLAYBACK_GAIN, destination: masterGain || audioCtx.destination
+                    });
+                    if (r.skipped) log(`❌ Oboe skipped: ${r.reason}`, 'error');
+                    else log(`🎵 Oboe sequence (${cue.notes.length} notes) starts in ${Math.max(0, (r.when - audioCtx.currentTime) * 1000).toFixed(0)}ms` +
+                             (r.lateMs > 0 ? `, joined ${Math.round(r.lateMs)}ms late` : ''));
                 } else {
                     // Check if we are a neighbor of the target seat
                     const neighborSnap = await db.ref(`neighbor_map/${cue.targetSeat}`).once('value');
