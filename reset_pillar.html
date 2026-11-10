@@ -304,7 +304,7 @@
 
         const batch = {};
         logsToSend.forEach((logEntry, index) => {
-            const ts = SO.now();
+            const ts = Math.floor(SO.now());   // keys must be whole numbers: Firebase rejects '.' in keys
             batch[`${ts}_${index}_${Math.random().toString(36).substr(2, 6)}`] = logEntry;
         });
 
@@ -469,8 +469,8 @@
     function updateSyncStatus() {
         if (serverOffset !== 0) {
             const now = SO.now();
-            const nowStr = new Date(now).toISOString().substr(11, 12) + '.' + String(now % 1000).padStart(3, '0');
-            syncStatusSpan.innerHTML = `⏱️ Firebase time: ${nowStr} | offset: ${serverOffset > 0 ? '+' : ''}${serverOffset}ms`;
+            const nowStr = new Date(now).toISOString().substr(11, 12);
+            syncStatusSpan.innerHTML = `⏱️ Firebase time: ${nowStr} | offset: ${serverOffset > 0 ? '+' : ''}${serverOffset.toFixed(1)}ms`;
         }
     }
     setInterval(updateSyncStatus, 1000);
@@ -576,8 +576,8 @@
         const delayMs = targetFirebaseTime - nowServer - mySpeakerDelay;
 
         // Format timestamps with millisecond precision
-        const targetStr = new Date(targetFirebaseTime).toISOString().substr(11, 12) + '.' + String(targetFirebaseTime % 1000).padStart(3, '0');
-        const nowStr = new Date(nowServer).toISOString().substr(11, 12) + '.' + String(nowServer % 1000).padStart(3, '0');
+        const targetStr = new Date(targetFirebaseTime).toISOString().substr(11, 12);
+        const nowStr = new Date(nowServer).toISOString().substr(11, 12);
 
         addLog(`🎯 Scheduling ${myId} playback:`);
         addLog(`   Target Firebase time: ${targetStr}`);
@@ -732,8 +732,8 @@
                 const rawDelay = detectionTime - expectedTimeAbs;
 
                 if (Math.abs(rawDelay) < 500) {
-                    const expectedStr = new Date(expectedTimeAbs).toISOString().substr(11, 12) + '.' + String(expectedTimeAbs % 1000).padStart(3, '0');
-                    const detectionStr = new Date(detectionTime).toISOString().substr(11, 12) + '.' + String(detectionTime % 1000).padStart(3, '0');
+                    const expectedStr = new Date(expectedTimeAbs).toISOString().substr(11, 12);
+                    const detectionStr = new Date(detectionTime).toISOString().substr(11, 12);
 
                     addLog(`🔍 Detected ${pillarId} note ${note.index} (${note.pitch})`);
                     addLog(`   Expected: ${expectedStr}, Detected: ${detectionStr}`);
@@ -1143,9 +1143,9 @@
             const globalStartTime = schedule.startTime;
             tuningStartTime = globalStartTime;
 
-            const startStr = new Date(globalStartTime).toISOString().substr(11, 12) + '.' + String(globalStartTime % 1000).padStart(3, '0');
+            const startStr = new Date(globalStartTime).toISOString().substr(11, 12);
             addLog(`🎵 Tuning movement detected! Global start: ${startStr}`, 'success');
-            addLog(`   Server offset: ${serverOffset > 0 ? '+' : ''}${serverOffset}ms`);
+            addLog(`   Server offset: ${serverOffset > 0 ? '+' : ''}${serverOffset.toFixed(1)}ms`);
 
             // Reset state for new calibration run
             pillarMeasurements = {};

@@ -372,7 +372,7 @@
         logQueue = [];
         const batch = {};
         logsToSend.forEach((logEntry, index) => {
-            const ts = SO.now();
+            const ts = Math.floor(SO.now());   // keys must be whole numbers: Firebase rejects '.' in keys
             batch[`${ts}_${index}_${Math.random().toString(36).substr(2, 6)}`] = logEntry;
         });
         logRef.update(batch).catch(e => {
