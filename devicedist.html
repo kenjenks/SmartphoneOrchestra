@@ -1466,7 +1466,12 @@
                 x: mySeat.x, y: mySeat.y,
                 speakerDelay: currentSpeakerDelay,
                 micDelay: myMicDelayMs || 0,
-                neighborCount: myNeighbors.length
+                neighborCount: myNeighbors.length,
+                battery: battery ? Math.round(battery.level * 100) : null,   // null: browser doesn't report it
+                charging: battery ? battery.charging : null,
+                wakeLock: wakeLockState,
+                visible: document.visibilityState === 'visible',
+                audio: audioCtx ? audioCtx.state : 'none'
             });
         } catch (e) { log(`💔 Heartbeat failed: ${e.message}`); }
     }
@@ -1698,9 +1703,55 @@
     // ============================================================================
     // SHOW PLAYBACK & SPEAKER_CAL HANDLER
     // ============================================================================
+    // ==================== KEEP AWAKE ====================
+    // Phones sit in seat bags for the whole show. The browser releases the screen wake lock
+    // whenever the page is hidden (notification shade, a text, app switch, screen lock), so it is
+    // re-requested every time the page becomes visible again. Wake-lock state, battery, audio
+    // state and visibility go into every heartbeat so the conductor sees phones at risk.
+    let wakeLockState = ('wakeLock' in navigator) ? 'not requested' : 'unsupported';
+    let showModeEntered = false;
+    let hiddenSince = null;
+    let battery = null;
+    if (navigator.getBattery) navigator.getBattery().then(b => {
+        battery = b;
+        b.addEventListener('levelchange', () => { if (b.level <= 0.15 && !b.charging) log(`🪫 Battery ${Math.round(b.level * 100)}%`, 'warn'); });
+    }).catch(() => {});   // not available on iPhone/Safari or Firefox
+
     async function requestWakeLock() {
-        try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch(e) { console.warn('Wake lock failed', e); }
+        if (!('wakeLock' in navigator)) { wakeLockState = 'unsupported'; log(`⚠️ No screen wake lock on this browser; the screen may sleep`, 'warn'); return; }
+        if (document.visibilityState !== 'visible') return;   // can only be requested while visible
+        try {
+            wakeLock = await navigator.wakeLock.request('screen');
+            wakeLockState = 'held';
+            wakeLock.addEventListener('release', () => {
+                wakeLockState = 'released';
+                log(`🔅 Screen wake lock released`, 'warn');
+            });
+            log(`🔆 Screen wake lock held`);
+        } catch (e) {
+            wakeLockState = 'failed';
+            log(`⚠️ Wake lock request failed: ${e.name} ${e.message}`, 'warn');
+        }
     }
+
+    document.addEventListener('visibilitychange', async () => {
+        if (!showModeEntered) return;
+        if (document.visibilityState === 'hidden') {
+            hiddenSince = SO.now();
+            log(`🙈 Page hidden`, 'warn');
+            sendHeartbeat();   // last word before timers are throttled, so the conductor knows why
+            return;
+        }
+        const away = hiddenSince ? Math.round((SO.now() - hiddenSince) / 1000) : 0;
+        hiddenSince = null;
+        log(`👀 Page visible again after ${away} s`, 'info');
+        if (audioCtx && audioCtx.state !== 'running') {
+            try { await audioCtx.resume(); } catch (e) {}
+            log(`🎛️ Audio engine ${audioCtx.state} after returning`, audioCtx.state === 'running' ? 'info' : 'warn');
+        }
+        await requestWakeLock();
+        sendHeartbeat();
+    });
     function handleMovementStart(cue) {
         if (!cue.startTime || !cue.movement || !cue.cues) return;
         log(`🎬 MOVEMENT START: "${cue.movement}"`);
@@ -1844,6 +1895,12 @@
         initBtn.onclick = async () => {
             log("🖱️ Button pressed");
             initBtn.disabled = true;
+            // iPhone: without this, the silent switch mutes Web Audio (the default session is
+            // "ambient"). This page plays and listens, so it declares "play-and-record".
+            if ('audioSession' in navigator) {
+                try { navigator.audioSession.type = 'play-and-record'; log(`🔈 Audio session: ${navigator.audioSession.type}`); }
+                catch (e) { log(`⚠️ Could not set audio session: ${e.message}`, 'warn'); }
+            }
             const granted = await window.requestMicrophonePermission();
             if (granted) {
                 log("✅ Mic granted");
@@ -1858,6 +1915,7 @@
                     const canvas = document.getElementById('stage-canvas');
                     canvas.width = window.innerWidth;
                     canvas.height = window.innerHeight;
+                    showModeEntered = true;
                     await requestWakeLock();
                     requestAnimationFrame(frame);
                     initShowCueListener();

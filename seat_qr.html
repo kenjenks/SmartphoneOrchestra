@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<!--
+seat_qr.html — Lobby table QR generator for ushers (runs on a tablet).
+
+The usher types the seat from the patron's ticket. The page checks it against seat_config
+in Firebase and shows a large QR code with the same link the seat-bag stickers use:
+    devicedist.html?seat=B1&x=2.4&y=3.22
+The patron scans it with their phone camera, opens the page, taps the button, and takes the
+phone to the seat already set up. Nothing is written to the database; no sign-in needed.
+-->
+
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smartphone Orchestra: Lobby QR</title>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
+    <script src="config.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
+    <style>
+        * { box-sizing: border-box; }
+        body { margin: 0; background: #050505; color: #eee; font-family: 'Segoe UI', Tahoma, sans-serif; }
+        .wrap { display: grid; grid-template-columns: minmax(280px, 1fr) minmax(320px, 1.3fr); gap: 24px; padding: 20px; min-height: 100vh; }
+        @media (max-width: 760px) { .wrap { grid-template-columns: 1fr; } }
+        h1 { font-weight: 300; margin: 0 0 4px; font-size: 1.5rem; }
+        h1 b { color: #00ffcc; font-weight: 800; }
+        .sub { color: #777; font-size: 0.85rem; margin-bottom: 18px; }
+        label { display: block; color: #aaa; font-size: 0.85rem; margin-bottom: 6px; }
+        .entry { display: flex; gap: 8px; }
+        input { flex: 1; font-size: 2.2rem; padding: 10px 14px; background: #111; color: #fff; border: 2px solid #333;
+                border-radius: 10px; text-transform: uppercase; letter-spacing: 2px; min-width: 0; }
+        input:focus { outline: none; border-color: #00ffcc; }
+        button { font-size: 1.1rem; font-weight: 700; padding: 0 22px; border-radius: 10px; border: none; cursor: pointer;
+                 background: #00ffcc; color: #000; }
+        button.secondary { background: #222; color: #ddd; border: 1px solid #444; padding: 12px 18px; margin-top: 14px; width: 100%; }
+        .msg { min-height: 1.6em; margin: 12px 0; font-size: 1rem; }
+        .msg.err { color: #ff6666; } .msg.warn { color: #ffcc66; } .msg.ok { color: #00ffcc; }
+        .checklist { background: #101010; border: 1px solid #222; border-radius: 10px; padding: 14px 18px; margin-top: 18px; }
+        .checklist h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 1px; color: #888; margin: 0 0 8px; }
+        .checklist ol { margin: 0; padding-left: 20px; line-height: 1.75; }
+        .status { color: #555; font-size: 0.75rem; margin-top: 14px; }
+        .qrpanel { display: flex; flex-direction: column; align-items: center; justify-content: center;
+                   background: #111; border: 1px solid #222; border-radius: 14px; padding: 20px; }
+        #qr { width: min(80vh, 100%); max-width: 560px; aspect-ratio: 1; background: #fff; border-radius: 10px;
+              display: flex; align-items: center; justify-content: center; color: #999; font-size: 1rem; text-align: center; padding: 6px; }
+        #qr svg { width: 100%; height: 100%; display: block; }
+        #seat-big { font-size: 3rem; font-weight: 800; color: #00ffcc; margin-top: 14px; letter-spacing: 3px; min-height: 1.2em; }
+        #seat-small { color: #777; font-size: 0.85rem; }
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <div>
+        <h1>Smartphone Orchestra <b>LOBBY</b></h1>
+        <div class="sub">Type the seat from the ticket, then let the patron scan the code.</div>
+
+        <label for="seat">Seat (from the ticket)</label>
+        <form class="entry" id="seat-form" autocomplete="off">
+            <input id="seat" list="seat-list" placeholder="B1" autocapitalize="characters" spellcheck="false" autofocus>
+            <button type="submit">Show</button>
+        </form>
+        <datalist id="seat-list"></datalist>
+        <div id="msg" class="msg"></div>
+        <button class="secondary" id="next-btn" type="button">Next patron</button>
+
+        <div class="checklist">
+            <h2>Usher checklist</h2>
+            <ol>
+                <li>Do Not Disturb <b>on</b></li>
+                <li>Silent switch <b>off</b> (iPhone)</li>
+                <li>Media volume about <b>80%</b></li>
+                <li>Brightness <b>up</b>; Auto-Lock <b>Never</b></li>
+                <li>Camera: scan the code → open the page</li>
+                <li>Tap the button, allow the microphone</li>
+                <li>Check it shows the right seat, then into the seat bag, screen facing out</li>
+            </ol>
+        </div>
+        <div class="status" id="status">Loading seats…</div>
+    </div>
+
+    <div class="qrpanel">
+        <div id="qr">Enter a seat to show its code</div>
+        <div id="seat-big"></div>
+        <div id="seat-small"></div>
+    </div>
+</div>
+
+<script>
+    const db = SO.db;
+    const BASE_URL = 'https://smartphoneorchestra-dwt.web.app/devicedist.html';   // same as generate_stickers.py
+    const ACTIVE_WITHIN_MS = 30000;   // a heartbeat this recent means a phone is already playing in that seat
+
+    let seatsById = {};        // upper-case id -> seat
+    const input = document.getElementById('seat');
+    const msg = (text, cls = '') => { const m = document.getElementById('msg'); m.textContent = text; m.className = 'msg ' + cls; };
+
+    // Same link the seat-bag stickers carry, so devicedist.html treats both the same way
+    function seatUrl(s) {
+        return `${BASE_URL}?seat=${encodeURIComponent(s.id)}&x=${s.x}&y=${s.y}`;
+    }
+
+    function clearQr() {
+        document.getElementById('qr').innerHTML = 'Enter a seat to show its code';
+        document.getElementById('seat-big').textContent = '';
+        document.getElementById('seat-small').textContent = '';
+    }
+
+    async function show(raw) {
+        const key = String(raw || '').trim().toUpperCase().replace(/\s+/g, '');
+        if (!key) { msg('Type a seat, e.g. B1.', 'err'); return; }
+        const seat = seatsById[key];
+        if (!seat) {
+            clearQr();
+            msg(`${key} is not in seat_config. Check the ticket, or the seat file on the admin page.`, 'err');
+            return;
+        }
+        if (seat.id.startsWith('PILLAR_')) { clearQr(); msg('That is a pillar, not a patron seat.', 'err'); return; }
+
+        const url = seatUrl(seat);
+        const qr = qrcode(0, 'M');
+        qr.addData(url);
+        qr.make();
+        document.getElementById('qr').innerHTML = qr.createSvgTag({ cellSize: 8, margin: 4, scalable: true });
+        document.getElementById('seat-big').textContent = seat.id;
+        document.getElementById('seat-small').textContent = `${seat.section || 'Orchestra'} · (${seat.x}, ${seat.y}) m`;
+        msg(`Scan with the phone's camera.`, 'ok');
+
+        // Warn if a phone is already active in this seat (duplicate, or the patron is re-enrolling)
+        try {
+            const dev = (await db.ref(`devices/${seat.id}`).once('value')).val();
+            if (dev && dev.lastSeen && SO.now() - dev.lastSeen < ACTIVE_WITHIN_MS) {
+                const ago = Math.round((SO.now() - dev.lastSeen) / 1000);
+                msg(`⚠️ A phone in ${seat.id} checked in ${ago} s ago. Fine if this patron is re-joining; otherwise check the ticket.`, 'warn');
+            }
+        } catch (e) { /* the code still works without this check */ }
+    }
+
+    document.getElementById('seat-form').addEventListener('submit', e => { e.preventDefault(); show(input.value); });
+    document.getElementById('next-btn').addEventListener('click', () => { input.value = ''; clearQr(); msg(''); input.focus(); });
+
+    // Seats come from Firebase and stay current if the admin re-uploads seat_config
+    db.ref('seat_config').on('value', snap => {
+        const cfg = SO.normalizeSeatConfig(snap.val());
+        seatsById = {};
+        const list = document.getElementById('seat-list');
+        list.innerHTML = '';
+        if (!cfg) {
+            document.getElementById('status').textContent = 'No seat_config in Firebase. Upload it from the admin page.';
+            return;
+        }
+        cfg.seats.filter(s => !s.id.startsWith('PILLAR_')).forEach(s => {
+            seatsById[s.id.toUpperCase()] = s;
+            const o = document.createElement('option');
+            o.value = s.id;
+            list.appendChild(o);
+        });
+        document.getElementById('status').textContent = `${Object.keys(seatsById).length} seats loaded from seat_config.`;
+    });
+</script>
+</body>
+</html>
