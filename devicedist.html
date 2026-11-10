@@ -419,6 +419,31 @@
     // A movement has ended when every sound it scheduled has finished.
     let movementToken = 0, movementSoundsLeft = 0;
 
+    // Before the show: recheck the clock every 60 ± 5 s, each phone on its own random schedule,
+    // so the house never checks all at once and every phone is fresh when tuning starts.
+    // Stops for good when tuning or a movement starts; any check still in flight is discarded.
+    const IDLE_RECHECK_MS = 60000, IDLE_RECHECK_SPREAD_MS = 5000;
+    let idleClockTimer = null;
+    function startIdleClockRechecks() {
+        const next = () => {
+            idleClockTimer = setTimeout(async () => {
+                await SO.clock.recheck({ minIntervalMs: 0, jitterMs: 0 })
+                    .catch(e => log(`⚠️ Clock recheck failed: ${e.message}`, 'warn'));
+                if (idleClockTimer) next();
+            }, IDLE_RECHECK_MS - IDLE_RECHECK_SPREAD_MS + Math.random() * 2 * IDLE_RECHECK_SPREAD_MS);
+        };
+        stopIdleClockRechecks();
+        next();
+    }
+    function stopIdleClockRechecks() {
+        if (idleClockTimer) {
+            clearTimeout(idleClockTimer);
+            idleClockTimer = null;
+            SO.clock.cancelPending();
+            log(`🕰️ Pre-show clock rechecks stopped`, 'info');
+        }
+    }
+
     // ============================================================================
     // CALIBRATION DISPLAY
     // ============================================================================
@@ -1565,8 +1590,12 @@
             tuningStartTime = sched.startTime;
             updateDeviceStatusDisplay();
 
-            // Recheck the clock right before calibration; finishes at least 1.5 s before the start
-            await SO.clock.recheckBefore(sched.startTime).catch(e => log(`⚠️ Pre-calibration clock recheck failed: ${e.message}`));
+            // The pre-show timer kept the clock fresh; stop it so nothing moves the clock during tuning.
+            // Only a phone whose last check is stale (e.g. it slept) rechecks here, finishing in time.
+            stopIdleClockRechecks();
+            const lastSync = SO.clock.status;
+            if (!lastSync || SO.now() - lastSync.at > 90000)
+                await SO.clock.recheckBefore(sched.startTime).catch(e => log(`⚠️ Pre-calibration clock recheck failed: ${e.message}`));
 
             if (audioCtx && audioCtx.state === 'suspended') {
                 await audioCtx.resume();
@@ -1680,6 +1709,7 @@
         movementStartTime = cue.startTime;
         const indicator = document.getElementById('movement-indicator');
         if (indicator) indicator.querySelector('.status-text').innerText = cue.movement;
+        stopIdleClockRechecks();
         movementToken++;
         movementSoundsLeft = 0;
         if (cue.cues) scheduleTimelineCues(cue.cues);
@@ -1853,6 +1883,7 @@
             // Measure the clock before anything is calibrated or played
             SO.clock.setDeviceId(mySeat.id);
             try { await SO.clock.sync(); } catch (e) { log(`⚠️ Clock sync failed, using Firebase's estimate: ${e.message}`, 'warn'); }
+            startIdleClockRechecks();
             await loadNeighborMap();
             await loadTuningConfig();
             audioCtx = new (window.AudioContext || window.webkitAudioContext)();

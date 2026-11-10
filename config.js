@@ -124,7 +124,8 @@
         if (clockSyncing) return clockSyncing;
         const id = deviceId || clockDeviceId || 'unnamed';
         const ref = db.ref('clock_sync/' + id);
-        clockSyncing = (async () => {
+        const gen = clockSyncGen;
+        const run = (async () => {
             let best = null, got = 0, lo = -Infinity, hi = Infinity;
             const within = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]);
             for (let i = 0; i < samples; i++) {
@@ -146,6 +147,7 @@
                 } catch (e) { /* one failed sample is fine */ }
             }
             if (!best) throw new Error('clock sync: no round trips succeeded');
+            if (gen !== clockSyncGen) return null;   // cancelled (e.g. tuning started): don't touch the clock
             if (lo > hi) {   // samples disagree (e.g. the clock was stepped mid-sync): use the fastest one
                 lo = best.offset - best.rttMs / 2;
                 hi = best.offset + best.rttMs / 2;
@@ -162,8 +164,18 @@
             if (clockDeviceId) db.ref(`devices/${clockDeviceId}/clock`).set(lastClockSync).catch(() => {});
             notifyClock();
             return lastClockSync;
-        })().finally(() => { clockSyncing = null; });
-        return clockSyncing;
+        })();
+        const p = run.finally(() => { if (clockSyncing === p) clockSyncing = null; });
+        clockSyncing = p;
+        return p;
+    }
+
+    // Discards the result of a sync that is still running, so it can't move the clock later
+    // (call when calibration or a movement starts).
+    let clockSyncGen = 0;
+    function clockCancelPending() {
+        clockSyncGen++;
+        clockSyncing = null;
     }
 
     // Recheck just before a timed event such as calibration, which starts at server time startMs.
@@ -625,7 +637,7 @@
         now, onClockSync,
         get serverOffset() { return now() - Date.now(); },   // legacy: server − Date.now()
         clock: {
-            sync: clockSync, recheck: clockRecheck, recheckBefore: clockRecheckBefore,
+            sync: clockSync, recheck: clockRecheck, recheckBefore: clockRecheckBefore, cancelPending: clockCancelPending,
             setDeviceId: id => { clockDeviceId = id; },
             get status() { return lastClockSync; },
             get precise() { return clockPrecise; },
