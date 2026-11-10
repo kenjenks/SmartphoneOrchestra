@@ -151,18 +151,22 @@
     let mySeat = null;
     let serverOffset = 0;
     let isActive = false;
-    let activeTimeout = null;
     let heartbeatInterval = null;
-    let pillarAudioElement = null;
     let animationFrame = null;
     let isPlaying = false;
     let currentPlaybackType = null;
     let currentSessionId = null;
     let pillarConfig = {};
 
-    // Hardware priming state
+    // Web Audio playback state
+    const bufferCache = new Map();   // url -> Promise<AudioBuffer>; each file is downloaded and decoded once
     let primedBuffers = new Set();
-    let primePromise = null;
+    let currentSource = null;        // the AudioBufferSourceNode playing (or scheduled) now
+    let playStartCtx = 0;            // audio-clock time at which the file's beginning would sound
+    let playDuration = 0;
+    let startWatch = null;           // timer that updates the screen when the scheduled start arrives
+    let scheduleToken = 0;           // bumps on every new cue or stop, so a slow download can't start a stale cue
+    const LATE_JOIN_LIMIT_MS = 5000; // later than this, skip the cue instead of joining it part-way
 
     // Constants
     const HEARTBEAT_INTERVAL_MS = 10000;
@@ -186,50 +190,71 @@
         document.getElementById('sync-ind').className = 'indicator active';
     });
 
+    // ==================== AUDIO FILES (decoded once) ====================
+    // Downloads and decodes a file the first time it is needed, then reuses the AudioBuffer.
+    function getBuffer(url) {
+        if (!bufferCache.has(url)) {
+            const t0 = performance.now();
+            const p = fetch(url)
+                .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.arrayBuffer(); })
+                .then(ab => audioCtx.decodeAudioData(ab))
+                .then(buf => {
+                    log(`📦 Decoded ${url.split('/').pop()}: ${buf.duration.toFixed(1)} s in ${Math.round(performance.now() - t0)} ms`);
+                    return buf;
+                });
+            p.catch(() => bufferCache.delete(url));   // let a later cue retry
+            bufferCache.set(url, p);
+        }
+        return bufferCache.get(url);
+    }
+
+    // Converts a server-clock time (ms) to the audio clock (s). Same convention as reset_pillar.html,
+    // so the speakerDelayMs it measures applies to this playback path.
+    function serverToAudioTime(serverMs) {
+        return audioCtx.currentTime + (serverMs - (Date.now() + serverOffset)) / 1000;
+    }
+
     // ==================== HARDWARE PRIMING ====================
+    // Plays the first 0.1 s of the real file almost silently, so the speaker path is awake.
     async function primeWithWaveform(audioUrl) {
         if (!audioCtx || audioCtx.state !== 'running') {
             log(`⚠️ Cannot prime – audio context not running`, 'warn');
             return false;
         }
-        if (primedBuffers.has(audioUrl)) {
-            log(`🔊 Already primed for ${audioUrl.split('/').pop()}`, 'debug');
-            return true;
-        }
-
         try {
-            // Fetch and decode the audio file
-            const response = await fetch(audioUrl);
-            const arrayBuffer = await response.arrayBuffer();
-            const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-
-            // Create a short prime snippet (first 0.1 seconds of the actual waveform)
-            const durationSec = Math.min(0.1, audioBuffer.duration);
-            const sampleRate = audioBuffer.sampleRate;
-            const samples = Math.floor(durationSec * sampleRate);
-            const primeBuffer = audioCtx.createBuffer(1, samples, sampleRate);
-            const srcData = audioBuffer.getChannelData(0);
-            const dstData = primeBuffer.getChannelData(0);
-            for (let i = 0; i < samples; i++) {
-                dstData[i] = srcData[i];
-            }
-
-            // Play at very low volume
+            const buffer = await getBuffer(audioUrl);
+            if (primedBuffers.has(audioUrl)) return true;
             const source = audioCtx.createBufferSource();
-            source.buffer = primeBuffer;
+            source.buffer = buffer;
             const gainNode = audioCtx.createGain();
             gainNode.gain.value = 0.001; // 0.1% volume
-            source.connect(gainNode);
-            gainNode.connect(audioCtx.destination);
-            source.start();
-            source.stop(audioCtx.currentTime + durationSec);
-
+            source.connect(gainNode).connect(audioCtx.destination);
+            source.start(0, 0, Math.min(0.1, buffer.duration));
             primedBuffers.add(audioUrl);
-            log(`🔊 Primed hardware with ${durationSec*1000}ms of actual waveform (gain=0.001)`);
+            log(`🔊 Primed hardware with 100 ms of ${audioUrl.split('/').pop()} (gain=0.001)`);
             return true;
         } catch (e) {
             log(`❌ Priming failed for ${audioUrl.split('/').pop()}: ${e.message}`, 'error');
             return false;
+        }
+    }
+
+    // Decodes every pillar asset for this pillar found in show/movements, in the background,
+    // so a GO cue never waits for a download.
+    async function preloadShowAssets() {
+        try {
+            const movements = (await db.ref('show/movements').once('value')).val();
+            const urls = new Set();
+            (function scan(o) {
+                if (!o || typeof o !== 'object') return;
+                if (o.type === 'pillar' && o.id === mySeat.id && o.audio_url) urls.add(o.audio_url);
+                Object.values(o).forEach(scan);
+            })(movements);
+            if (!urls.size) return;
+            log(`📥 Preloading ${urls.size} show file(s) for ${mySeat.id}`);
+            for (const url of urls) await getBuffer(url).catch(e => log(`⚠️ Preload failed for ${url.split('/').pop()}: ${e.message}`));
+        } catch (e) {
+            log(`⚠️ Could not preload show files: ${e.message}`);
         }
     }
 
@@ -324,13 +349,9 @@
     function startVisualizer() {
         if (animationFrame) cancelAnimationFrame(animationFrame);
         function updateVisualizer() {
-            if (pillarAudioElement && isPlaying) {
-                const duration = pillarAudioElement.duration;
-                const currentTime = pillarAudioElement.currentTime;
-                if (duration && !isNaN(duration)) {
-                    const percent = (currentTime / duration) * 100;
-                    document.getElementById('visualizer-fill').style.width = percent + '%';
-                }
+            if (currentSource && isPlaying && playDuration > 0) {
+                const percent = Math.min(100, Math.max(0, (audioCtx.currentTime - playStartCtx) / playDuration * 100));
+                document.getElementById('visualizer-fill').style.width = percent + '%';
             }
             animationFrame = requestAnimationFrame(updateVisualizer);
         }
@@ -345,162 +366,119 @@
         document.getElementById('visualizer-fill').style.width = '0%';
     }
 
-    // ==================== PLAY PILLAR AUDIO (with priming) ====================
-    async function playPillarAudio(audioUrl) {
-        if (!audioUrl) {
-            audioUrl = pillarConfig[mySeat.id]?.audioUrl;
-        }
-        if (!audioUrl) {
-            log(`❌ No audio URL for ${mySeat.id}`);
-            return;
-        }
-
-        // Prime the hardware with the actual waveform before playing
-        await primeWithWaveform(audioUrl);
-
-        try {
-            if (pillarAudioElement) {
-                pillarAudioElement.pause();
-                pillarAudioElement = null;
-            }
-
-            const audioLoadStart = Date.now() + serverOffset;
-            log(`📀 Loading audio for ${mySeat.id}: ${audioUrl.split('/').pop()}`);
-
-            pillarAudioElement = new Audio(audioUrl);
-            pillarAudioElement.volume = 1.0;
-            pillarAudioElement.loop = false;
-            pillarAudioElement.preload = 'auto';
-
-            let loadCompleted = false;
-            pillarAudioElement.oncanplaythrough = () => {
-                if (!loadCompleted) {
-                    loadCompleted = true;
-                    const loadTime = (Date.now() + serverOffset) - audioLoadStart;
-                    log(`✅ Audio loaded for ${mySeat.id} in ${loadTime}ms`);
-                }
-            };
-
-            pillarAudioElement.onplay = () => {
-                const actualPlayTime = Date.now() + serverOffset;
-                const expectedPlayTime = currentPlaybackStartTime || 0;
-                const playDelay = actualPlayTime - expectedPlayTime;
-                const timeSinceLoad = actualPlayTime - audioLoadStart;
-
-                isPlaying = true;
-
-                const actualStr = new Date(actualPlayTime).toISOString().substr(11, 12) + '.' + String(actualPlayTime % 1000).padStart(3, '0');
-
-                log(`🔊 Pillar ${mySeat.id} STARTED playing at ${actualStr}`);
-                log(`   Playback deviation: ${playDelay > 0 ? '+' : ''}${playDelay.toFixed(1)}ms`);
-
-                const syncData = {
-                    pillarId: mySeat.id,
-                    expectedStart: expectedPlayTime,
-                    actualStart: actualPlayTime,
-                    deviation: playDelay,
-                    timeSinceLoad: timeSinceLoad,
-                    timestamp: actualPlayTime,
-                    playbackType: currentPlaybackType,
-                    speakerDelay: pillarConfig[mySeat.id]?.speakerDelayMs
-                };
-
-                db.ref(`pillar_sync/${mySeat.id}/${Date.now()}`).set(syncData).catch(e => {
-                    log(`⚠️ Failed to log sync data: ${e.message}`);
-                });
-
-                document.getElementById('performance-overlay').innerHTML =
-                    `Pillar: ${mySeat.id} | Status: PLAYING (${currentPlaybackType || ''}) | ` +
-                    `Delay: ${pillarConfig[mySeat.id]?.speakerDelayMs}ms | ` +
-                    `Deviation: ${playDelay > 0 ? '+' : ''}${playDelay.toFixed(0)}ms`;
-
-                const canvas = document.getElementById('stage-canvas');
-                const ctx = canvas.getContext('2d');
-                ctx.fillStyle = '#ffaa44';
-                ctx.fillRect(0, 0, canvas.width, canvas.height);
-                setTimeout(() => ctx.clearRect(0, 0, canvas.width, canvas.height), 200);
-
-                startVisualizer();
-            };
-
-            pillarAudioElement.onended = () => {
-                log(`🔊 Pillar ${mySeat.id} FINISHED playing`);
-                isPlaying = false;
-                document.getElementById('performance-overlay').innerHTML = `Pillar: ${mySeat.id} | Status: Ready`;
-                stopVisualizer();
-            };
-
-            pillarAudioElement.onerror = (e) => {
-                log(`❌ Pillar audio error for ${mySeat.id}: ${e.message || 'Unknown error'}`);
-                isPlaying = false;
-                document.getElementById('performance-overlay').innerHTML = `Pillar: ${mySeat.id} | Status: ERROR`;
-            };
-
-            const playPromise = pillarAudioElement.play();
-            if (playPromise) {
-                playPromise.catch(e => {
-                    log(`❌ Playback failed for ${mySeat.id}: ${e.message}`);
-                    isPlaying = false;
-                });
-            }
-
-        } catch (e) {
-            log(`❌ Failed to create audio element: ${e.message}`);
-        }
-    }
-
     // ==================== SCHEDULE PLAYBACK ====================
     let currentPlaybackStartTime = 0;
 
-    function schedulePlayback(startTime, audioUrl, type = 'show') {
+    // startTime is the server time (ms) at which the sound should be heard. The source is started
+    // speakerDelayMs earlier, on the audio clock, with source.start(when): sample-accurate, no timers.
+    // If the cue arrives late (up to 5 s), the file is joined part-way so it stays in sync.
+    async function schedulePlayback(startTime, audioUrl, type = 'show') {
         const myConfig = pillarConfig[mySeat.id];
-        if (!myConfig || !myConfig.audioUrl) {
+        const url = audioUrl || myConfig?.audioUrl;
+        if (!url) {
             log(`❌ Cannot schedule - no audio URL for ${mySeat.id}`);
             return;
         }
+        if (!audioCtx) {
+            log(`❌ Cannot schedule - audio not started (tap ACTIVATE PILLAR)`);
+            return;
+        }
+        if (audioCtx.state === 'suspended') await audioCtx.resume().catch(() => {});
 
-        const nowWall = Date.now() + serverOffset;
-        const pillarSpeakerDelay = myConfig.speakerDelayMs;
-        const urlToPlay = audioUrl || myConfig.audioUrl;
+        stopPlayback();
+        const token = ++scheduleToken;
 
-        const adjustedStartTime = startTime - pillarSpeakerDelay;
-        const delayMs = adjustedStartTime - nowWall;
+        let buffer;
+        try {
+            buffer = await getBuffer(url);
+        } catch (e) {
+            log(`❌ Could not load ${url.split('/').pop()}: ${e.message}`);
+            return;
+        }
+        if (token !== scheduleToken) return;   // a newer cue or a stop arrived while loading
 
-        log(`🎵 Scheduling pillar ${mySeat.id} playback (${type})`);
-        log(`   Delay: ${delayMs.toFixed(1)}ms`);
+        const speakerDelay = myConfig?.speakerDelayMs ?? SO.FALLBACK.speakerDelayMs;
+        const sourceStartServer = startTime - speakerDelay;          // when the source must start
+        const lateMs = (Date.now() + serverOffset) - sourceStartServer;
 
-        if (activeTimeout) {
-            clearTimeout(activeTimeout);
-            activeTimeout = null;
+        if (lateMs > LATE_JOIN_LIMIT_MS || lateMs / 1000 >= buffer.duration) {
+            log(`❌ Cue is ${Math.round(lateMs)} ms late, skipping (${type})`);
+            return;
         }
 
-        // Increased tolerance to 5000ms (from 1000ms)
-        if (delayMs > 0) {
-            activeTimeout = setTimeout(() => {
-                currentPlaybackType = type;
-                currentPlaybackStartTime = startTime;
-                playPillarAudio(urlToPlay);
-                activeTimeout = null;
-            }, delayMs);
-        } else if (delayMs > -5000) {
-            log(`⚠️ Playback is ${Math.round(-delayMs)}ms late, playing immediately`);
-            currentPlaybackType = type;
-            currentPlaybackStartTime = startTime;
-            playPillarAudio(urlToPlay);
+        const source = audioCtx.createBufferSource();
+        source.buffer = buffer;
+        const gain = audioCtx.createGain();
+        gain.gain.value = 1.0;
+        source.connect(gain).connect(audioCtx.destination);
+
+        let when, offset = 0;
+        if (lateMs > 0) {
+            offset = lateMs / 1000;
+            when = audioCtx.currentTime;
+            log(`⚠️ Cue arrived ${Math.round(lateMs)} ms late: joining ${offset.toFixed(3)} s into the file to stay in sync`);
         } else {
-            log(`❌ Playback too late (${Math.round(-delayMs)}ms), skipping`);
+            when = serverToAudioTime(sourceStartServer);
         }
+        source.start(when, offset);
+
+        currentSource = source;
+        playStartCtx = when - offset;
+        playDuration = buffer.duration;
+        currentPlaybackType = type;
+        currentPlaybackStartTime = startTime;
+
+        log(`🎵 ${mySeat.id} ${type}: source starts ${Math.max(0, -lateMs).toFixed(0)} ms from now (audio clock ${when.toFixed(3)} s, speaker delay ${speakerDelay} ms)`);
+
+        source.onended = () => {
+            if (currentSource !== source) return;
+            currentSource = null;
+            isPlaying = false;
+            log(`🔊 Pillar ${mySeat.id} FINISHED playing`);
+            document.getElementById('performance-overlay').innerHTML = `Pillar: ${mySeat.id} | Status: Ready`;
+            stopVisualizer();
+        };
+
+        // Screen and sync record when the start arrives (display only; the audio is already scheduled)
+        startWatch = setTimeout(() => {
+            startWatch = null;
+            if (currentSource !== source) return;
+            isPlaying = true;
+            db.ref(`pillar_sync/${mySeat.id}/${Date.now()}`).set({
+                pillarId: mySeat.id,
+                method: 'webaudio',
+                expectedStart: startTime,               // when the sound should be heard (server ms)
+                sourceStart: sourceStartServer,         // when the source was told to start (server ms)
+                lateJoinMs: Math.max(0, Math.round(lateMs)),
+                speakerDelay: speakerDelay,
+                playbackType: type,
+                timestamp: Date.now() + serverOffset
+            }).catch(e => log(`⚠️ Failed to log sync data: ${e.message}`));
+
+            document.getElementById('performance-overlay').innerHTML =
+                `Pillar: ${mySeat.id} | Status: PLAYING (${type}) | Delay: ${speakerDelay}ms` +
+                (lateMs > 0 ? ` | joined ${Math.round(lateMs)}ms late` : '');
+            const canvas = document.getElementById('stage-canvas');
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#ffaa44';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            setTimeout(() => ctx.clearRect(0, 0, canvas.width, canvas.height), 200);
+            startVisualizer();
+        }, Math.max(0, (when - audioCtx.currentTime) * 1000));
     }
 
     function stopPlayback() {
-        if (pillarAudioElement) {
-            pillarAudioElement.pause();
-            pillarAudioElement = null;
-            log(`⏹️ Playback stopped`);
+        scheduleToken++;
+        if (startWatch) {
+            clearTimeout(startWatch);
+            startWatch = null;
         }
-        if (activeTimeout) {
-            clearTimeout(activeTimeout);
-            activeTimeout = null;
+        if (currentSource) {
+            const s = currentSource;
+            currentSource = null;
+            try { s.stop(); } catch (e) { /* not started yet or already stopped */ }
+            try { s.disconnect(); } catch (e) {}
+            log(`⏹️ Playback stopped`);
         }
         isPlaying = false;
         currentPlaybackType = null;
@@ -543,7 +521,7 @@
         db.ref('tuning/current').on('value', snap => {
             const schedule = snap.val();
             if (!schedule) {
-                if (activeTimeout) {
+                if (currentSource) {
                     log(`⚠️ Tuning schedule cleared`);
                     stopPlayback();
                 }
@@ -632,8 +610,8 @@
     // ==================== AUDIO CONTEXT ====================
     async function initAudio() {
         try {
-            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            log(`🎛️ Audio context created (state: ${audioCtx.state})`);
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
+            log(`🎛️ Audio context created (state: ${audioCtx.state}, ${audioCtx.sampleRate} Hz, base latency ${Math.round((audioCtx.baseLatency || 0) * 1000)} ms)`);
             if (audioCtx.state === 'suspended') {
                 document.body.addEventListener('click', () => {
                     if (audioCtx && audioCtx.state === 'suspended') {
@@ -689,10 +667,11 @@
         log(`   Audio: ${myConfig?.audioUrl?.split('/').pop() || 'none'}`);
         log(`   Speaker delay: ${myConfig?.speakerDelayMs}ms`);
 
-        // Prime the pillar's audio hardware with its own waveform (if URL exists)
+        // Decode this pillar's own file once and prime the speaker with it
         if (myConfig && myConfig.audioUrl) {
             await primeWithWaveform(myConfig.audioUrl);
         }
+        preloadShowAssets();   // background; GO cues won't wait for downloads
 
         setTimeout(() => playTestTone(), 500);
 
@@ -748,7 +727,6 @@
     window.addEventListener('beforeunload', () => {
         stopPlayback();
         stopHeartbeat();
-        if (activeTimeout) clearTimeout(activeTimeout);
     });
 </script>
 </html>
