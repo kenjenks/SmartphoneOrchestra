@@ -210,11 +210,11 @@
             log(`⚠️ Cannot prime – audio context not running`, 'warn');
             return false;
         }
-        if (primedBuffers.has(buffer)) {
+        if (primedBuffers.has(buffer) || SO.audio.isPrimed(buffer)) {
             return true;
         }
-        const gainValue = options.gain || 0.0001;   // inaudible
-        const durationSec = options.duration || 0.05; // 50 ms
+        const gainValue = options.gain ?? SO.audio.PRIME_DEFAULTS.gain;                 // 0.001, inaudible
+        const durationSec = options.duration ?? SO.audio.PRIME_DEFAULTS.durationSec;   // 0.1 s (mandatory)
         const playDuration = Math.min(durationSec, buffer.duration);
         try {
             SO.audio.primeBuffer(audioCtx, buffer, { gain: gainValue, durationSec: playDuration });
@@ -1603,7 +1603,7 @@
                 if (diagnoseMode) diagnoseBuffer(deviceBuffer, assignedNotes);
 
                 // PRIME THE HARDWARE for tuning movement
-                await primeBuffer(deviceBuffer, { gain: 0.0005, duration: 0.08 });
+                await primeBuffer(deviceBuffer);   // 0.1 s at gain 0.001, before the tuning stream is scheduled
             }
 
             if (!isListenOnlyMode) {
@@ -1708,10 +1708,7 @@
             return;
         }
         const buffer = bufferCache[url];
-        if (!primedBuffers.has(buffer)) {          // wake the speaker now, well before the start
-            SO.audio.primeBuffer(audioCtx, buffer, { gain: 0.0001, durationSec: 0.05 });
-            primedBuffers.add(buffer);
-        }
+        // playAt primes the buffer (0.1 s at gain 0.001) first if it hasn't been primed yet
         const r = SO.audio.playAt(audioCtx, buffer, serverMs, {
             leadMs, gain: 1.0, destination: masterGain || audioCtx.destination
         });

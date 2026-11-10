@@ -561,7 +561,7 @@
         const audioBuffer = await preloadAudio(url);
         if (!audioBuffer) return;
 
-        SO.audio.primeBuffer(audioCtx, audioBuffer, { gain: 0, durationSec: SILENT_WARMUP_MS / 1000, destination: masterGain || audioCtx.destination });
+        SO.audio.primeBuffer(audioCtx, audioBuffer, { destination: masterGain || audioCtx.destination });   // 0.1 s at gain 0.001
         addLog(`🔇 Warm-up pulse for ${pillarId} (priming MP3 path)`);
     }
 

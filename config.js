@@ -18,8 +18,9 @@
  *   SO.validatePillarConfig(data), SO.validateSeatConfig(seats, pillarConfig)
  *   SO.audio.getBuffer(ctx, url), SO.audio.playAt(ctx, buffer, serverMs, opts), SO.audio.primeBuffer(ctx, buffer)
  *
- * Every page plays sound files through SO.audio.playAt: decoded once, started with
- * source.start(when) on the audio clock, joined part-way if the cue is late.
+ * Every page plays sound files through SO.audio.playAt: preloaded and decoded once, primed
+ * (0.1 s at gain 0.001) before its first play, started with source.start(when) on the
+ * audio clock, and joined part-way if the cue is late.
  *
  * Validators return { errors: [...], warnings: [...] }.
  * Errors mean "refuse the upload". Warnings mean "ask before uploading".
@@ -438,6 +439,11 @@
         }
         if (!opts.loop && offset >= buffer.duration) return { skipped: true, lateMs, reason: 'start point is past the end of the file' };
 
+        // Mandatory: a buffer is never played before it has been primed (0.1 s at gain 0.001).
+        // Priming done earlier with primeBuffer() counts, so it is not repeated.
+        const primedNow = !primedSet.has(buffer);
+        if (primedNow) primeBuffer(ctx, buffer, { destination: opts.destination });
+
         const source = ctx.createBufferSource();
         source.buffer = buffer;
         if (opts.loop) source.loop = true;
@@ -447,12 +453,15 @@
         gain.connect(opts.destination || ctx.destination);
         if (opts.duration) source.start(when, offset, opts.duration);
         else source.start(when, offset);
-        return { source, gain, when, offset, lateMs };
+        return { source, gain, when, offset, lateMs, primedNow };
     }
 
-    // Plays the first ~0.1 s almost silently, right now, to wake the speaker path.
-    // Call it ahead of a cue, never inside the timed path.
-    function primeBuffer(ctx, buffer, { gain = 0.001, durationSec = 0.1, destination } = {}) {
+    // Plays the first 0.1 s of the buffer almost silently, right now, to wake the speaker path.
+    // playAt() calls this automatically for any buffer not yet primed; pages may also call it
+    // earlier (e.g. at activation) so the hardware is awake well before the first cue.
+    const PRIME_DEFAULTS = Object.freeze({ gain: 0.001, durationSec: 0.1 });
+    const primedSet = new WeakSet();
+    function primeBuffer(ctx, buffer, { gain = PRIME_DEFAULTS.gain, durationSec = PRIME_DEFAULTS.durationSec, destination } = {}) {
         const s = ctx.createBufferSource();
         s.buffer = buffer;
         const g = ctx.createGain();
@@ -460,7 +469,9 @@
         s.connect(g);
         g.connect(destination || ctx.destination);
         s.start(0, 0, Math.min(durationSec, buffer.duration));
+        primedSet.add(buffer);
     }
+    const isPrimed = buffer => primedSet.has(buffer);
 
     // ---------------------------------------------------------------- Tuning mode
     async function loadTuningMode() {
@@ -517,7 +528,7 @@
         validatePillarConfig, normalizePillarConfig, loadPillarConfig, watchPillarConfig,
         parseSeatTsv, computeNeighborMap, validateSeatConfig, normalizeSeatConfig, loadSeatConfig, getSeat,
         loadTuningMode,
-        audio: { getBuffer, serverToAudioTime, playAt, primeBuffer },
+        audio: { getBuffer, serverToAudioTime, playAt, primeBuffer, isPrimed, PRIME_DEFAULTS },
         geometry: { dist, pillarPolygon, distanceOutside }
     };
 })();
