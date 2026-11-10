@@ -288,7 +288,7 @@
         if (logFlushTimer) clearInterval(logFlushTimer);
         logFlushTimer = setInterval(flushLogs, LOG_FLUSH_INTERVAL_MS);
 
-        const serverTimestamp = Date.now() + (serverOffset || 0);
+        const serverTimestamp = SO.now();
         pillarLog(`🚀 Pillar ${myId} started at ${new Date(serverTimestamp).toISOString()}`);
         pillarLog(`   Platform: ${navigator.platform}, User Agent: ${navigator.userAgent.substring(0, 100)}`);
 
@@ -304,7 +304,7 @@
 
         const batch = {};
         logsToSend.forEach((logEntry, index) => {
-            const ts = Date.now() + (serverOffset || 0);
+            const ts = SO.now();
             batch[`${ts}_${index}_${Math.random().toString(36).substr(2, 6)}`] = logEntry;
         });
 
@@ -322,7 +322,7 @@
     }
 
     function pillarLog(message, type = 'info') {
-        const serverTimestamp = Date.now() + (serverOffset || 0);
+        const serverTimestamp = SO.now();
         const timeStr = new Date(serverTimestamp).toISOString().substr(11, 12);
 
         console.log(`[${timeStr}] [${myId || 'unknown'}] ${message}`);
@@ -468,7 +468,7 @@
     // --------------------------------------------------------------
     function updateSyncStatus() {
         if (serverOffset !== 0) {
-            const now = Date.now() + serverOffset;
+            const now = SO.now();
             const nowStr = new Date(now).toISOString().substr(11, 12) + '.' + String(now % 1000).padStart(3, '0');
             syncStatusSpan.innerHTML = `⏱️ Firebase time: ${nowStr} | offset: ${serverOffset > 0 ? '+' : ''}${serverOffset}ms`;
         }
@@ -572,7 +572,7 @@
         const audioBuffer = await preloadAudio(url);
         if (!audioBuffer) return null;
 
-        const nowServer = Date.now() + serverOffset;
+        const nowServer = SO.now();
         const delayMs = targetFirebaseTime - nowServer - mySpeakerDelay;
 
         // Format timestamps with millisecond precision
@@ -614,7 +614,7 @@
             delayMs: delayMs,
             lateJoinMs: Math.max(0, Math.round(r.lateMs)),
             speakerDelay: mySpeakerDelay,
-            timestamp: Date.now() + serverOffset
+            timestamp: SO.now()
         });
 
         return { source: r.source, scheduledTime: r.when, gainNode: r.gain };
@@ -792,7 +792,7 @@
     async function checkAllPillarsOnline() {
         const snap = await db.ref('devices').once('value');
         const devices = snap.val() || {};
-        const now = Date.now() + serverOffset;
+        const now = SO.now();
         const timeout = 12100;
         let missing = [];
         for (let id of pillarOrder) {
@@ -830,7 +830,7 @@
 
         heartbeatInterval = setInterval(() => {
             db.ref(`devices/${myId}`).update({
-                lastSeen: Date.now() + serverOffset,
+                lastSeen: SO.now(),
                 status: 'ACTIVE',
                 type: 'pillar',
                 x: pillarData[myId]?.x || 0,
@@ -1004,7 +1004,7 @@
         resultHtml += '<div class="small-text" style="margin-top: 8px;">💾 Saved to Firebase. Open the admin page and click "Apply pillar calibration" to use these values.</div>';
 
         // Save for the admin page, which can apply them to pillar_config
-        const results = { computedBy: myId, computedAt: Date.now() + serverOffset, speedOfSound: SPEED_OF_SOUND, pillars: {} };
+        const results = { computedBy: myId, computedAt: SO.now(), speedOfSound: SPEED_OF_SOUND, pillars: {} };
         for (let id of pillarOrder) {
             results.pillars[id] = {
                 speakerDelayMs: pillarData[id].speakerDelayMs,
@@ -1129,6 +1129,9 @@
 
             lastProcessedStartTime = schedule.startTime;
 
+            // Recheck the clock right before calibration; finishes at least 1.5 s before the start
+            await SO.clock.recheckBefore(schedule.startTime).catch(e => addLog(`⚠️ Pre-calibration clock recheck failed: ${e.message}`));
+
             // Use Firebase time from schedule for all pillars
             const globalStartTime = schedule.startTime;
             tuningStartTime = globalStartTime;
@@ -1194,7 +1197,7 @@
                 }
 
                 const windowStartFirebase = globalStartTime + startMs;
-                const nowServer = Date.now() + serverOffset;
+                const nowServer = SO.now();
                 const delayMs = windowStartFirebase - nowServer;
 
                 addLog(`🎯 Will listen for ${pillarId} (${pillarNotesForWindow.length} notes) between ${(startMs/1000).toFixed(1)}s-${(endMs/1000).toFixed(1)}s`);
@@ -1205,7 +1208,7 @@
 
                         // Continuous detection loop for this window
                         const detectionInterval = setInterval(() => {
-                            const now = Date.now() + serverOffset;
+                            const now = SO.now();
                             const songPosition = now - tuningStartTime;
 
                             // Stop if we're past the window
@@ -1304,11 +1307,13 @@
         addLog(`🚀 ${myId} Loaded`);
         document.getElementById('pillar-id-badge').innerText = myId;
 
-        const offsetRef = db.ref(".info/serverTimeOffset");
-        offsetRef.on("value", snap => {
-            serverOffset = snap.val() || 0;
-            addLog(`⏱️ Server time offset: ${serverOffset > 0 ? '+' : ''}${serverOffset}ms`);
+        // Clock comes from config.js; measure it before calibrating
+        SO.onClockSync((offset, status) => {
+            serverOffset = offset;
+            if (status) addLog(`⏱️ Clock measured: ±${status.uncertaintyMs} ms (${status.samples} round trips)`);
         });
+        SO.clock.setDeviceId(myId);
+        try { await SO.clock.sync(); } catch (e) { addLog(`⚠️ Clock sync failed, using Firebase's estimate: ${e.message}`, 'warn'); }
 
         await loadPillarConfig();
         startHeartbeat();

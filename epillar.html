@@ -172,20 +172,16 @@
 
     // ==================== UTILITY FUNCTIONS ====================
     function log(message, eventType = "log", meta = {}) {
-        const timestamp = Date.now() + (serverOffset || 0);
+        const timestamp = SO.now();
         const pillarId = mySeat?.id || 'unknown';
         console.log(`[${new Date(timestamp).toISOString().substr(11, 12)}] [${pillarId}] ${message}`);
     }
 
     // ==================== CLOCK SYNC WITH LOGGING ====================
-    let lastLoggedOffset = 0;
-    db.ref(".info/serverTimeOffset").on("value", snap => {
-        const newOffset = snap.val() || 0;
-        if (Math.abs(newOffset - lastLoggedOffset) > 50) {
-            log(`🕰️ Server offset changed from ${lastLoggedOffset} to ${newOffset}ms`);
-            lastLoggedOffset = newOffset;
-        }
-        serverOffset = newOffset;
+    // Clock comes from config.js (SO.now(): monotonic, measured with SO.clock.sync()).
+    SO.onClockSync((offset, status) => {
+        serverOffset = offset;
+        if (status) log(`🕰️ Clock ${status.changeMs != null ? 'recheck: ' + (status.changeMs > 0 ? '+' : '') + status.changeMs + ' ms' : 'measured'} (±${status.uncertaintyMs} ms)`);
         document.getElementById('sync-ind').className = 'indicator active';
     });
 
@@ -397,7 +393,8 @@
         log(`🎵 ${mySeat.id} ${type}: source starts ${Math.max(0, -lateMs).toFixed(0)} ms from now (audio clock ${when.toFixed(3)} s, speaker delay ${speakerDelay} ms)`);
 
         source.onended = () => {
-            if (currentSource !== source) return;
+            if (currentSource !== source) return;   // stopped or replaced, not finished
+            if (type === 'show') SO.clock.recheck().catch(() => {});   // end of a movement (not after calibration sounds)
             currentSource = null;
             isPlaying = false;
             log(`🔊 Pillar ${mySeat.id} FINISHED playing`);
@@ -418,7 +415,7 @@
                 lateJoinMs: Math.max(0, Math.round(lateMs)),
                 speakerDelay: speakerDelay,
                 playbackType: type,
-                timestamp: Date.now() + serverOffset
+                timestamp: SO.now()
             }).catch(e => log(`⚠️ Failed to log sync data: ${e.message}`));
 
             document.getElementById('performance-overlay').innerHTML =
@@ -459,7 +456,7 @@
         heartbeatInterval = setInterval(() => {
             if (mySeat) {
                 db.ref(`devices/${mySeat.id}`).update({
-                    lastSeen: Date.now() + serverOffset,
+                    lastSeen: SO.now(),
                     status: isPlaying ? 'PLAYING' : 'ACTIVE',
                     type: 'pillar',
                     audioUrl: pillarConfig[mySeat.id]?.audioUrl?.split('/').pop() || 'none',
@@ -484,7 +481,7 @@
 
     // ==================== TUNING LISTENER ====================
     function listenForTuning() {
-        db.ref('tuning/current').on('value', snap => {
+        db.ref('tuning/current').on('value', async snap => {
             const schedule = snap.val();
             if (!schedule) {
                 if (currentSource) {
@@ -521,13 +518,15 @@
                 return;
             }
 
-            const now = Date.now() + serverOffset;
+            const now = SO.now();
             const conductorStartTime = schedule.startTime;
             const timeToStart = conductorStartTime - now;
 
             log(`🎵 Tuning schedule received! Time to start: ${(timeToStart / 1000).toFixed(3)}s`);
 
             stopPlayback();
+            // Recheck the clock right before calibration; finishes at least 1.5 s before the start
+            await SO.clock.recheckBefore(schedule.startTime).catch(e => log(`⚠️ Pre-calibration clock recheck failed: ${e.message}`));
             schedulePlayback(schedule.startTime, null, 'tuning');
         });
     }
@@ -627,6 +626,10 @@
 
         isActive = true;
         startHeartbeat();
+
+        // Measure the clock before the pillar plays anything
+        SO.clock.setDeviceId(mySeat.id);
+        try { await SO.clock.sync(); } catch (err) { log(`⚠️ Clock sync failed, using Firebase's estimate: ${err.message}`); }
 
         const myConfig = pillarConfig[mySeat.id];
         log(`🔊 Pillar ${mySeat.id} activated`);

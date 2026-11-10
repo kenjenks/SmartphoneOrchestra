@@ -242,7 +242,7 @@
         if (periodicLogInterval) clearInterval(periodicLogInterval);
         periodicLogInterval = setInterval(() => {
             if (!tuningStartTime) return;
-            const now = Date.now() + serverOffset;
+            const now = SO.now();
             const songPos = tuningStartTime ? (now - tuningStartTime) : 0;
             const neighborSummary = Array.from(neighborDetectionsPerNeighbor.entries())
                 .map(([id, cnt]) => `${id}:${cnt}`).join(', ');
@@ -372,7 +372,7 @@
         logQueue = [];
         const batch = {};
         logsToSend.forEach((logEntry, index) => {
-            const ts = Date.now() + (serverOffset || 0);
+            const ts = SO.now();
             batch[`${ts}_${index}_${Math.random().toString(36).substr(2, 6)}`] = logEntry;
         });
         logRef.update(batch).catch(e => {
@@ -383,7 +383,7 @@
     }
 
     function log(message, type = 'info') {
-        const serverTimestamp = Date.now() + (serverOffset || 0);
+        const serverTimestamp = SO.now();
         const timeStr = new Date(serverTimestamp).toISOString().substr(11, 12);
         console.log(`[${timeStr}] [${mySeat?.id || 'unknown'}] ${message}`);
         const logEntry = { timestamp: serverTimestamp, timeStr, message, seatId: mySeat ? mySeat.id : 'unknown', type, isHappy, speakerDelay: currentSpeakerDelay, micDelay: myMicDelayMs };
@@ -398,16 +398,26 @@
     const db = SO.db;
 
     // Monitor server offset changes
-    let lastLoggedOffset = 0;
-    db.ref(".info/serverTimeOffset").on("value", snap => {
-        const newOffset = snap.val() || 0;
-        if (Math.abs(newOffset - lastLoggedOffset) > 50) {
-            log(`🕰️ Server offset changed from ${lastLoggedOffset} to ${newOffset}ms`, 'info');
-            lastLoggedOffset = newOffset;
-        }
-        serverOffset = newOffset;
+    // Clock comes from config.js (SO.now(): monotonic, measured with SO.clock.sync()).
+    // serverOffset is kept only for display and logs.
+    SO.onClockSync((offset, status) => {
+        serverOffset = offset;
+        if (status && status.changeMs !== null && status.changeMs !== undefined)
+            log(`🕰️ Clock recheck: ${status.changeMs > 0 ? '+' : ''}${status.changeMs} ms (±${status.uncertaintyMs} ms, ${status.samples} round trips)`, 'info');
+        else if (status) log(`🕰️ Clock measured: ±${status.uncertaintyMs} ms (${status.samples} round trips)`, 'info');
         updateDeviceStatusDisplay();
     });
+
+    // Clock rechecks: right before calibration (in the tuning handler) and at the end of each
+    // movement. Never during the tuning run, whose measurements must all use the same clock,
+    // and never after individual calibration chirps (oboe, tuba).
+    const TUNING_QUIET_MS = 240000;
+    function clockRecheckWhenQuiet() {
+        if (tuningStartTime && SO.now() - tuningStartTime < TUNING_QUIET_MS) return;
+        SO.clock.recheck().catch(e => log(`⚠️ Clock recheck failed: ${e.message}`, 'warn'));
+    }
+    // A movement has ended when every sound it scheduled has finished.
+    let movementToken = 0, movementSoundsLeft = 0;
 
     // ============================================================================
     // CALIBRATION DISPLAY
@@ -825,7 +835,7 @@
         if (isListenOnlyMode) { log(`🔇 Listen‑only mode`); return; }
         if (!deviceBuffer) { log(`❌ Device buffer not ready`); return; }
         const adjStart = startTime - speakerDelay;
-        const delayMs = adjStart - (Date.now() + serverOffset);
+        const delayMs = adjStart - SO.now();
         log(`🔍 startContinuousPlayback: delayMs=${delayMs.toFixed(1)}`);
         if (delayMs >= 30000) {
             log(`❌ Playback start is ${Math.round(delayMs / 1000)} s away; not scheduling`, 'warn');
@@ -850,7 +860,7 @@
             return null;
         }
 
-        const nowWall = Date.now() + serverOffset;
+        const nowWall = SO.now();
         const r = SO.audio.playAt(audioCtx, deviceBuffer, targetWallTime, {
             offsetSec: offsetMs / 1000,
             joinLate,
@@ -909,7 +919,7 @@
             log(`🎧 Single‑device mode: skipping correction scheduling`);
             return false;
         }
-        const nowWall = Date.now() + serverOffset;
+        const nowWall = SO.now();
         const songPos = nowWall - tuningStartTime;
         const nextRest = findNextRestPeriod(songPos);
         if (nextRest && nextRest.durationMs > 300) {
@@ -922,7 +932,7 @@
                     const clamped = Math.max(-500, Math.min(1000, newDelay));
                     log(`🔄 REST CORRECTION: ${currentDelay.toFixed(1)}ms → ${clamped.toFixed(1)}ms`, 'info');
                     currentSpeakerDelay = clamped;
-                    const now2 = Date.now() + serverOffset;
+                    const now2 = SO.now();
                     const curPos = now2 - tuningStartTime;
                     createNewPlaybackStream(now2 - curPos + clamped, clamped, curPos);
                     updateCalibrationDisplay();
@@ -957,7 +967,7 @@
         if (!scheduled) {
             log(`⚠️ No suitable rest, applying immediately`, 'warn');
             currentSpeakerDelay = clamped;
-            const now = Date.now() + serverOffset;
+            const now = SO.now();
             const curPos = now - tuningStartTime;
             createNewPlaybackStream(now - curPos + clamped, clamped, curPos);
         }
@@ -1036,7 +1046,7 @@
     // ============================================================================
     function detectNeighborNotes() {
         if (!isMicActive || !analyser || !frequencyData) { requestAnimationFrame(detectNeighborNotes); return; }
-        const now = Date.now() + serverOffset;
+        const now = SO.now();
         analyser.getByteFrequencyData(frequencyData);
 
         const nyquist = sampleRate/2;
@@ -1089,7 +1099,7 @@
             const expected = noteTimings[note.noteIndex];
             if (!expected || !expected.midi) continue;
             const expectedTime = tuningStartTime + note.startMs;
-            const nowServer = Date.now() + serverOffset;
+            const nowServer = SO.now();
             const windowDelay = expectedTime - nowServer - RECORDING_WINDOW_MS/2;
             if (windowDelay > 0 && windowDelay < 2000) {
                 const key = `rec_${note.deviceId}_${note.noteIndex}`;
@@ -1131,7 +1141,7 @@
             await db.ref(`measurements/${noteIndex}/reporters/${mySeat.id}`).set({
                 targetSeatId: playingSeatId, reporterSeatId: mySeat.id, speakerDelay: Math.round(speakerDelay),
                 rawDelay: Math.round(rawDelay), propagationMs: Math.round(propMs), micDelayMs: myMicDelayMs || 0,
-                reportedAt: Date.now() + serverOffset, detectedAt: detectionTime, noteIndex
+                reportedAt: SO.now(), detectedAt: detectionTime, noteIndex
             });
         } catch (e) { log(`❌ Report failed: ${e.message}`); }
     }
@@ -1141,12 +1151,12 @@
         const frames = [];
         const startTime = expectedNoteTime - windowMs/2;
         const endTime = expectedNoteTime + windowMs/2;
-        let nowServer = Date.now() + serverOffset;
+        let nowServer = SO.now();
         if (startTime > nowServer) await new Promise(r => setTimeout(r, startTime - nowServer));
-        const recordEnd = Date.now() + serverOffset + windowMs;
-        while (Date.now() + serverOffset < recordEnd) {
+        const recordEnd = SO.now() + windowMs;
+        while (SO.now() < recordEnd) {
             analyser.getByteFrequencyData(frequencyData);
-            frames.push({ timestamp: Date.now() + serverOffset, data: compressFrequencyData(frequencyData) });
+            frames.push({ timestamp: SO.now(), data: compressFrequencyData(frequencyData) });
             await new Promise(r => setTimeout(r, 10));
         }
         return { frames, windowMs, startTime, endTime };
@@ -1181,12 +1191,12 @@
         const recordingStart = expectedStart - RECORDING_PRE_MS;
         const recordingEnd = expectedStart + duration + RECORDING_POST_MS;
         const recordingDuration = recordingEnd - recordingStart;
-        const nowWall = Date.now() + serverOffset;
+        const nowWall = SO.now();
         const delayMs = recordingStart - nowWall;
         log(`🎙️ Oboe recording: expectedStart=${expectedStart}, recordingStart=${recordingStart}, nowWall=${nowWall}, delay=${delayMs.toFixed(1)}ms`, 'debug');
         if (delayMs > 0 && delayMs < 30000) {
             setTimeout(async () => {
-                log(`🔴 Oboe recording START at ${Date.now()+serverOffset}`, 'info');
+                log(`🔴 Oboe recording START at ${SO.now()}`, 'info');
                 const recorded = await recordAudioBuffer(recordingDuration);
                 const offset = crossCorrelate(oboeBuffer, recorded);
                 log(`📐 Cross-correlation offset = ${offset.toFixed(1)}ms`, 'debug');
@@ -1226,7 +1236,7 @@
             propagationMs: propMs,
             micDelayMs: myMicDelayMs || 0,
             calibrationId: calibrationId,
-            timestamp: Date.now() + serverOffset
+            timestamp: SO.now()
         });
         log(`📝 Reported oboe detection for ${targetSeat}: ${speakerDelay.toFixed(1)}ms (silent)`, 'phase2');
     }
@@ -1245,14 +1255,14 @@
         const recordingStart = expectedStart - RECORDING_PRE_MS;
         const recordingEnd = expectedStart + duration + RECORDING_POST_MS;
         const recordingDuration = recordingEnd - recordingStart;
-        const nowWall = Date.now() + serverOffset;
+        const nowWall = SO.now();
         const delayMs = recordingStart - nowWall;
 
         log(`🎙️ Tuba recording: expectedStart=${expectedStart}, recordingStart=${recordingStart}, delay=${delayMs.toFixed(1)}ms`, 'debug');
 
         if (delayMs > 0 && delayMs < 30000) {
             setTimeout(async () => {
-                log(`🔴 Tuba recording START at ${Date.now()+serverOffset}`, 'info');
+                log(`🔴 Tuba recording START at ${SO.now()}`, 'info');
                 const recorded = await recordAudioBuffer(recordingDuration);
                 const offset = crossCorrelate(tubaBuffer, recorded);
                 log(`📐 Cross-correlation offset = ${offset.toFixed(1)}ms`, 'debug');
@@ -1287,7 +1297,7 @@
                         db.ref(`devices/${mySeat.id}/mic_cal_result`).set({
                             micDelayMs: myMicDelayMs,
                             source: 'tuba',
-                            timestamp: Date.now() + serverOffset
+                            timestamp: SO.now()
                         });
                     }
                 } else {
@@ -1320,7 +1330,7 @@
             const recordingStartWall = tuningStartTime + windowStartMs - RECORDING_PRE_MS;
             const recordingEndWall = tuningStartTime + windowEndMs + RECORDING_POST_MS;
             const recordingDuration = recordingEndWall - recordingStartWall;
-            const nowWall = Date.now() + serverOffset;
+            const nowWall = SO.now();
             const delayMs = recordingStartWall - nowWall;
 
             if (delayMs > 0 && delayMs < 30000) {
@@ -1376,7 +1386,7 @@
             status: 'HAPPY', calibrated: true,
             finalSpeakerDelay: Math.round(currentSpeakerDelay),
             finalMicDelay: Math.round(myMicDelayMs || 0),
-            convergedAt: Date.now() + serverOffset
+            convergedAt: SO.now()
         });
         updateCalibrationDisplay();
         stopPeriodicLogging();
@@ -1425,7 +1435,7 @@
         if (!mySeat.id) return;
         try {
             await db.ref(`devices/${mySeat.id}`).update({
-                lastSeen: Date.now() + serverOffset,
+                lastSeen: SO.now(),
                 status: isHappy ? 'HAPPY' : (phase1Complete ? 'CALIBRATING' : 'ACTIVE'),
                 calibrated: isHappy,
                 x: mySeat.x, y: mySeat.y,
@@ -1538,7 +1548,7 @@
             const sched = snap.val();
             if (!sched || sched.status !== 'ACTIVE') return;
             if (isProcessingTuning || tuningStartTime === sched.startTime) return;
-            const now = Date.now() + serverOffset;
+            const now = SO.now();
             if (sched.startTime < now - 60000) { log(`❌ Schedule in past`); return; }
 
             // Handle tuba mic calibration
@@ -1554,6 +1564,9 @@
             currentTuningSchedule = sched;
             tuningStartTime = sched.startTime;
             updateDeviceStatusDisplay();
+
+            // Recheck the clock right before calibration; finishes at least 1.5 s before the start
+            await SO.clock.recheckBefore(sched.startTime).catch(e => log(`⚠️ Pre-calibration clock recheck failed: ${e.message}`));
 
             if (audioCtx && audioCtx.state === 'suspended') {
                 await audioCtx.resume();
@@ -1667,6 +1680,8 @@
         movementStartTime = cue.startTime;
         const indicator = document.getElementById('movement-indicator');
         if (indicator) indicator.querySelector('.status-text').innerText = cue.movement;
+        movementToken++;
+        movementSoundsLeft = 0;
         if (cue.cues) scheduleTimelineCues(cue.cues);
     }
     function clearAllScheduledCues() {
@@ -1687,7 +1702,7 @@
         if (canvas) canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
     }
     function scheduleTimelineCues(cues) {
-        const now = Date.now() + serverOffset;
+        const now = SO.now();
         cues.forEach(cue => {
             if (cue.type !== 'MASTER_MEDIA_SYNC') return;
             const offsetMs = (cue.time || 0) * 1000;
@@ -1717,13 +1732,19 @@
             return;
         }
         if (r.lateMs > 0) log(`⚠️ Cue ${cue.id} is ${Math.round(r.lateMs)}ms late, joined ${r.offset.toFixed(2)}s into the file`, 'warn');
+        const token = movementToken;
+        movementSoundsLeft++;
+        r.source.onended = () => {   // when the movement's last sound ends, recheck the clock
+            if (token !== movementToken) return;
+            if (--movementSoundsLeft === 0) clockRecheckWhenQuiet();
+        };
         activeAudioCues.push({ ...cue, source: r.source, gainNode: r.gain });
     }
     function frame(now) {
         const delta = now - lastFrameTime;
         if (delta < FRAME_DURATION) { requestAnimationFrame(frame); return; }
         lastFrameTime = now;
-        const serverNow = Date.now() + serverOffset;
+        const serverNow = SO.now();
         const movInd = document.getElementById('movement-indicator');
         if (movInd) {
             if (currentMovement && movementStartTime > serverNow) {
@@ -1748,7 +1769,7 @@
             } else if (cue.action === 'GO') {
                 handleMovementStart(cue);
             } else if (cue.type === 'SPEAKER_CAL' && cue.instrument === 'oboe') {
-                const nowWall = Date.now() + serverOffset;
+                const nowWall = SO.now();
                 log(`📨 Oboe cue received at ${nowWall}, scheduled startTime=${cue.startTime}, delay=${(cue.startTime - nowWall).toFixed(1)}ms`, 'debug');
                 if (mySeat.id === cue.targetSeat) {
                     // This device is the target – play the oboe
@@ -1829,6 +1850,9 @@
         log("🚀 Loading...");
         try {
             await resolveIdentity();
+            // Measure the clock before anything is calibrated or played
+            SO.clock.setDeviceId(mySeat.id);
+            try { await SO.clock.sync(); } catch (e) { log(`⚠️ Clock sync failed, using Firebase's estimate: ${e.message}`, 'warn'); }
             await loadNeighborMap();
             await loadTuningConfig();
             audioCtx = new (window.AudioContext || window.webkitAudioContext)();

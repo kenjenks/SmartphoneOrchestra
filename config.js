@@ -12,6 +12,9 @@
  *
  * Everything lives on one global object, SO:
  *   SO.db, SO.now(), SO.serverOffset, SO.onClockSync(fn)
+ *   SO.clock.sync()                          measured clock sync (startup)
+ *   SO.clock.recheckBefore(startMs)          recheck right before calibration, finishing in time
+ *   SO.clock.recheck()                       recheck at the end of a movement
  *   SO.requireCrew()                         sign-in gate for admin / conductor
  *   SO.loadPillarConfig(), SO.loadSeatConfig(), SO.getSeat(id), SO.loadTuningMode()
  *   SO.parseSeatTsv(text), SO.computeNeighborMap(seats)
@@ -71,18 +74,116 @@
     const speedFromTemp = c => 331.3 + 0.606 * c;
 
     // ---------------------------------------------------------------- Clock
-    let serverOffset = 0;
+    // SO.now() is server time in ms, read from the browser's monotonic clock (performance.now)
+    // plus an offset, so it never jumps when the phone corrects its own clock.
+    //
+    // The offset starts from Firebase's rough estimate. SO.clock.sync() replaces it with a
+    // measured one from a few write-and-read round trips to the server (see clockSync).
+    // After the first measured sync, Firebase's estimate is ignored (it changes on reconnects).
+    // SO.clock.recheck() re-measures at quiet moments (end of a song, start of a movement);
+    // sounds already scheduled are not affected, because they were placed on the audio clock.
+    const perfNow = () => performance.timeOrigin + performance.now();
+    let clockOffset = 0;            // server time − perfNow()
+    let clockPrecise = false;
     let clockSynced = false;
+    let clockDeviceId = null;
+    let lastClockSync = null;       // { at, rttMs, uncertaintyMs, changeMs, samples }
+    let clockSyncing = null;
     const clockListeners = [];
+    const CLOCK = {
+        SAMPLES: 6,                 // round trips per sync; their ranges are intersected
+        SAMPLE_TIMEOUT_MS: 2000,    // give up on one round trip after this
+        RECHECK_MIN_INTERVAL_MS: 60000,
+        RECHECK_JITTER_MS: 1500     // spread phones out so 500 of them don't sync in the same instant
+    };
+    function notifyClock() {
+        const legacy = now() - Date.now();   // for pages that still print serverOffset
+        clockListeners.forEach(fn => { try { fn(legacy, lastClockSync); } catch (e) { console.error(e); } });
+    }
     db.ref('.info/serverTimeOffset').on('value', snap => {
-        serverOffset = snap.val() || 0;
+        if (clockPrecise) return;
+        clockOffset = (snap.val() || 0) + (Date.now() - perfNow());
         clockSynced = true;
-        clockListeners.forEach(fn => { try { fn(serverOffset); } catch (e) { console.error(e); } });
+        notifyClock();
     });
-    function now() { return Date.now() + serverOffset; }
+    function now() { return perfNow() + clockOffset; }
     function onClockSync(fn) {
         clockListeners.push(fn);
-        if (clockSynced) fn(serverOffset);
+        if (clockSynced) fn(now() - Date.now(), lastClockSync);
+    }
+
+    // One measured sync. Each sample writes the server's own timestamp and reads it back.
+    // The server stamped it somewhere between sending (t0) and the acknowledgement (t1), so the
+    // true offset lies in [stamp − t1, stamp − t0]. Intersecting those ranges over all samples
+    // gives a range that every sample agrees on.
+    //   First sync:  offset = middle of that range.
+    //   Later syncs: keep the current offset if it is still inside the range (so measurement
+    //                noise never moves the clock, and calibration stays valid); otherwise move
+    //                it just far enough to reach the range (real drift is corrected).
+    function clockSync({ samples = CLOCK.SAMPLES, deviceId, deadline } = {}) {
+        if (clockSyncing) return clockSyncing;
+        const id = deviceId || clockDeviceId || 'unnamed';
+        const ref = db.ref('clock_sync/' + id);
+        clockSyncing = (async () => {
+            let best = null, got = 0, lo = -Infinity, hi = Infinity;
+            const within = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]);
+            for (let i = 0; i < samples; i++) {
+                // With a deadline (perfNow ms), stop taking round trips in time and use what we have
+                const left = deadline ? deadline - perfNow() : Infinity;
+                if (left < 60) break;
+                const limit = Math.min(CLOCK.SAMPLE_TIMEOUT_MS, left);
+                try {
+                    const t0 = perfNow();
+                    await within(ref.set(firebase.database.ServerValue.TIMESTAMP), limit);
+                    const t1 = perfNow();
+                    const stamp = (await within(ref.get(), Math.max(30, (deadline ? deadline - perfNow() : limit)))).val();
+                    if (typeof stamp !== 'number') continue;
+                    got++;
+                    lo = Math.max(lo, stamp - t1);
+                    hi = Math.min(hi, stamp - t0);
+                    const s = { rttMs: t1 - t0, offset: stamp - (t0 + t1) / 2 };
+                    if (!best || s.rttMs < best.rttMs) best = s;
+                } catch (e) { /* one failed sample is fine */ }
+            }
+            if (!best) throw new Error('clock sync: no round trips succeeded');
+            if (lo > hi) {   // samples disagree (e.g. the clock was stepped mid-sync): use the fastest one
+                lo = best.offset - best.rttMs / 2;
+                hi = best.offset + best.rttMs / 2;
+            }
+            const before = clockOffset;
+            if (!clockPrecise) clockOffset = (lo + hi) / 2;
+            else clockOffset = Math.min(hi, Math.max(lo, clockOffset));   // move only if outside the range
+            const changeMs = clockPrecise ? clockOffset - before : null;
+            clockPrecise = clockSynced = true;
+            lastClockSync = {
+                at: now(), rttMs: Math.round(best.rttMs), uncertaintyMs: Math.round((hi - lo) / 2 * 10) / 10,
+                changeMs: changeMs === null ? null : Math.round(changeMs * 10) / 10, samples: got
+            };
+            if (clockDeviceId) db.ref(`devices/${clockDeviceId}/clock`).set(lastClockSync).catch(() => {});
+            notifyClock();
+            return lastClockSync;
+        })().finally(() => { clockSyncing = null; });
+        return clockSyncing;
+    }
+
+    // Recheck just before a timed event such as calibration, which starts at server time startMs.
+    // Finishes at least reserveMs before it, taking as many round trips as fit; skips if there is
+    // no time. Not limited to once a minute.
+    async function clockRecheckBefore(startMs, { reserveMs = 1500, jitterMs = 500 } = {}) {
+        const budget = startMs - now() - reserveMs;
+        if (budget < 400) return null;
+        const wait = Math.random() * Math.min(jitterMs, budget / 3);
+        await new Promise(r => setTimeout(r, wait));
+        if (clockSyncing) return null;   // another sync is running; don't risk overrunning the start
+        return clockSync({ deadline: perfNow() + (budget - wait) - 100 });   // 100 ms safety margin
+    }
+
+    // Re-measure at a quiet moment. Does nothing if the last sync was under a minute ago.
+    // Waits a random 0–1.5 s first so a full house doesn't hit the database at once.
+    async function clockRecheck({ minIntervalMs = CLOCK.RECHECK_MIN_INTERVAL_MS, jitterMs = CLOCK.RECHECK_JITTER_MS } = {}) {
+        if (lastClockSync && now() - lastClockSync.at < minIntervalMs) return null;
+        await new Promise(r => setTimeout(r, Math.random() * jitterMs));
+        return clockSync();
     }
 
     // ---------------------------------------------------------------- Geometry
@@ -522,7 +623,14 @@
     window.SO = {
         FIREBASE_CONFIG, LIMITS, FALLBACK, db,
         now, onClockSync,
-        get serverOffset() { return serverOffset; },
+        get serverOffset() { return now() - Date.now(); },   // legacy: server − Date.now()
+        clock: {
+            sync: clockSync, recheck: clockRecheck, recheckBefore: clockRecheckBefore,
+            setDeviceId: id => { clockDeviceId = id; },
+            get status() { return lastClockSync; },
+            get precise() { return clockPrecise; },
+            SETTINGS: CLOCK
+        },
         requireCrew, showWarning,
         speedFromTemp, resolveSpeedOfSound,
         validatePillarConfig, normalizePillarConfig, loadPillarConfig, watchPillarConfig,
