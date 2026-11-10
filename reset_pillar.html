@@ -1122,6 +1122,13 @@
                 return;
             }
 
+            // The conductor's tuba buttons also write tuning/current (type MIC_CAL). That is a
+            // patron-phone mic test, not the pillar calibration: ignore it and keep listening.
+            if (schedule.type) {
+                addLog(`⏭️ Ignoring ${schedule.type}${schedule.instrument ? ' (' + schedule.instrument + ')' : ''} signal; still waiting for START PICCOLO`, 'info');
+                return;
+            }
+
             if (schedule.startTime === lastProcessedStartTime) {
                 addLog(`⏭️ Skipping already processed schedule`, 'info');
                 return;
