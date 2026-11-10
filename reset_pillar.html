@@ -1129,6 +1129,16 @@
                 return;
             }
 
+            // A start left over in the database from an earlier run (Firebase hands the stored
+            // value to every page that opens). Calibration must hear Phase 1 from the beginning,
+            // so a start that has already passed is ignored, and the page keeps waiting.
+            const ageMs = SO.now() - schedule.startTime;
+            if (ageMs > 2000) {
+                addLog(`⏭️ Ignoring an old tuning start from ${new Date(schedule.startTime).toISOString().substr(11, 8)} UTC ` +
+                       `(${Math.round(ageMs / 1000)} s ago); waiting for a new START PICCOLO`, 'info');
+                return;
+            }
+
             if (schedule.startTime === lastProcessedStartTime) {
                 addLog(`⏭️ Skipping already processed schedule`, 'info');
                 return;
