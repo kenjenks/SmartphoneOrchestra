@@ -521,6 +521,13 @@
             const now = SO.now();
             const conductorStartTime = schedule.startTime;
             const timeToStart = conductorStartTime - now;
+            // A tuning run that has already finished (left in the database from earlier): ignore it.
+            // A run still in progress is joined part-way, as before.
+            const runMs = schedule.metadata?.total_duration_ms || schedule.total_duration_ms || 182571;
+            if (-timeToStart > runMs) {
+                log(`⏭️ Ignoring a finished tuning run from ${new Date(conductorStartTime).toISOString().substr(11, 8)} UTC (${Math.round(-timeToStart / 1000)} s ago)`);
+                return;
+            }
 
             log(`🎵 Tuning schedule received! Time to start: ${(timeToStart / 1000).toFixed(3)}s`);
 
