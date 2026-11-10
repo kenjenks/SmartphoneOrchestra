@@ -20,9 +20,14 @@
  * Validators return { errors: [...], warnings: [...] }.
  * Errors mean "refuse the upload". Warnings mean "ask before uploading".
  *
- * Loaders never invent values. If a pillar has no speakerDelayMs, the loader
- * returns null for it and lists a warning, so each page decides what to do
- * instead of silently using 45 ms.
+ * No silent guesses. If pillar_config lacks a value, the loader fills in the
+ * fallback from SO.FALLBACK (the only place those numbers live), marks it in
+ * pillar.assumed, and adds a warning that pages show with SO.showWarning().
+ *
+ * Speed of sound, in order of preference:
+ *   1. pillar_config.room_temp_c   → 331.3 + 0.606 × °C   (set it from the admin page)
+ *   2. pillar_config.speed_of_sound
+ *   3. SO.FALLBACK.speedOfSound, with a warning
  */
 (function () {
     'use strict';
@@ -54,6 +59,11 @@
         MIN_PILLAR_SPAN_M: 3.0          // pillars closer together than this: units error
     };
     const BAD_KEY = /[.$#\[\]\/]/;      // characters Firebase does not allow in keys
+
+    // Used only when pillar_config lacks a value, and always announced with a warning.
+    const FALLBACK = Object.freeze({ speakerDelayMs: 45, micDelayMs: 18, speedOfSound: 343 });
+    const ROOM_TEMP_C = [0, 45];
+    const speedFromTemp = c => 331.3 + 0.606 * c;
 
     // ---------------------------------------------------------------- Clock
     let serverOffset = 0;
@@ -125,18 +135,23 @@
             if (!isNum(p.x) || !isNum(p.y)) errors.push(`${name}: x and y must be numbers (metres).`);
             if (typeof p.audioUrl !== 'string' || !/^https:\/\//.test(p.audioUrl))
                 errors.push(`${name}: missing audioUrl (ePillar cannot activate without it).`);
-            if (p.speakerDelayMs === undefined) warnings.push(`${name}: no speakerDelayMs. Pages will fall back to a guess (45 ms).`);
+            if (p.speakerDelayMs === undefined) warnings.push(`${name}: no speakerDelayMs. Pages will fall back to a guess (${FALLBACK.speakerDelayMs} ms).`);
             else if (!isNum(p.speakerDelayMs) || p.speakerDelayMs < LIMITS.SPEAKER_DELAY_MS[0] || p.speakerDelayMs > LIMITS.SPEAKER_DELAY_MS[1])
                 errors.push(`${name}: speakerDelayMs ${p.speakerDelayMs} is outside ${LIMITS.SPEAKER_DELAY_MS.join('–')} ms.`);
-            if (p.micDelayMs === undefined) warnings.push(`${name}: no micDelayMs. Pages will fall back to a guess (18 ms).`);
+            if (p.micDelayMs === undefined) warnings.push(`${name}: no micDelayMs. Pages will fall back to a guess (${FALLBACK.micDelayMs} ms).`);
             else if (!isNum(p.micDelayMs) || p.micDelayMs < LIMITS.MIC_DELAY_MS[0] || p.micDelayMs > LIMITS.MIC_DELAY_MS[1])
                 errors.push(`${name}: micDelayMs ${p.micDelayMs} is outside ${LIMITS.MIC_DELAY_MS.join('–')} ms.`);
             if (!isNum(p.preferred_freq)) warnings.push(`${name}: no preferred_freq (needed only for the seat survey beacons).`);
         });
         if (data.pillars.length !== 4) warnings.push(`Expected 4 pillars, found ${data.pillars.length}.`);
-        if (data.speed_of_sound === undefined) warnings.push('No speed_of_sound; pages will use 343 m/s.');
-        else if (!isNum(data.speed_of_sound) || data.speed_of_sound < LIMITS.SPEED_OF_SOUND[0] || data.speed_of_sound > LIMITS.SPEED_OF_SOUND[1])
+        if (data.room_temp_c !== undefined &&
+            (!isNum(data.room_temp_c) || data.room_temp_c < ROOM_TEMP_C[0] || data.room_temp_c > ROOM_TEMP_C[1]))
+            errors.push(`room_temp_c ${data.room_temp_c} is outside ${ROOM_TEMP_C.join('–')} °C.`);
+        if (data.speed_of_sound !== undefined &&
+            (!isNum(data.speed_of_sound) || data.speed_of_sound < LIMITS.SPEED_OF_SOUND[0] || data.speed_of_sound > LIMITS.SPEED_OF_SOUND[1]))
             errors.push(`speed_of_sound ${data.speed_of_sound} is outside ${LIMITS.SPEED_OF_SOUND.join('–')} m/s.`);
+        if (data.room_temp_c === undefined && data.speed_of_sound === undefined)
+            warnings.push(`No room_temp_c or speed_of_sound; pages will use ${FALLBACK.speedOfSound} m/s.`);
 
         const pts = data.pillars.filter(p => p && isNum(p.x) && isNum(p.y));
         let span = 0;
@@ -146,26 +161,50 @@
         return { errors, warnings };
     }
 
-    // Returns { pillars: {id: {...}}, list: [...], speedOfSound, warnings } or null.
+    // Resolves the speed of sound: room temperature, then speed_of_sound, then the fallback.
+    function resolveSpeedOfSound(data) {
+        if (data && isNum(data.room_temp_c))
+            return { value: speedFromTemp(data.room_temp_c), source: `room temperature ${data.room_temp_c} °C` };
+        if (data && isNum(data.speed_of_sound))
+            return { value: data.speed_of_sound, source: 'speed_of_sound in pillar_config' };
+        return { value: FALLBACK.speedOfSound, source: 'fallback (not set in pillar_config)' };
+    }
+
+    // Returns { pillars: {id: {...}}, list, speedOfSound, speedOfSoundSource, warnings } or null.
+    // Every pillar has numeric speakerDelayMs and micDelayMs; any filled from FALLBACK are
+    // named in pillar.assumed and in warnings.
     function normalizePillarConfig(data) {
         if (!data || !Array.isArray(data.pillars)) return null;
-        const { warnings } = validatePillarConfig(data);
+        const warnings = [];
         const pillars = {};
         const list = data.pillars.map(p => {
+            const assumed = [];
+            const pick = (key) => {
+                if (isNum(p[key])) return p[key];
+                assumed.push(key);
+                warnings.push(`${p.id}: ${key} is not set in pillar_config, so ${FALLBACK[key]} ms is being assumed.`);
+                return FALLBACK[key];
+            };
             const n = {
                 id: p.id, label: p.label || p.id, x: p.x, y: p.y,
                 audioUrl: p.audioUrl || null,
-                speakerDelayMs: isNum(p.speakerDelayMs) ? p.speakerDelayMs : null,
-                micDelayMs: isNum(p.micDelayMs) ? p.micDelayMs : null,
+                speakerDelayMs: pick('speakerDelayMs'),
+                micDelayMs: pick('micDelayMs'),
                 preferred_freq: isNum(p.preferred_freq) ? p.preferred_freq : null,
-                stagger: isNum(p.stagger) ? p.stagger : 0
+                stagger: isNum(p.stagger) ? p.stagger : 0,
+                assumed
             };
+            if (!n.audioUrl) warnings.push(`${p.id}: no audioUrl in pillar_config.`);
             pillars[p.id] = n;
             return n;
         });
+        const sos = resolveSpeedOfSound(data);
+        if (sos.source.startsWith('fallback'))
+            warnings.push(`Speed of sound is not set in pillar_config, so ${FALLBACK.speedOfSound} m/s is being assumed. Set the room temperature on the admin page.`);
         return {
             pillars, list,
-            speedOfSound: isNum(data.speed_of_sound) ? data.speed_of_sound : 343,
+            speedOfSound: sos.value, speedOfSoundSource: sos.source,
+            roomTempC: isNum(data.room_temp_c) ? data.room_temp_c : null,
             warnings
         };
     }
@@ -174,6 +213,35 @@
         const cfg = normalizePillarConfig(snap.val());
         if (cfg) cfg.warnings.forEach(w => console.warn('[pillar_config] ' + w));
         return cfg;
+    }
+    // Calls fn(cfg) now and whenever pillar_config changes (cfg is null if it is missing).
+    function watchPillarConfig(fn) {
+        db.ref('pillar_config').on('value', snap => fn(normalizePillarConfig(snap.val())));
+    }
+
+    // ---------------------------------------------------------------- Visible warnings
+    // Shows messages in an orange box. With opts.container (an element or its id) the box
+    // goes at the top of that element; otherwise it is pinned to the top of the window.
+    // Calling again replaces the messages for that key, so pages can refresh them.
+    const warningSets = {};
+    function showWarning(key, messages, opts = {}) {
+        warningSets[key] = (Array.isArray(messages) ? messages : [messages]).filter(Boolean);
+        const all = [].concat(...Object.values(warningSets));
+        let box = document.getElementById('so-warnings');
+        if (!all.length) { if (box) box.remove(); return; }
+        if (!box) {
+            box = document.createElement('div');
+            box.id = 'so-warnings';
+            const host = typeof opts.container === 'string' ? document.getElementById(opts.container) : opts.container;
+            box.style.cssText = 'background:#3a2600;color:#ffcc66;border:1px solid #cc8800;border-radius:6px;' +
+                'padding:8px 12px;font:12px/1.4 monospace;text-align:left;z-index:99998;max-height:40vh;overflow:auto;' +
+                (host ? 'margin:10px 0;' : 'position:fixed;top:8px;left:8px;right:8px;');
+            if (host) host.insertBefore(box, host.firstChild); else document.body.appendChild(box);
+        }
+        box.innerHTML = '<b>⚠️ Check pillar_config</b> ' +
+            '<span style="float:right;cursor:pointer" onclick="this.parentNode.remove()">✕</span>' +
+            '<ul style="margin:4px 0 0 18px;padding:0">' +
+            all.map(m => '<li>' + String(m).replace(/</g, '&lt;') + '</li>').join('') + '</ul>';
     }
 
     // ---------------------------------------------------------------- Seat config
@@ -362,11 +430,12 @@
 
     // ---------------------------------------------------------------- Export
     window.SO = {
-        FIREBASE_CONFIG, LIMITS, db,
+        FIREBASE_CONFIG, LIMITS, FALLBACK, db,
         now, onClockSync,
         get serverOffset() { return serverOffset; },
-        requireCrew,
-        validatePillarConfig, normalizePillarConfig, loadPillarConfig,
+        requireCrew, showWarning,
+        speedFromTemp, resolveSpeedOfSound,
+        validatePillarConfig, normalizePillarConfig, loadPillarConfig, watchPillarConfig,
         parseSeatTsv, computeNeighborMap, validateSeatConfig, normalizeSeatConfig, loadSeatConfig, getSeat,
         loadTuningMode,
         geometry: { dist, pillarPolygon, distanceOutside }

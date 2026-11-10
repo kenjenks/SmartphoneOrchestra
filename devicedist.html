@@ -7,6 +7,7 @@
 
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
+    <script src="config.js"></script>
 
     <style>
         body {
@@ -77,7 +78,7 @@
     const SILENT_WARMUP_MS = 1000;
     const HEARTBEAT_BASE_INTERVAL_MS = 10000;
     const HEARTBEAT_JITTER_MS = 2000;
-    const SPEED_OF_SOUND = 343;
+    let SPEED_OF_SOUND = SO.FALLBACK.speedOfSound;   // replaced from pillar_config when it loads
     const MASTER_PLAYBACK_GAIN = 1.5;
     const PICCOLO_MIN_FREQ = 500;
     const PICCOLO_MAX_FREQ = 2100;
@@ -401,14 +402,8 @@
     // ============================================================================
     // FIREBASE INIT
     // ============================================================================
-    const firebaseConfig = {
-        apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
-        authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
-        databaseURL: "https://smartphoneorchestra-dwt-default-rtdb.firebaseio.com/",
-        projectId: "smartphoneorchestra-dwt"
-    };
-    firebase.initializeApp(firebaseConfig);
-    const db = firebase.database();
+    // Firebase setup, clock and pillar_config loading live in config.js
+    const db = SO.db;
 
     // Monitor server offset changes
     let lastLoggedOffset = 0;
@@ -576,14 +571,31 @@
         } catch (e) { log(`❌ Tuning config error: ${e.message}`); }
     }
 
+    // pillar_config comes from Firebase through config.js and stays live. Missing values are
+    // filled from SO.FALLBACK, logged to the conductor, and shown on the setup screen only
+    // (the box disappears with the setup screen, so the audience never sees it).
+    function applyPillarData(cfg) {
+        if (!cfg) {
+            log(`⚠️ No pillar_config in Firebase`, 'warn');
+            SO.showWarning('pillar', ['No pillar_config in Firebase.'], { container: 'setup-screen' });
+            return;
+        }
+        pillarData = {};
+        cfg.list.forEach(p => { pillarData[p.id] = { x: p.x, y: p.y, speakerDelayMs: p.speakerDelayMs, micDelayMs: p.micDelayMs }; });
+        if (SPEED_OF_SOUND !== cfg.speedOfSound || !applyPillarData.done)
+            log(`📡 Loaded ${cfg.list.length} pillars; speed of sound ${cfg.speedOfSound.toFixed(1)} m/s (${cfg.speedOfSoundSource})`);
+        SPEED_OF_SOUND = cfg.speedOfSound;
+        const key = cfg.warnings.join('|');
+        if (key !== applyPillarData.lastWarnings) cfg.warnings.forEach(w => log(`⚠️ ${w}`, 'warn'));
+        applyPillarData.lastWarnings = key;
+        SO.showWarning('pillar', cfg.warnings, { container: 'setup-screen' });
+        applyPillarData.done = true;
+    }
+
     async function loadPillarData() {
         try {
-            const snap = await db.ref('pillar_config').once('value');
-            const config = snap.val();
-            if (config && config.pillars) {
-                config.pillars.forEach(p => { pillarData[p.id] = { x: p.x, y: p.y, speakerDelayMs: p.speakerDelayMs || 45, micDelayMs: p.micDelayMs || 18 }; });
-                log(`📡 Loaded ${Object.keys(pillarData).length} pillars`);
-            }
+            applyPillarData(await SO.loadPillarConfig());
+            SO.watchPillarConfig(applyPillarData);   // picks up admin changes (e.g. room temperature)
         } catch (e) { log(`⚠️ Pillar data error: ${e.message}`); }
     }
 

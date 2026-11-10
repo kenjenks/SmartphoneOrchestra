@@ -122,6 +122,7 @@ Operational SOP for Admin:
             </div>
 
             <div class="button-group">
+                <button class="btn download-btn" onclick="downloadPillarConfig()">Download pillar_config.json</button>
                 <button class="btn download-btn" onclick="downloadSeatConfig()">Download seat_config.tsv</button>
                 <button class="btn download-btn" onclick="downloadTuningConfig()">Download tuning_mode.json</button>
                 <button class="btn btn-success" onclick="checkLiveConfigs()">Check live configs</button>
@@ -131,6 +132,19 @@ Operational SOP for Admin:
                 <div class="status-title">LIVE PILLAR COORDINATES (METERS)</div>
                 <div id="pillar-view">
                     <div style="color: #444; font-style: italic; font-size: 0.8rem;">Checking for pillar config...</div>
+                </div>
+            </div>
+
+            <div class="config-status">
+                <div class="status-title">SPEED OF SOUND &amp; PILLAR CALIBRATION</div>
+                <div style="font-size:0.85rem;">
+                    Room temperature:
+                    <input id="room-temp" type="number" step="0.5" min="0" max="45" style="width:70px;background:#000;color:#eee;border:1px solid #444;padding:4px;border-radius:3px;"> °C
+                    <button class="btn" onclick="setRoomTemp()" style="margin-left:6px;">Set</button>
+                    <div id="sos-display" style="color:#888;margin-top:6px;"></div>
+                </div>
+                <div id="calibration-view" style="margin-top:10px;font-size:0.8rem;color:#666;font-style:italic;">
+                    No pillar calibration results yet. Run reset_pillar.html on the pillars.
                 </div>
             </div>
 
@@ -307,19 +321,31 @@ Operational SOP for Admin:
         function updatePillarView(config) {
             if (!config || !config.pillars) {
                 document.getElementById('pillar-view').innerHTML = '<div style="color: #444; font-style: italic; font-size: 0.8rem;">No Pillar Config Detected in Cloud</div>';
+                document.getElementById('sos-display').innerText = '';
                 return;
             }
-            let html = "<table><tr><th>ID</th><th>Label</th><th>X (m)</th><th>Y (m)</th></tr>";
-            config.pillars.forEach(p => {
+            const cfg = SO.normalizePillarConfig(config);
+            const cell = (p, key) => p.assumed.includes(key)
+                ? `<span style="color:#ffaa44" title="Not set in pillar_config; pages assume this">${p[key]}?</span>` : p[key];
+            let html = "<table><tr><th>ID</th><th>Label</th><th>X (m)</th><th>Y (m)</th><th>Speaker (ms)</th><th>Mic (ms)</th></tr>";
+            cfg.list.forEach(p => {
                 html += `<tr>
                     <td style="color:#00ffcc; font-family:monospace;">${p.id}</td>
                     <td>${p.label}</td>
                     <td>${p.x}</td>
                     <td>${p.y}</td>
+                    <td>${cell(p, 'speakerDelayMs')}</td>
+                    <td>${cell(p, 'micDelayMs')}</td>
                 </tr>`;
             });
             html += "</table>";
             document.getElementById('pillar-view').innerHTML = html;
+
+            const sos = document.getElementById('sos-display');
+            sos.innerHTML = `Speed of sound: <b style="color:#00ffcc">${cfg.speedOfSound.toFixed(1)} m/s</b> (from ${cfg.speedOfSoundSource})`;
+            if (cfg.speedOfSoundSource.startsWith('fallback')) sos.innerHTML += ' <span style="color:#ffaa44">⚠️ set the room temperature</span>';
+            const input = document.getElementById('room-temp');
+            if (document.activeElement !== input) input.value = cfg.roomTempC ?? '';
         }
 
         function updateSeatView(config) {
@@ -502,6 +528,14 @@ Operational SOP for Admin:
             document.getElementById('tuning-status').className = 'status-badge badge-loaded';
         });
 
+        // Observe pillar calibration results from reset_pillar.html
+        let latestCalibration = null;
+        db.ref('pillar_calibration/results').on('value', snap => {
+            latestCalibration = snap.val();
+            db.ref('pillar_config').once('value').then(c => updateCalibrationView(latestCalibration, c.val()));
+        });
+        db.ref('pillar_config').on('value', snap => updateCalibrationView(latestCalibration, snap.val()));
+
         // Observe Registry Counts (Separating Pillars from Patrons)
         db.ref('devices').on('value', snap => {
             const devices = snap.val() || {};
@@ -523,6 +557,13 @@ Operational SOP for Admin:
             reader.onload = async (e) => {
                 try {
                     const data = JSON.parse(e.target.result);
+                    if (data.room_temp_c === undefined) {
+                        const t = (await db.ref('pillar_config/room_temp_c').once('value')).val();
+                        if (typeof t === 'number') {
+                            data.room_temp_c = t;
+                            log(`🌡️ Kept the room temperature already set (${t} °C).`);
+                        }
+                    }
                     if (!reviewChecks('pillar_config', SO.validatePillarConfig(data))) return;
                     log(`Uploading config for ${data.pillars.length} pillars...`);
                     await db.ref('pillar_config').set(data);
@@ -657,7 +698,91 @@ Operational SOP for Admin:
             reader.readAsText(file);
         }
 
+        // --- ROOM TEMPERATURE & PILLAR CALIBRATION ---
+
+        async function setRoomTemp() {
+            const v = document.getElementById('room-temp').value.trim();
+            if (!(await db.ref('pillar_config/pillars').once('value')).exists()) {
+                log('❌ Upload pillar_config.json first.');
+                return;
+            }
+            if (v === '') {
+                if (!confirm('Clear the room temperature? Pages will use speed_of_sound from pillar_config instead.')) return;
+                await db.ref('pillar_config/room_temp_c').remove();
+                log('🌡️ Room temperature cleared.');
+                return;
+            }
+            const c = parseFloat(v);
+            if (!isFinite(c) || c < 0 || c > 45) {
+                log('❌ Room temperature must be between 0 and 45 °C.');
+                return;
+            }
+            await db.ref('pillar_config/room_temp_c').set(c);
+            log(`🌡️ Room temperature set to ${c} °C: speed of sound ${SO.speedFromTemp(c).toFixed(1)} m/s. Open pages pick this up automatically.`);
+        }
+
+        function updateCalibrationView(res, config) {
+            const el = document.getElementById('calibration-view');
+            if (!res || !res.pillars) {
+                el.innerHTML = 'No pillar calibration results yet. Run reset_pillar.html on the pillars.';
+                return;
+            }
+            const current = {};
+            (config?.pillars || []).forEach(p => { current[p.id] = p; });
+            let html = `<div style="font-style:normal;color:#aaa;">Latest reset_pillar results (${new Date(res.computedAt).toLocaleString()}, from ${res.computedBy}):</div>`;
+            html += '<table><tr><th>Pillar</th><th>Speaker (ms) now → measured</th><th>Mic (ms) now → measured</th><th>Samples</th></tr>';
+            Object.keys(res.pillars).sort().forEach(id => {
+                const r = res.pillars[id], c = current[id] || {};
+                html += `<tr><td style="color:#00ffcc">${id}</td>
+                    <td>${c.speakerDelayMs ?? '—'} → <b>${r.speakerDelayMs}</b></td>
+                    <td>${c.micDelayMs ?? '—'} → <b>${r.micDelayMs}</b></td>
+                    <td>${r.samples}${r.samples < 4 ? ' ⚠️' : ''}</td></tr>`;
+            });
+            html += '</table><button class="btn btn-success" style="margin-top:8px;" onclick="applyPillarCalibration()">Apply pillar calibration</button>';
+            el.innerHTML = html;
+        }
+
+        async function applyPillarCalibration() {
+            const res = (await db.ref('pillar_calibration/results').once('value')).val();
+            const cfg = (await db.ref('pillar_config').once('value')).val();
+            if (!res || !res.pillars || !cfg || !cfg.pillars) {
+                log('❌ Need both pillar_config and reset_pillar results.');
+                return;
+            }
+            const updated = JSON.parse(JSON.stringify(cfg));
+            const changes = [];
+            updated.pillars.forEach(p => {
+                const r = res.pillars[p.id];
+                if (!r) return;
+                changes.push(`${p.id}: speaker ${p.speakerDelayMs ?? '—'} → ${r.speakerDelayMs} ms, mic ${p.micDelayMs ?? '—'} → ${r.micDelayMs} ms (${r.samples} samples)`);
+                p.speakerDelayMs = r.speakerDelayMs;
+                p.micDelayMs = r.micDelayMs;
+            });
+            if (!changes.length) {
+                log('❌ The results do not name any pillar in pillar_config.');
+                return;
+            }
+            if (!confirm(`Apply the pillar calibration from ${new Date(res.computedAt).toLocaleString()}?\n\n${changes.join('\n')}`)) return;
+            if (!reviewChecks('pillar_config', SO.validatePillarConfig(updated))) return;
+            await db.ref('pillar_config').set(updated);
+            changes.forEach(c => log(`✅ ${c}`));
+            log('💾 Calibration applied. Click "Download pillar_config.json" to update the copy on this laptop.');
+        }
+
         // --- DOWNLOAD HANDLERS ---
+
+        async function downloadPillarConfig() {
+            try {
+                const config = (await db.ref('pillar_config').once('value')).val();
+                if (!config) { log("ERROR: No pillar configuration found"); return; }
+                const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = 'pillar_config.json';
+                a.click();
+                log("ACTION: pillar_config.json downloaded (includes room temperature and calibrated delays).");
+            } catch (e) { log(`ERROR: Download failed: ${e.message}`); }
+        }
 
         async function downloadSeatConfig() {
             try {

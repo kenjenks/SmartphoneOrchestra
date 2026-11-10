@@ -7,6 +7,7 @@
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
+    <script src="config.js"></script>
     <style>
         body {
             margin: 0;
@@ -142,14 +143,8 @@
 </body>
 <script>
     // ==================== FIREBASE CONFIGURATION ====================
-    const firebaseConfig = {
-        apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
-        authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
-        databaseURL: "https://smartphoneorchestra-dwt-default-rtdb.firebaseio.com/",
-        projectId: "smartphoneorchestra-dwt"
-    };
-    firebase.initializeApp(firebaseConfig);
-    const db = firebase.database();
+    // Firebase setup, clock and pillar_config loading live in config.js
+    const db = SO.db;
 
     // ==================== STATE VARIABLES ====================
     let audioCtx = null;
@@ -170,7 +165,6 @@
     let primePromise = null;
 
     // Constants
-    const SPEED_OF_SOUND = 343;
     const HEARTBEAT_INTERVAL_MS = 10000;
 
     // ==================== UTILITY FUNCTIONS ====================
@@ -290,42 +284,37 @@
     }
 
     // ==================== PILLAR CONFIGURATION ====================
+    // Reads pillar_config from Firebase through config.js and keeps it up to date, so delay
+    // changes made on the admin page reach this pillar without reloading. Missing values
+    // are filled from SO.FALLBACK and shown in an orange warning box.
+    function applyPillarConfig(cfg) {
+        if (!cfg) {
+            SO.showWarning('pillar', ['No pillar_config in Firebase. Upload it from the admin page.']);
+            document.getElementById('audio-ind').className = 'indicator error';
+            return false;
+        }
+        pillarConfig = cfg.pillars;
+        const mine = pillarConfig[mySeat?.id];
+        const myWarnings = cfg.warnings.filter(w => w.startsWith(mySeat?.id + ':'));
+        if (!mine) myWarnings.unshift(`${mySeat?.id} is not listed in pillar_config.`);
+        SO.showWarning('pillar', myWarnings);
+        if (mine && mine.audioUrl) {
+            document.getElementById('audio-ind').className = 'indicator active';
+            log(`📡 pillar_config: speaker ${mine.speakerDelayMs} ms, mic ${mine.micDelayMs} ms${mine.assumed.length ? ' (ASSUMED: ' + mine.assumed.join(', ') + ')' : ''}`);
+            return true;
+        }
+        document.getElementById('audio-ind').className = 'indicator error';
+        return false;
+    }
+
     async function loadPillarConfig() {
         try {
-            const snap = await db.ref('pillar_config').once('value');
-            const data = snap.val();
-            if (data && data.pillars) {
-                data.pillars.forEach(p => {
-                    pillarConfig[p.id] = {
-                        id: p.id,
-                        label: p.label,
-                        x: p.x,
-                        y: p.y,
-                        speakerDelayMs: p.speakerDelayMs || 45,
-                        micDelayMs: p.micDelayMs || 18,
-                        audioUrl: p.audioUrl
-                    };
-                });
-                log(`📡 Loaded ${Object.keys(pillarConfig).length} pillar configs`);
-
-                // Check if this pillar has an audio URL
-                const myConfig = pillarConfig[mySeat?.id];
-                if (myConfig && myConfig.audioUrl) {
-                    document.getElementById('audio-ind').className = 'indicator active';
-                    log(`   Audio URL: ${myConfig.audioUrl.split('/').pop()}`);
-                    return true;
-                } else {
-                    log(`⚠️ No audio URL found for ${mySeat?.id}`);
-                    document.getElementById('audio-ind').className = 'indicator error';
-                    return false;
-                }
-            } else {
-                log(`⚠️ No pillar_config found in Firebase`);
-                document.getElementById('audio-ind').className = 'indicator error';
-                return false;
-            }
+            const ok = applyPillarConfig(await SO.loadPillarConfig());
+            SO.watchPillarConfig(applyPillarConfig);   // live updates from the admin page
+            return ok;
         } catch (e) {
             log(`⚠️ Failed to load pillar config: ${e.message}`);
+            SO.showWarning('pillar', [`Could not load pillar_config: ${e.message}`]);
             document.getElementById('audio-ind').className = 'indicator error';
             return false;
         }
@@ -413,7 +402,7 @@
                     timeSinceLoad: timeSinceLoad,
                     timestamp: actualPlayTime,
                     playbackType: currentPlaybackType,
-                    speakerDelay: pillarConfig[mySeat.id]?.speakerDelayMs || 45
+                    speakerDelay: pillarConfig[mySeat.id]?.speakerDelayMs
                 };
 
                 db.ref(`pillar_sync/${mySeat.id}/${Date.now()}`).set(syncData).catch(e => {
@@ -422,7 +411,7 @@
 
                 document.getElementById('performance-overlay').innerHTML =
                     `Pillar: ${mySeat.id} | Status: PLAYING (${currentPlaybackType || ''}) | ` +
-                    `Delay: ${pillarConfig[mySeat.id]?.speakerDelayMs || 45}ms | ` +
+                    `Delay: ${pillarConfig[mySeat.id]?.speakerDelayMs}ms | ` +
                     `Deviation: ${playDelay > 0 ? '+' : ''}${playDelay.toFixed(0)}ms`;
 
                 const canvas = document.getElementById('stage-canvas');
@@ -471,7 +460,7 @@
         }
 
         const nowWall = Date.now() + serverOffset;
-        const pillarSpeakerDelay = myConfig.speakerDelayMs || 45;
+        const pillarSpeakerDelay = myConfig.speakerDelayMs;
         const urlToPlay = audioUrl || myConfig.audioUrl;
 
         const adjustedStartTime = startTime - pillarSpeakerDelay;
@@ -530,8 +519,8 @@
                     status: isPlaying ? 'PLAYING' : 'ACTIVE',
                     type: 'pillar',
                     audioUrl: pillarConfig[mySeat.id]?.audioUrl?.split('/').pop() || 'none',
-                    speakerDelay: pillarConfig[mySeat.id]?.speakerDelayMs || 45,
-                    micDelay: pillarConfig[mySeat.id]?.micDelayMs || 18,
+                    speakerDelay: pillarConfig[mySeat.id]?.speakerDelayMs,
+                    micDelay: pillarConfig[mySeat.id]?.micDelayMs,
                     isPlaying: isPlaying,
                     playbackType: currentPlaybackType,
                     x: pillarConfig[mySeat.id]?.x || 0,
@@ -698,7 +687,7 @@
         const myConfig = pillarConfig[mySeat.id];
         log(`🔊 Pillar ${mySeat.id} activated`);
         log(`   Audio: ${myConfig?.audioUrl?.split('/').pop() || 'none'}`);
-        log(`   Speaker delay: ${myConfig?.speakerDelayMs || 45}ms`);
+        log(`   Speaker delay: ${myConfig?.speakerDelayMs}ms`);
 
         // Prime the pillar's audio hardware with its own waveform (if URL exists)
         if (myConfig && myConfig.audioUrl) {

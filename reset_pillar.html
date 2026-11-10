@@ -7,6 +7,7 @@
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
+    <script src="config.js"></script>
     <style>
         * {
             box-sizing: border-box;
@@ -249,14 +250,8 @@
     // --------------------------------------------------------------
     //  FIREBASE CONFIG
     // --------------------------------------------------------------
-    const firebaseConfig = {
-        apiKey: "AIzaSyBnzYesqka3zruOPjEE9eJ2ty4LZjKIlIU",
-        authDomain: "smartphoneorchestra-dwt.firebaseapp.com",
-        databaseURL: "https://smartphoneorchestra-dwt-default-rtdb.firebaseio.com/",
-        projectId: "smartphoneorchestra-dwt"
-    };
-    firebase.initializeApp(firebaseConfig);
-    const db = firebase.database();
+    // Firebase setup, clock and pillar_config loading live in config.js
+    const db = SO.db;
 
     // --------------------------------------------------------------
     //  CONSTANTS
@@ -270,7 +265,7 @@
     const BASELINE_SAMPLES_MS = 200;
     const PITCH_DETECTION_TOLERANCE_BINS = 6;
     const PHASE1_SCHEDULE_WINDOW_MS = 200;
-    const SPEED_OF_SOUND = 343;
+    let SPEED_OF_SOUND = SO.FALLBACK.speedOfSound;   // replaced from pillar_config when it loads
 
     // Frequency bands
     const PILLAR_MIN_FREQ = 183;
@@ -399,8 +394,8 @@
 
     // Measurement storage
     let pillarMeasurements = {};
-    let mySpeakerDelay = 45;
-    let myMicDelay = 18;
+    let mySpeakerDelay = SO.FALLBACK.speakerDelayMs;   // replaced from pillar_config when it loads
+    let myMicDelay = SO.FALLBACK.micDelayMs;
 
     // Processed measurements tracking (avoid duplicates)
     let processedMeasurements = new Set();
@@ -484,11 +479,11 @@
     //  LOAD PILLAR CONFIG
     // --------------------------------------------------------------
     async function loadPillarConfig() {
-        const snap = await db.ref('pillar_config').once('value');
-        const config = snap.val();
+        const cfg = await SO.loadPillarConfig();
 
-        if (!config || !config.pillars) {
-            addLog('⚠️ No pillar_config found — using defaults', 'warn');
+        if (!cfg) {
+            addLog(`⚠️ No pillar_config found — assuming ${SO.FALLBACK.speakerDelayMs}/${SO.FALLBACK.micDelayMs} ms and all pillars at (0,0)`, 'warn');
+            SO.showWarning('pillar', ['No pillar_config in Firebase: pillar positions and delays are unknown, so results will be wrong. Upload pillar_config from the admin page.']);
             pillarOrder = allPillars;
             for (let id of pillarOrder) {
                 pillarData[id] = {
@@ -497,26 +492,29 @@
                     x: 0,
                     y: 0,
                     audioUrl: null,
-                    speakerDelayMs: 45,
-                    micDelayMs: 18
+                    speakerDelayMs: SO.FALLBACK.speakerDelayMs,
+                    micDelayMs: SO.FALLBACK.micDelayMs
                 };
             }
             return false;
         }
 
-        pillarOrder = config.pillars.map(p => p.id);
-        for (let p of config.pillars) {
+        pillarOrder = cfg.list.map(p => p.id);
+        for (let p of cfg.list) {
             pillarData[p.id] = {
                 id: p.id,
                 label: p.label,
                 x: p.x,
                 y: p.y,
                 audioUrl: p.audioUrl,
-                speakerDelayMs: p.speakerDelayMs || 45,
-                micDelayMs: p.micDelayMs || 18
+                speakerDelayMs: p.speakerDelayMs,
+                micDelayMs: p.micDelayMs
             };
         }
-        addLog(`✅ Loaded ${pillarOrder.length} pillars from config`, 'success');
+        SPEED_OF_SOUND = cfg.speedOfSound;
+        addLog(`✅ Loaded ${pillarOrder.length} pillars from config; speed of sound ${cfg.speedOfSound.toFixed(1)} m/s (${cfg.speedOfSoundSource})`, 'success');
+        cfg.warnings.forEach(w => addLog(`⚠️ ${w}`, 'warn'));
+        SO.showWarning('pillar', cfg.warnings);
 
         if (pillarData[myId]) {
             mySpeakerDelay = pillarData[myId].speakerDelayMs;
@@ -863,8 +861,8 @@
                 type: 'pillar',
                 x: pillarData[myId]?.x || 0,
                 y: pillarData[myId]?.y || 0,
-                speakerDelay: pillarData[myId]?.speakerDelayMs || 45,
-                micDelay: pillarData[myId]?.micDelayMs || 18
+                speakerDelay: pillarData[myId]?.speakerDelayMs,
+                micDelay: pillarData[myId]?.micDelayMs
             }).catch(e => console.warn("Heartbeat failed", e));
         }, 10000);
         addLog(`💓 Heartbeat started for ${myId}`, 'info');
@@ -1029,14 +1027,27 @@
             pillarData[id].micDelayMs = micVal;
         }
         resultHtml += '</tbody></table>';
-        resultHtml += '<div class="small-text" style="margin-top: 8px;">📋 Copy these values into pillar_config.json and upload via admin.html</div>';
+        resultHtml += '<div class="small-text" style="margin-top: 8px;">💾 Saved to Firebase. Open the admin page and click "Apply pillar calibration" to use these values.</div>';
+
+        // Save for the admin page, which can apply them to pillar_config
+        const results = { computedBy: myId, computedAt: Date.now() + serverOffset, speedOfSound: SPEED_OF_SOUND, pillars: {} };
+        for (let id of pillarOrder) {
+            results.pillars[id] = {
+                speakerDelayMs: pillarData[id].speakerDelayMs,
+                micDelayMs: pillarData[id].micDelayMs,
+                samples: pillarMeasurements[id]?.length || 0
+            };
+        }
+        db.ref('pillar_calibration/results').set(results)
+            .then(() => addLog('💾 Calibration results saved to Firebase (pillar_calibration/results)', 'success'))
+            .catch(e => addLog(`❌ Could not save results: ${e.message}`, 'error'));
         resultsPanel.innerHTML = resultHtml;
 
         addLog(`✅ Calibration complete! Speaker and mic delays calculated.`, 'success');
         stateTextSpan.innerText = 'Calibration complete';
         stateLed.className = 'status-led led-green';
         roundInfoSpan.innerText = '';
-        progressDetail.innerText = '✅ Ready — copy values to pillar_config.json';
+        progressDetail.innerText = '✅ Done — apply the results from the admin page';
     }
 
     function updateCardValue(pillarId, field, value) {
