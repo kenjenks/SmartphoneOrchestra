@@ -203,7 +203,7 @@
     // ============================================================================
     // AUDIO HARDWARE PRIMING
     // ============================================================================
-    let primedBuffers = new Set();
+    let primedBuffers = new WeakSet();   // weak: must not keep released mixes alive
 
     async function primeBuffer(buffer, options = {}) {
         if (!audioCtx || audioCtx.state !== 'running') {
@@ -416,8 +416,6 @@
         if (tuningStartTime && SO.now() - tuningStartTime < TUNING_QUIET_MS) return;
         SO.clock.recheck().catch(e => log(`⚠️ Clock recheck failed: ${e.message}`, 'warn'));
     }
-    // A movement has ended when every sound it scheduled has finished.
-    let movementToken = 0, movementSoundsLeft = 0;
 
     // Before the show: recheck the clock every 60 ± 5 s, each phone on its own random schedule,
     // so the house never checks all at once and every phone is fresh when tuning starts.
@@ -1484,18 +1482,14 @@
     async function preloadAssets() {
         log("📦 Preloading assets...");
         try {
-            const movementsSnap = await db.ref('show/movements').once('value');
-            const movements = movementsSnap.val();
+            // Show stems: download only. They are decoded and mixed per movement (see mixdown).
+            const showOk = await downloadShowAudio((done, n) => {
+                const el = document.getElementById('asset-progress-fill');
+                if (el) el.style.width = `${(done / n) * 100}%`;
+            });
+            if (!showOk) log(`⚠️ Some show audio did not download; those stems will be fetched when needed`, 'warn');
+            // Calibration audio is decoded now
             const audioFiles = new Set();
-            if (movements && movements.length) {
-                movements.forEach(m => {
-                    (m.cues || []).forEach(cue => {
-                        (cue.assets || []).forEach(asset => {
-                            if (asset.audio_url) audioFiles.add(asset.audio_url);
-                        });
-                    });
-                });
-            }
             if (PICCOLO_URL) audioFiles.add(PICCOLO_URL);
             if (TEST_PULSE_URL) audioFiles.add(TEST_PULSE_URL);
             const total = audioFiles.size;
@@ -1752,74 +1746,292 @@
         await requestWakeLock();
         sendHeartbeat();
     });
+    // ============================================================================
+    // SHOW AUDIO: ONE PER-SEAT MIXDOWN PER MOVEMENT
+    // ============================================================================
+    // At onboarding: download (not decode) every stem this seat will ever hear, into the
+    // browser's disk cache (Cache Storage), so the show needs no network.
+    // Before each movement: decode its stems one at a time, apply this seat's level for each
+    // stem (SO.spatial: origin/dest/radius/rolloff), add them into ONE mono buffer, and drop
+    // each stem as soon as it is added. Only the mix stays in memory.
+    // Memory: a mix costs 4 bytes × MIX_SAMPLE_RATE × seconds (32 kHz: ~7.7 MB per minute,
+    // ~77 MB for a 10-minute song). At most: playing movement(s) + the next one + one stem
+    // being decoded.
+    const MIX_SAMPLE_RATE = 32000;        // 16 kHz bandwidth: more than a phone speaker gives
+    const MIX_CACHE_NAME = 'so-show-audio-v1';
+    const MIX_YIELD_SAMPLES = 2 * MIX_SAMPLE_RATE;   // let the page breathe every 2 s of audio
+    const MIX_GAIN_STEP = 32;             // moving sources: recompute the level every 32 samples
+    let showMovements = [];               // show/movements, in performance order
+    let stemMemory = new Map();           // url -> ArrayBuffer, only if Cache Storage is unavailable
+    let stemCache = null;                 // Cache object, if available
+    const mixes = new Map();              // movement name -> mix entry
+    const playingMovements = new Map();   // movement name -> { source, gain, entry }
+    let mixChain = Promise.resolve();     // one mix at a time keeps the memory peak down
+
+    function movementName(m) { return m.movement_name || m.movement_id || ''; }
+
+    // Which stems this seat hears in a movement, with when they start.
+    function planMovement(cues) {
+        const stems = [];
+        (cues || []).forEach(cue => {
+            if (cue.type !== 'MASTER_MEDIA_SYNC') return;
+            const timeSec = +cue.time || 0;
+            (cue.assets || []).forEach(a => {
+                if (a.type === 'pillar' || !a.audio_url) return;          // pillars play on the tablets
+                if (!SO.spatial.pathOk(a)) { log(`⚠️ Stem ${a.id}: missing originX/originY/radius, skipped`, 'warn'); return; }
+                if (!SO.spatial.reachesSeat(a, mySeat)) return;            // never comes near this seat
+                stems.push({ url: a.audio_url, timeSec, id: a.id,
+                    asset: { originX: a.originX, originY: a.originY, destX: a.destX, destY: a.destY,
+                             radius: a.radius, rolloff: a.rolloff, duration: a.duration } });
+            });
+        });
+        return { stems, signature: JSON.stringify(stems) };
+    }
+
+    // --- Onboarding: download every stem this seat needs -------------------------
+    async function downloadShowAudio(onProgress) {
+        const snap = await db.ref('show/movements').once('value');
+        const val = snap.val();
+        showMovements = Array.isArray(val) ? val.filter(Boolean) : Object.values(val || {});
+        const urls = new Set();
+        showMovements.forEach(m => planMovement(m.cues).stems.forEach(s => urls.add(s.url)));
+        try { if ('caches' in window) stemCache = await caches.open(MIX_CACHE_NAME); }
+        catch (e) { log(`⚠️ Cache Storage unavailable (${e.message}); keeping stems in memory`, 'warn'); }
+        if (stemCache) {   // forget stems from earlier shows
+            for (const req of await stemCache.keys()) if (!urls.has(req.url)) await stemCache.delete(req);
+        }
+        let done = 0, bytes = 0, failed = 0;
+        for (const url of urls) {
+            try {
+                if (stemCache && await stemCache.match(url)) { done++; onProgress?.(done, urls.size); continue; }
+                const res = await fetch(url);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                if (stemCache) {
+                    const copy = res.clone();
+                    await stemCache.put(url, res);
+                    bytes += (await copy.arrayBuffer()).byteLength;
+                } else {
+                    const ab = await res.arrayBuffer();
+                    stemMemory.set(url, ab);
+                    bytes += ab.byteLength;
+                }
+            } catch (e) {
+                failed++;
+                log(`❌ Stem download failed ${url.split('/').pop()}: ${e.message}`, 'error');
+            }
+            done++; onProgress?.(done, urls.size);
+        }
+        log(`📦 Show audio: ${showMovements.length} movements, ${urls.size} stems for this seat` +
+            `${bytes ? `, ${(bytes / 1048576).toFixed(1)} MB downloaded` : ' (already cached)'}` +
+            `${failed ? `, ${failed} FAILED` : ''} → ${stemCache ? 'disk cache' : 'memory'}`, failed ? 'warn' : 'info');
+        return failed === 0;
+    }
+
+    async function stemBytes(url) {
+        if (stemCache) {
+            const hit = await stemCache.match(url);
+            if (hit) return hit.arrayBuffer();
+        }
+        if (stemMemory.has(url)) return stemMemory.get(url).slice(0);   // decode detaches its input
+        log(`⚠️ Stem ${url.split('/').pop()} not downloaded; fetching during the show`, 'warn');
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.arrayBuffer();
+    }
+
+    // Decode at the mix rate (an OfflineAudioContext decodes at its own rate).
+    let mixDecoder = null;
+    function decodeStem(bytes) {
+        const Offline = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+        if (!mixDecoder) mixDecoder = Offline ? new Offline(1, 1, MIX_SAMPLE_RATE) : audioCtx;
+        return new Promise((resolve, reject) => {
+            const p = mixDecoder.decodeAudioData(bytes, resolve, reject);   // old Safari: callbacks only
+            if (p && p.then) p.then(resolve, reject);
+        });
+    }
+    const mixRate = () => (window.OfflineAudioContext || window.webkitOfflineAudioContext) ? MIX_SAMPLE_RATE : audioCtx.sampleRate;
+
+    function cancelledError() { const e = new Error('cancelled'); e.cancelled = true; return e; }
+
+    async function buildMix(entry) {
+        const rate = mixRate();
+        const t0 = performance.now();
+        let out = null, data = null, peak = 0;
+        for (const stem of entry.plan.stems) {
+            if (entry.cancelled) throw cancelledError();
+            let buf = await decodeStem(await stemBytes(stem.url));
+            if (entry.cancelled) throw cancelledError();
+            const start = Math.round(stem.timeSec * rate);
+            const need = start + buf.length;
+            if (!out || need > out.length) {          // grow the mix (normally only for the first stem)
+                const bigger = new AudioBuffer({ numberOfChannels: 1, length: need, sampleRate: rate });
+                if (out) bigger.copyToChannel(data, 0);
+                out = bigger; data = out.getChannelData(0);
+            }
+            const chans = [];
+            for (let c = 0; c < buf.numberOfChannels; c++) chans.push(buf.getChannelData(c));
+            const nc = chans.length;
+            const moving = SO.spatial.isMoving(stem.asset);
+            const pathSec = (+stem.asset.duration > 0) ? stem.asset.duration / 1000 : buf.duration;
+            const fixed = moving ? 0 : SO.spatial.gainAt(stem.asset, mySeat, 0, pathSec);
+            let gainSum = 0;
+            for (let i0 = 0; i0 < buf.length; i0 += MIX_YIELD_SAMPLES) {
+                const i1 = Math.min(buf.length, i0 + MIX_YIELD_SAMPLES);
+                for (let i = i0; i < i1; ) {
+                    const j = Math.min(i1, i + MIX_GAIN_STEP);
+                    let g0 = fixed, g1 = fixed;
+                    if (moving) {
+                        g0 = SO.spatial.gainAt(stem.asset, mySeat, i / rate, pathSec);
+                        g1 = SO.spatial.gainAt(stem.asset, mySeat, j / rate, pathSec);
+                    }
+                    gainSum += g0 * (j - i);
+                    if (g0 !== 0 || g1 !== 0) {
+                        const step = (g1 - g0) / (j - i);
+                        for (let k = i, g = g0; k < j; k++, g += step) {
+                            let s = chans[0][k];
+                            if (nc > 1) { for (let c = 1; c < nc; c++) s += chans[c][k]; s /= nc; }   // stereo → mono
+                            const v = (data[start + k] += s * g);
+                            if (v > peak) peak = v; else if (-v > peak) peak = -v;
+                        }
+                    }
+                    i = j;
+                }
+                await new Promise(r => setTimeout(r, 0));
+                if (entry.cancelled) throw cancelledError();
+            }
+            log(`🎚️ ${entry.name}: ${stem.id} at ${(gainSum / buf.length * 100).toFixed(0)}% average level${moving ? ' (moving)' : ''}`, 'debug');
+            buf = null; chans.length = 0;   // drop the decoded stem before the next one
+        }
+        if (!out) out = new AudioBuffer({ numberOfChannels: 1, length: Math.max(1, Math.round(rate * 0.1)), sampleRate: rate });
+        entry.peak = peak;
+        const mb = out.length * 4 / 1048576;
+        log(`🎛️ Mix ready: "${entry.name}" ${entry.plan.stems.length} stems → ${out.duration.toFixed(1)} s mono, ${mb.toFixed(0)} MB, ` +
+            `built in ${((performance.now() - t0) / 1000).toFixed(1)} s, peak ${peak.toFixed(2)}`, peak > 1 ? 'warn' : 'info');
+        if (peak > 1) log(`⚠️ "${entry.name}" peaks at ${peak.toFixed(2)} at this seat: it will clip (the separate-stem player clipped the same way)`, 'warn');
+        return out;
+    }
+
+    // Returns the mix entry for a movement, building it if needed (one build at a time).
+    function ensureMix(name, plan) {
+        let entry = mixes.get(name);
+        if (entry && entry.signature === plan.signature && !entry.failed && !entry.cancelled) return entry;
+        if (entry) releaseMix(name);
+        entry = { name, plan, signature: plan.signature, buffer: null, cancelled: false, failed: false };
+        entry.promise = mixChain.then(async () => {
+            if (entry.cancelled) throw cancelledError();
+            entry.buffer = await buildMix(entry);
+            return entry.buffer;
+        });
+        entry.promise.catch(e => {
+            if (e.cancelled) { log(`🗑️ Mix "${name}" cancelled`, 'debug'); return; }
+            entry.failed = true;
+            log(`❌ Mix "${name}" failed: ${e.message}`, 'error');
+        });
+        mixChain = entry.promise.catch(() => {});
+        mixes.set(name, entry);
+        return entry;
+    }
+
+    function releaseMix(name) {
+        const entry = mixes.get(name);
+        if (!entry) return;
+        entry.cancelled = true;
+        entry.buffer = null;
+        mixes.delete(name);
+    }
+
+    // Keep only what is playing plus the movement after `name`; start building that one.
+    function prepareNextMovement(name) {
+        const i = showMovements.findIndex(m => movementName(m) === name);
+        const next = i >= 0 ? showMovements[i + 1] : (name === null ? showMovements[0] : null);
+        const nextName = next ? movementName(next) : null;
+        for (const key of [...mixes.keys()]) {
+            if (key !== nextName && !playingMovements.has(key) && key !== name) releaseMix(key);
+        }
+        if (!next) return;
+        const entry = ensureMix(nextName, planMovement(next.cues));
+        log(`⏭️ Preparing next movement "${nextName}" (${entry.plan.stems.length} stems for this seat)`, 'info');
+    }
+
+    function stopMovement(name, fadeSec = 0.1) {
+        const p = playingMovements.get(name);
+        if (!p) return;
+        playingMovements.delete(name);
+        const t = audioCtx.currentTime;
+        try {
+            p.gain.gain.cancelScheduledValues(t);
+            p.gain.gain.setValueAtTime(p.gain.gain.value, t);
+            p.gain.gain.linearRampToValueAtTime(0, t + fadeSec);
+            p.source.stop(t + fadeSec + 0.02);
+        } catch (e) {}
+    }
+
+    // --- GO: play this movement's mix (other movements keep playing) -------------
+    let movementToken = 0;
     function handleMovementStart(cue) {
         if (!cue.startTime || !cue.movement || !cue.cues) return;
-        log(`🎬 MOVEMENT START: "${cue.movement}"`);
-        clearAllScheduledCues();
-        currentMovement = cue.movement;
+        const name = cue.movement;
+        log(`🎬 MOVEMENT START: "${name}"`);
+        stopIdleClockRechecks();
+        currentMovement = name;
         movementStartTime = cue.startTime;
         const indicator = document.getElementById('movement-indicator');
-        if (indicator) indicator.querySelector('.status-text').innerText = cue.movement;
-        stopIdleClockRechecks();
-        movementToken++;
-        movementSoundsLeft = 0;
-        if (cue.cues) scheduleTimelineCues(cue.cues);
+        if (indicator) indicator.querySelector('.status-text').innerText = name;
+        stopMovement(name);   // a second GO for the same movement restarts it
+        const token = ++movementToken;
+        const plan = planMovement(cue.cues);
+        if (!plan.stems.length) {
+            log(`🔇 "${name}": no stems reach this seat`, 'info');
+            prepareNextMovement(name);
+            if (!playingMovements.size) clockRecheckWhenQuiet();
+            return;
+        }
+        // An unplanned jump: stop building anything else so this one starts sooner
+        for (const [key, e] of mixes) if (key !== name && !e.buffer && !playingMovements.has(key)) releaseMix(key);
+        const entry = ensureMix(name, plan);
+        if (!entry.buffer) log(`⏳ "${name}" mix not ready yet; it will join late`, 'warn');
+        entry.promise.then(buffer => {
+            if (token !== movementToken && playingMovements.has(name)) return;   // superseded by a restart
+            if (mixes.get(name) !== entry) return;
+            const leadMs = (currentSpeakerDelay || 0) + (myMicDelayMs || 0);   // speaker + mic delay (deliberate)
+            // playAt primes the mix (0.1 s at gain 0.001) before its first play
+            const r = SO.audio.playAt(audioCtx, buffer, cue.startTime, {
+                leadMs, gain: 1.0, destination: masterGain || audioCtx.destination,
+                lateLimitMs: buffer.duration * 1000   // join late rather than stay silent
+            });
+            if (r.skipped) { log(`❌ "${name}" skipped: ${r.reason}`, 'error'); return; }
+            if (r.lateMs > 0) log(`⚠️ "${name}" ${Math.round(r.lateMs)} ms late, joined ${r.offset.toFixed(2)} s in`, 'warn');
+            const playing = { source: r.source, gain: r.gain, entry };
+            playingMovements.set(name, playing);
+            r.source.onended = () => {
+                try { r.gain.disconnect(); } catch (e) {}
+                if (playingMovements.get(name) === playing) playingMovements.delete(name);
+                if (!playingMovements.has(name) && mixes.get(name) === entry) {
+                    const i = showMovements.findIndex(m => movementName(m) === name);
+                    // keep it if it is the next one up (e.g. a restart); otherwise free it
+                    const playingNames = [...playingMovements.keys()];
+                    const isNext = playingNames.some(n => {
+                        const j = showMovements.findIndex(m => movementName(m) === n);
+                        return j >= 0 && j + 1 === i;
+                    });
+                    if (!isNext) releaseMix(name);
+                }
+                log(`🏁 "${name}" finished`, 'info');
+                if (!playingMovements.size) clockRecheckWhenQuiet();   // end of the movement(s)
+            };
+        }).catch(() => {}).finally(() => {
+            if (token === movementToken) prepareNextMovement(name);
+        });
     }
+
+    // KILL reloads the page; this is for a stop without a reload.
     function clearAllScheduledCues() {
         activeTimeouts.forEach(t => clearTimeout(t)); activeTimeouts = [];
-        activeAudioCues.forEach(cue => {
-            if (cue.gainNode) {
-                const now = audioCtx.currentTime;
-                cue.gainNode.gain.linearRampToValueAtTime(0, now + 0.1);
-                setTimeout(() => {
-                    try { if (cue.source) cue.source.stop(); } catch (e) {}
-                    if (cue.gainNode) cue.gainNode.disconnect();
-                }, 150);
-            }
-        });
+        for (const name of [...playingMovements.keys()]) stopMovement(name);
         activeAudioCues = [];
         activeLightCues = [];
         const canvas = document.getElementById('stage-canvas');
         if (canvas) canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
-    }
-    function scheduleTimelineCues(cues) {
-        const now = SO.now();
-        cues.forEach(cue => {
-            if (cue.type !== 'MASTER_MEDIA_SYNC') return;
-            const offsetMs = (cue.time || 0) * 1000;
-            const absTime = movementStartTime + offsetMs;
-            const leadMs = (currentSpeakerDelay || 0) + (myMicDelayMs || 0);   // speaker + mic delay (deliberate)
-            (cue.assets || []).forEach(asset => {
-                if (asset.type === 'pillar') return;
-                playSpatialCue(asset, absTime, leadMs);
-            });
-        });
-    }
-    // Schedules one show asset on the audio clock (shared scheduler, config.js).
-    // Late cues (up to 5 s) join part-way so they stay in sync; later ones are skipped.
-    function playSpatialCue(cue, serverMs, leadMs) {
-        const url = cue.audio_url;
-        if (!url || !bufferCache[url]) {
-            log(`⚠️ Cue ${cue.id}: audio not preloaded, skipping`, 'warn');
-            return;
-        }
-        const buffer = bufferCache[url];
-        // playAt primes the buffer (0.1 s at gain 0.001) first if it hasn't been primed yet
-        const r = SO.audio.playAt(audioCtx, buffer, serverMs, {
-            leadMs, gain: 1.0, destination: masterGain || audioCtx.destination
-        });
-        if (r.skipped) {
-            log(`❌ Cue ${cue.id} skipped: ${r.reason}`, 'error');
-            return;
-        }
-        if (r.lateMs > 0) log(`⚠️ Cue ${cue.id} is ${Math.round(r.lateMs)}ms late, joined ${r.offset.toFixed(2)}s into the file`, 'warn');
-        const token = movementToken;
-        movementSoundsLeft++;
-        r.source.onended = () => {   // when the movement's last sound ends, recheck the clock
-            if (token !== movementToken) return;
-            if (--movementSoundsLeft === 0) clockRecheckWhenQuiet();
-        };
-        activeAudioCues.push({ ...cue, source: r.source, gainNode: r.gain });
     }
     function frame(now) {
         const delta = now - lastFrameTime;
@@ -1919,6 +2131,7 @@
                     await requestWakeLock();
                     requestAnimationFrame(frame);
                     initShowCueListener();
+                    prepareNextMovement(null);   // mix the first movement now, while the house fills
                     initTuningListener();
                     startHeartbeat();
                     log("🚀 Entered show mode");

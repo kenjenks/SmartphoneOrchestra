@@ -20,6 +20,7 @@
  *   SO.parseSeatTsv(text), SO.computeNeighborMap(seats)
  *   SO.validatePillarConfig(data), SO.validateSeatConfig(seats, pillarConfig)
  *   SO.audio.getBuffer(ctx, url), SO.audio.playAt(ctx, buffer, serverMs, opts), SO.audio.primeBuffer(ctx, buffer)
+ *   SO.spatial.reachesSeat(asset, seat), SO.spatial.gainAt(asset, seat, tSec, pathSec)
  *
  * Every page plays sound files through SO.audio.playAt: preloaded and decoded once, primed
  * (0.1 s at gain 0.001) before its first play, started with source.start(when) on the
@@ -501,6 +502,49 @@
         return seatCache ? seatCache.byId[id] || null : null;
     }
 
+    // ---------------------------------------------------------------- Spatial sound (show stems)
+    // How loud one instrument stem is at one seat. These are the rules the older render loop
+    // used, unchanged:
+    //   - the source sits at (originX, originY), or glides to (destX, destY) over the path time
+    //     with a sine ease-in-out, then stays there
+    //   - inside `radius`: rolloff "linear" gives 1 − d/r; anything else ("none") gives 1
+    //   - at or beyond `radius`: silent
+    // The path time is asset.duration (ms) if the timeline gives one, otherwise the stem's length.
+    function stemPath(asset) {
+        const num = (v, d) => (v === null || v === undefined || v === '' || !Number.isFinite(+v)) ? d : +v;
+        const ox = num(asset.originX, NaN), oy = num(asset.originY, NaN);
+        return { ox, oy, dx: num(asset.destX, ox), dy: num(asset.destY, oy), r: num(asset.radius, NaN),
+                 linear: asset.rolloff === 'linear' };
+    }
+    function stemPathOk(asset) {
+        const s = stemPath(asset);
+        return Number.isFinite(s.ox) && Number.isFinite(s.oy) && Number.isFinite(s.r) && s.r > 0;
+    }
+    // True if the source comes inside its radius of the seat at any point on its path.
+    function reachesSeat(asset, seat) {
+        if (!stemPathOk(asset)) return false;
+        const s = stemPath(asset);
+        return distToSegment({ x: seat.x, y: seat.y }, { x: s.ox, y: s.oy }, { x: s.dx, y: s.dy }) < s.r;
+    }
+    // Gain (0..1) at the seat, tSec seconds after the stem starts.
+    function gainAt(asset, seat, tSec, pathSec) {
+        const s = stemPath(asset);
+        let x = s.ox, y = s.oy;
+        if ((s.dx !== s.ox || s.dy !== s.oy) && pathSec > 0) {
+            const t = Math.max(0, Math.min(1, tSec / pathSec));
+            const e = -(Math.cos(Math.PI * t) - 1) / 2;
+            x = s.ox + (s.dx - s.ox) * e;
+            y = s.oy + (s.dy - s.oy) * e;
+        }
+        const d = Math.hypot(seat.x - x, seat.y - y);
+        if (!(d < s.r)) return 0;
+        return s.linear ? 1 - d / s.r : 1;
+    }
+    function isMoving(asset) {
+        const s = stemPath(asset);
+        return s.dx !== s.ox || s.dy !== s.oy;
+    }
+
     // ---------------------------------------------------------------- Audio playback (shared)
     // The one way every page plays a sound file at a server time:
     //   decode once  →  convert server time to the audio clock  →  source.start(when, offset)
@@ -649,6 +693,7 @@
         parseSeatTsv, computeNeighborMap, validateSeatConfig, normalizeSeatConfig, loadSeatConfig, getSeat,
         loadTuningMode,
         audio: { getBuffer, serverToAudioTime, playAt, primeBuffer, isPrimed, PRIME_DEFAULTS },
-        geometry: { dist, pillarPolygon, distanceOutside }
+        geometry: { dist, pillarPolygon, distanceOutside },
+        spatial: { reachesSeat, gainAt, isMoving, pathOk: stemPathOk }
     };
 })();
