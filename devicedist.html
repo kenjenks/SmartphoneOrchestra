@@ -59,14 +59,14 @@
             <div id="calibration-status-text"></div>
         </div>
         <div id="debug-panel" style="margin-top:20px; font-size:10px; color:#888;">
-            <div id="log-display">Waiting for logs...</div>
+            <div id="log-display" style="white-space:pre-line; text-align:left; font-family:monospace;">Waiting for logs...</div>
         </div>
     </div>
 
     <div id="show-screen">
         <div id="performance-overlay">FPS: -- | Speaker: --ms | Mic: -- | Neighbors: --</div>
         <div id="movement-indicator"><span style="font-size: 16px;">📱</span><span style="font-size: 11px; letter-spacing: 1px;" class="status-text">ACTIVE</span></div>
-        <div id="calibration-debug" style="display:none;"><div style="font-weight: bold; margin-bottom: 5px;">🔧 System Debug</div><div id="log-display-debug">Waiting for logs...</div></div>
+        <div id="calibration-debug" style="display:none;"><div style="font-weight: bold; margin-bottom: 5px;">🔧 System Debug</div><div id="log-display-debug" style="white-space:pre-line;">Waiting for logs...</div></div>
         <div class="energy-meter" id="energy-meter" style="display:none;"><div style="display: flex; justify-content: space-between;"><span>Acoustic Sync</span><span id="energy-value">0.00</span></div><div class="meter-bar"><div class="meter-fill" id="energy-fill"></div></div></div>
         <canvas id="stage-canvas"></canvas>
     </div>
@@ -389,6 +389,19 @@
         const logEntry = { timestamp: serverTimestamp, timeStr, message, seatId: mySeat ? mySeat.id : 'unknown', type, isHappy, speakerDelay: currentSpeakerDelay, micDelay: myMicDelayMs };
         logQueue.push(logEntry);
         if (logQueue.length >= MAX_LOG_QUEUE_SIZE && logRef) flushLogs();
+        showLogOnScreen(timeStr, message);
+    }
+    // The last few messages, on the setup screen (and the hidden debug panel), so an usher or
+    // tester can see what the phone is doing without the conductor's log viewer.
+    const SCREEN_LOG_LINES = 6;
+    const screenLog = [];
+    function showLogOnScreen(timeStr, message) {
+        screenLog.push(`${timeStr.substr(0, 8)}  ${message}`);
+        if (screenLog.length > SCREEN_LOG_LINES) screenLog.shift();
+        for (const id of ['log-display', 'log-display-debug']) {
+            const el = document.getElementById(id);
+            if (el) el.textContent = screenLog.join('\n');
+        }
     }
 
     // ============================================================================
@@ -480,36 +493,28 @@
         diagnoseMode = urlParams.has('diagnose');
         if (diagnoseMode) log("🔬 DIAGNOSTIC MODE ENABLED - will analyze buffer content");
 
+        // Seat coordinates: seat_config first (the surveyed values), then ?x=&y= from the QR code.
         try {
-            const seatSnap = await db.ref('seat_config').once('value');
-            const seats = seatSnap.val();
-            if (seats && seats[mySeat.id]) {
-                mySeat.x = seats[mySeat.id].x || 0;
-                mySeat.y = seats[mySeat.id].y || 0;
-                log(`Spatial: (${mySeat.x}, ${mySeat.y})`);
-            } else {
-                log(`⚠️ No coordinates for ${mySeat.id}`);
-            }
+            const cfg = await SO.loadSeatConfig();   // handles seats stored as an array or by id
+            seatData = {};
+            (cfg ? cfg.seats : []).forEach(s => { seatData[s.id] = { x: s.x, y: s.y, section: s.section }; });
+            log(`📋 Loaded seat coordinates for ${Object.keys(seatData).length} seats`);
         } catch (e) {
-            log(`❌ Identity error: ${e.message}`);
-            return false;
+            log(`⚠️ Could not load seat data: ${e.message}`, 'warn');
         }
-
-        try {
-            const seatConfigSnap = await db.ref('seat_config').once('value');
-            const seatConfig = seatConfigSnap.val();
-            if (seatConfig && seatConfig.seats) {
-                seatData = {};
-                seatConfig.seats.forEach(s => {
-                    seatData[s.id] = { x: s.x, y: s.y, section: s.section };
-                });
-                log(`📋 Loaded seat coordinates for ${Object.keys(seatData).length} seats`);
-            } else {
-                seatData = seatConfig || {};
-                log(`⚠️ seat_config missing 'seats' array; using raw data`);
-            }
-        } catch (e) {
-            log(`⚠️ Could not load seat data: ${e.message}`);
+        const urlX = parseFloat(urlParams.get('x')), urlY = parseFloat(urlParams.get('y'));
+        const surveyed = seatData[mySeat.id];
+        if (surveyed && Number.isFinite(+surveyed.x) && Number.isFinite(+surveyed.y)) {
+            mySeat.x = +surveyed.x; mySeat.y = +surveyed.y;
+            log(`📍 Seat ${mySeat.id} at (${mySeat.x}, ${mySeat.y}) from seat_config`);
+            if (Number.isFinite(urlX) && Number.isFinite(urlY) && Math.hypot(urlX - mySeat.x, urlY - mySeat.y) > 0.25)
+                log(`⚠️ QR code says (${urlX}, ${urlY}); using seat_config`, 'warn');
+        } else if (Number.isFinite(urlX) && Number.isFinite(urlY)) {
+            mySeat.x = urlX; mySeat.y = urlY;
+            log(`⚠️ Seat ${mySeat.id} is not in seat_config; using (${urlX}, ${urlY}) from the QR code`, 'warn');
+        } else {
+            log(`❌ No coordinates for seat ${mySeat.id}: not in seat_config and none in the link. Sound placement will be wrong.`, 'error');
+            SO.showWarning('seat', `Seat ${mySeat.id} has no position: it is not in seat_config and the link has no x/y.`, { container: 'setup-screen' });
         }
 
         updateDeviceStatusDisplay();
@@ -2228,10 +2233,17 @@
     }
 
     function initShowCueListener() {
+        const listeningSince = SO.now();
         db.ref('show/currentCue').on('value', async snap => {
             const cue = snap.val();
             if (!cue) return;
             if (cue.action === 'KILL') {
+                // Firebase hands every new listener the stored cue. A KILL sent before this phone
+                // joined is history, not an order: reloading on it loops forever.
+                if (!(cue.triggerTime > listeningSince - 5000)) {
+                    log(`⏭️ Ignoring an earlier KILL (${cue.triggerTime ? new Date(cue.triggerTime).toISOString().substr(11, 8) + ' UTC' : 'no time'})`, 'info');
+                    return;
+                }
                 log("💀 KILL signal");
                 location.reload();
             } else if (cue.action === 'GO') {
@@ -2336,8 +2348,8 @@
             masterGain = audioCtx.createGain();
             masterGain.gain.value = MASTER_PLAYBACK_GAIN;
             masterGain.connect(audioCtx.destination);
+            await loadPillarData();   // first: the pillar templates need each pillar's audioUrl
             await preloadAssets();
-            await loadPillarData();
 
             // URL override for speaker/mic delays
             const urlParams = new URLSearchParams(window.location.search);
