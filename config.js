@@ -784,6 +784,50 @@
         for (let i = 0, j = 0; i < out.length; i++) { let s = 0; for (let k = 0; k < f; k++) s += x[j++]; out[i] = s / f; }
         return out;
     }
+    /*
+     * findTemplateMasked(template, signal, mask, fromIdx, toIdx)  → { index, score }
+     * Like findTemplate, for a signal with stretches that must be ignored (mask[i] = 0), such as
+     * a phone's own notes in its own recording. Normalized correlation computed only over the
+     * samples that are kept, so a blanked stretch counts as "unknown", not as silence. Both
+     * signals are first-differenced so note attacks dominate (sharper peaks on tonal notes).
+     */
+    function xcorrFFT(a, b, N) {     // c[L] = sum_i a[i] * b[L+i]
+        const ar = new Float64Array(N), ai = new Float64Array(N), br = new Float64Array(N), bi = new Float64Array(N);
+        ar.set(a); br.set(b);
+        fftInPlace(ar, ai, false); fftInPlace(br, bi, false);
+        for (let k = 0; k < N; k++) {   // conj(A) * B
+            const r = ar[k] * br[k] + ai[k] * bi[k], im = ar[k] * bi[k] - ai[k] * br[k];
+            ar[k] = r; ai[k] = im;
+        }
+        fftInPlace(ar, ai, true);
+        for (let k = 0; k < N; k++) ar[k] /= N;
+        return ar;
+    }
+    function findTemplateMasked(template, signal, mask, fromIdx = 0, toIdx = signal.length - template.length) {
+        const m = template.length;
+        fromIdx = Math.max(0, Math.round(fromIdx)); toIdx = Math.min(signal.length - m, Math.round(toIdx));
+        if (toIdx < fromIdx || m < 64) return { index: -1, score: 0 };
+        const segLen = toIdx - fromIdx + m;
+        let N = 1; while (N < segLen + m) N <<= 1;
+        const t = new Float64Array(m), t2 = new Float64Array(m);
+        for (let i = 1; i < m; i++) { t[i] = template[i] - template[i - 1]; t2[i] = t[i] * t[i]; }
+        const r = new Float64Array(segLen), r2 = new Float64Array(segLen), mk = new Float64Array(segLen);
+        for (let i = 1; i < segLen; i++) {
+            const j = fromIdx + i, keep = mask[j] && mask[j - 1] ? 1 : 0;
+            const d = keep * (signal[j] - signal[j - 1]);
+            r[i] = d; r2[i] = d * d; mk[i] = keep;
+        }
+        const num = xcorrFFT(t, r, N), tEnergy = xcorrFFT(t2, mk, N), rEnergy = xcorrFFT(t2.map(() => 1), r2, N);
+        let tot = 0; for (let i = 0; i < m; i++) tot += t2[i];
+        let best = -1, max = -Infinity;
+        for (let lag = 0; lag <= toIdx - fromIdx; lag++) {
+            if (tEnergy[lag] < 0.3 * tot) continue;              // too little of the template is visible here
+            const sc = num[lag] / Math.sqrt(Math.max(1e-20, tEnergy[lag] * rEnergy[lag]));
+            if (sc > max) { max = sc; best = lag; }
+        }
+        if (best < 0) return { index: -1, score: 0 };
+        return { index: fromIdx + best, score: Math.max(0, max) };
+    }
     // Mono copy of part of a decoded buffer (channels averaged)
     function monoSlice(buffer, startSec, durSec) {
         const sr = buffer.sampleRate, a = Math.max(0, Math.round(startSec * sr));
@@ -857,7 +901,7 @@
 
     // ---------------------------------------------------------------- Export
     window.SO = {
-        BUILD: '2026-11-11c',
+        BUILD: '2026-11-11h',
         FIREBASE_CONFIG, LIMITS, FALLBACK, db,
         now, onClockSync,
         get serverOffset() { return now() - Date.now(); },   // legacy: server − Date.now()
@@ -875,7 +919,7 @@
         parseSeatTsv, computeNeighborMap, validateSeatConfig, normalizeSeatConfig, loadSeatConfig, getSeat,
         loadTuningMode,
         audio: { getBuffer, serverToAudioTime, playAt, primeBuffer, isPrimed, PRIME_DEFAULTS, record, prepareRecorder },
-        dsp: { findTemplate, monoSlice, decimate: decimateBy },
+        dsp: { findTemplate, findTemplateMasked, monoSlice, decimate: decimateBy },
         geometry: { dist, pillarPolygon, distanceOutside },
         spatial: { reachesSeat, gainAt, isMoving, pathOk: stemPathOk }
     };

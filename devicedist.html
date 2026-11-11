@@ -7,7 +7,7 @@
 
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
-    <script src="config.js?v=2026-11-11c"></script>
+    <script src="config.js?v=2026-11-11h"></script>
 
     <style>
         body {
@@ -151,7 +151,7 @@
     let noteSchedule = [];
     let detectionWindows = new Map();
     let processedMeasurements = new Set();
-    let rawTimeShifts = [];
+    let rawTimeShifts = []; let rawShiftsBy = [];
     let pillarSyncShifts = [];
     let isHappy = false;
     let estimatedDeviceDelayMs = 175;
@@ -1005,7 +1005,7 @@
                     currentSpeakerDelay = clamped;
                     createNewPlaybackStream(tuningStartTime - clamped, clamped, 0, true);
                     correctionEffectiveAt = SO.now() + CORRECTION_SETTLE_MS;
-                    rawTimeShifts = [];
+                    rawTimeShifts = []; rawShiftsBy = [];
                     updateCalibrationDisplay();
                 }, wait);
                 return true;
@@ -1029,7 +1029,7 @@
         if (isSingleDeviceMode) {
             log(`🔧 Single‑device mode: storing delay ${clamped.toFixed(1)}ms, keeping current stream`);
             currentSpeakerDelay = clamped;
-            rawTimeShifts = [];
+            rawTimeShifts = []; rawShiftsBy = [];
             correctionCount++;
             updateCalibrationDisplay();
             return;
@@ -1045,7 +1045,7 @@
             createNewPlaybackStream(tuningStartTime - clamped, clamped, 0, true);
             correctionEffectiveAt = SO.now() + CORRECTION_SETTLE_MS;
         }
-        rawTimeShifts = [];
+        rawTimeShifts = []; rawShiftsBy = [];
         correctionCount++;
         updateCalibrationDisplay();
 
@@ -1070,6 +1070,12 @@
     function evaluateInRealTime() {
         if (isHappy) return;
         if (rawTimeShifts.length < MIN_SAMPLES_FOR_CORRECTION) return;
+        const disagree = listenersDisagree();
+        if (disagree) {
+            log(`⏸️ Listeners disagree about me (${disagree} ms); waiting for more before correcting`, 'warn');
+            if (rawTimeShifts.length >= 30) { rawTimeShifts.splice(0, 10); rawShiftsBy.splice(0, 10); }
+            return;
+        }
         const median = calculateMedian(rawTimeShifts);
         const stdDev = calculateStdDev(rawTimeShifts);
         const curDelay = currentSpeakerDelay;
@@ -1077,7 +1083,7 @@
         if (correctionCount === 0 && rawTimeShifts.length >= 5 && Math.abs(median) > 20) {
             log(`🔧 FORCE FIRST CORRECTION: shift=${median.toFixed(1)}ms`, 'info');
             applyCorrection(median);
-            rawTimeShifts = [];
+            rawTimeShifts = []; rawShiftsBy = [];
             return;
         }
         if (Math.abs(median) <= CONVERGENCE_STD_DEV_MS && stdDev <= CONVERGENCE_STD_DEV_MS) {
@@ -1284,13 +1290,35 @@
         const recT1 = recT0 + rec.samples.length / sr * 1000;
         const a = recT0 + NB_MARGIN_MS, b = recT1 - NB_MARGIN_MS;     // template window, song time
         if (b - a < 400) return;
+        const center = Math.round((a - recT0) / 1000 * sr), span = Math.round(NB_SEARCH_MS / 1000 * sr);
+
+        // My own notes are by far the loudest thing in my recording, and in the spiral they sit
+        // exactly one note (286 ms) from a neighbour's. Left in, a neighbour's pattern lines up
+        // with MY notes and I report it ~one note late or early (B1 reported A1 at +267 ms, run
+        // after run, and A1 moved its delay to 835 ms). So: find my own notes first, then blank
+        // them out (plus their echo) before looking for anyone else.
+        let samples = rec.samples, mask = null;
+        if (!isListenOnlyMode && assignedNotes.length) {
+            const mine = assignedNotes.filter(n => n.startMs < b + NB_SEARCH_MS && n.startMs + n.durationMs > a - NB_SEARCH_MS);
+            if (mine.length) {
+                const own = SO.dsp.findTemplate(templateForDevice(bufferCache[PICCOLO_URL], mine, a, b), samples, center - span, center + span, sr);
+                if (own.index < 0 || own.score < NB_MIN_SCORE) return;          // can't place my own notes: don't trust this chunk
+                const shift = own.index - center;
+                mask = new Uint8Array(samples.length).fill(1);
+                for (const n of mine) {
+                    const z0 = Math.round((n.startMs - recT0 - 10) / 1000 * sr) + shift;
+                    const z1 = Math.round((n.startMs + n.durationMs - recT0 + 40) / 1000 * sr) + shift;
+                    mask.fill(0, Math.max(0, z0), Math.max(0, Math.min(samples.length, z1)));
+                }
+            }
+        }
         for (const dev of Object.keys(byDev)) {
             const notes = byDev[dev].filter(n => n.startMs < b - 100 && n.startMs + n.durationMs > a + 50);
             if (!notes.length) continue;
             await new Promise(r => setTimeout(r, 0));
             const tpl = templateForDevice(bufferCache[PICCOLO_URL], notes, a, b);
-            const center = Math.round((a - recT0) / 1000 * sr), span = Math.round(NB_SEARCH_MS / 1000 * sr);
-            const res = SO.dsp.findTemplate(tpl, rec.samples, center - span, center + span, sr);
+            const res = mask ? SO.dsp.findTemplateMasked(tpl, samples, mask, center - span, center + span)
+                             : SO.dsp.findTemplate(tpl, samples, center - span, center + span, sr);
             if (res.index < 0 || res.score < NB_MIN_SCORE) continue;
             if (Math.abs(res.index - center) > span - 0.002 * sr) continue;   // stuck at the edge of the search
             const heardAt = rec.startServerMs + res.index / sr * 1000;
@@ -1311,6 +1339,17 @@
     // Reports from other phones about MY notes. Only reports of notes heard after my last
     // correction took effect count (older ones describe the old delay).
     let selfReportRef = null, correctionEffectiveAt = 0;
+    // When two or more phones report on me, their medians must agree before I move.
+    const LISTENER_AGREE_MS = 40;
+    function listenersDisagree() {
+        const by = {};
+        for (const r of rawShiftsBy) (by[r.by] = by[r.by] || []).push(r.err);
+        const meds = Object.entries(by).filter(([, v]) => v.length >= 2).map(([k, v]) => [k, calculateMedian(v)]);
+        if (meds.length < 2) return null;
+        const vals = meds.map(m => m[1]);
+        if (Math.max(...vals) - Math.min(...vals) <= LISTENER_AGREE_MS) return null;
+        return meds.map(([k, v]) => `${k} ${v > 0 ? '+' : ''}${v.toFixed(0)}`).join(', ');
+    }
     const CORRECTION_SETTLE_MS = 300;   // new stream fades in over 100 ms; margin for travel/detection
     function startSelfReportListener() {
         stopSelfReportListener();
@@ -1322,7 +1361,8 @@
             if (!v || !isFinite(v.err) || isHappy) return;
             if (v.at < correctionEffectiveAt) return;
             rawTimeShifts.push(v.err);
-            if (rawTimeShifts.length > 50) rawTimeShifts.shift();
+            rawShiftsBy.push({ by: v.by, err: v.err });
+            if (rawTimeShifts.length > 50) { rawTimeShifts.shift(); rawShiftsBy.shift(); }
             log(`📨 ${v.by} heard me ${v.err > 0 ? '+' : ''}${v.err.toFixed(1)}ms`, 'debug');
         });
     }
@@ -1800,7 +1840,7 @@
                 // Playing notes means calibrating, even if this phone has a saved calibration
                 // (a re-run). It used to keep isHappy from the saved one, so it never listened to
                 // its neighbours or corrected anything.
-                isHappy = false; correctionCount = 0; rawTimeShifts = [];
+                isHappy = false; correctionCount = 0; rawTimeShifts = []; rawShiftsBy = [];
                 if (sched.schedule) {
                     assignedNotes = noteSchedule.filter(n => n.deviceId === mySeat.id);
                     log(`🎯 Assigned ${assignedNotes.length} notes`);
@@ -1841,7 +1881,7 @@
                 phase1WindowActive = true;
                 micDelaySamples = [];
                 myMicDelayMs = null;
-                rawTimeShifts = [];
+                rawTimeShifts = []; rawShiftsBy = [];
                 pillarSyncShifts = [];
                 processedMeasurements.clear();
                 localRecordings.clear();
@@ -2498,8 +2538,8 @@
     }
 
     window.onload = async () => {
-        log(`🚀 Loading... (devicedist build 2026-11-11g, config.js build ${SO.BUILD || "old"})`);
-        if (SO.BUILD !== "2026-11-11c") { log(`⚠️ config.js is build ${SO.BUILD || "old"}, this page needs 2026-11-11c: reload`, "warn"); SO.showWarning("build", [`This phone has an old copy of config.js (${SO.BUILD || "old"}). Close this tab and open the link again.`]); }
+        log(`🚀 Loading... (devicedist build 2026-11-11h, config.js build ${SO.BUILD || "old"})`);
+        if (SO.BUILD !== "2026-11-11h") { log(`⚠️ config.js is build ${SO.BUILD || "old"}, this page needs 2026-11-11h: reload`, "warn"); SO.showWarning("build", [`This phone has an old copy of config.js (${SO.BUILD || "old"}). Close this tab and open the link again.`]); }
         try {
             await resolveIdentity();
             // Measure the clock before anything is calibrated or played
