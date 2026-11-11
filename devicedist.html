@@ -1146,9 +1146,11 @@
         const songPos = tuningStartTime ? now - tuningStartTime : 0;
         const isPhase2 = songPos >= phase1EndMs;
 
-        if (!isHappy && isPhase2 && tuningStartTime) {
+        // Listen-only (calibrated) phones keep detecting and reporting; only phones that are
+        // calibrating themselves evaluate and correct.
+        if ((!isHappy || isListenOnlyMode) && isPhase2 && tuningStartTime) {
             processDetectionWindows(now, piccoloEnergy);
-            if (now - lastEvaluationTime > EVALUATION_INTERVAL_MS) {
+            if (!isListenOnlyMode && !isHappy && now - lastEvaluationTime > EVALUATION_INTERVAL_MS) {
                 lastEvaluationTime = now;
                 evaluateInRealTime();
             }
@@ -2392,7 +2394,7 @@
     }
 
     window.onload = async () => {
-        log(`🚀 Loading... (devicedist build 2026-11-11e, config.js build ${SO.BUILD || "old"})`);
+        log(`🚀 Loading... (devicedist build 2026-11-11f, config.js build ${SO.BUILD || "old"})`);
         if (SO.BUILD !== "2026-11-11c") { log(`⚠️ config.js is build ${SO.BUILD || "old"}, this page needs 2026-11-11c: reload`, "warn"); SO.showWarning("build", [`This phone has an old copy of config.js (${SO.BUILD || "old"}). Close this tab and open the link again.`]); }
         try {
             await resolveIdentity();
