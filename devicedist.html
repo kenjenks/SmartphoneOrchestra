@@ -1787,10 +1787,25 @@
     // TUNING LISTENER
     // ============================================================================
     let isProcessingTuning = false;
+    // Ends the current tuning run on this phone: its playback, its listening and its reports.
+    // Called before a new START PICCOLO and on STOP. (Without it, a phone ignored every start
+    // after the first until it was reloaded: a re-run never reached it.)
+    function endTuningRun(reason) {
+        if (!tuningStartTime) return;
+        for (const st of allStreams) { try { st.source.stop(); } catch (e) {} }
+        allStreams = []; activeStream = null;
+        stopNeighborListening();
+        stopSelfReportListener();
+        stopPeriodicLogging();
+        log(`⏹️ Tuning run ended (${reason})`);
+    }
     function initTuningListener() {
         db.ref('tuning/current').on('value', async snap => {
             const sched = snap.val();
-            if (!sched || sched.status !== 'ACTIVE') return;
+            if (!sched || sched.status !== 'ACTIVE') {
+                if (tuningStartTime && !isProcessingTuning && allStreams.length) endTuningRun('STOP from conductor');
+                return;
+            }
             if (isProcessingTuning || tuningStartTime === sched.startTime) return;
             const now = SO.now();
             if (sched.startTime < now - 60000) { log(`❌ Schedule in past`); return; }
@@ -1803,8 +1818,10 @@
             }
 
             // Normal piccolo tuning
+            endTuningRun('new START PICCOLO');
             log(`🎵 Tuning schedule received: start=${new Date(sched.startTime).toISOString().substr(11,12)}`);
             isProcessingTuning = true;
+            setTimeout(() => { isProcessingTuning = false; }, 15000);   // setup never takes this long
             currentTuningSchedule = sched;
             tuningStartTime = sched.startTime;
             updateDeviceStatusDisplay();
@@ -1926,6 +1943,7 @@
                     }
                 }, phase1TimeoutMs);
             }
+            isProcessingTuning = false;   // set up; the next START PICCOLO will be heard
         });
     }
 
@@ -2538,7 +2556,7 @@
     }
 
     window.onload = async () => {
-        log(`🚀 Loading... (devicedist build 2026-11-11h, config.js build ${SO.BUILD || "old"})`);
+        log(`🚀 Loading... (devicedist build 2026-11-11i, config.js build ${SO.BUILD || "old"})`);
         if (SO.BUILD !== "2026-11-11h") { log(`⚠️ config.js is build ${SO.BUILD || "old"}, this page needs 2026-11-11h: reload`, "warn"); SO.showWarning("build", [`This phone has an old copy of config.js (${SO.BUILD || "old"}). Close this tab and open the link again.`]); }
         try {
             await resolveIdentity();
