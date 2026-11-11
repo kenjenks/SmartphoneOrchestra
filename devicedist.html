@@ -1158,7 +1158,10 @@
     }
 
     function processDetectionWindows(now, piccoloEnergy) {
-        if (!phase1Complete || isHappy) return;
+        if (!phase1Complete) return;
+        // A calibrated phone in listen-only mode is exactly the reference the new phones need,
+        // so it keeps listening and reporting. (It used to stop here because it was "happy".)
+        if (isHappy && !isListenOnlyMode) return;
         if (!noteSchedule.length) return;
         if (!tuningStartTime) return;
         const songPos = now - tuningStartTime;
@@ -1679,11 +1682,14 @@
             const calibratedPatrons = sched.calibratedPatronIds || [];
             const isCalibrated = calibratedPatrons.includes(mySeat.id);
 
+            // Every phone needs the full schedule: listen-only phones use it to know whose note
+            // they are hearing (they had none, so they never heard anyone).
+            noteSchedule = (sched.schedule || []).map(n => ({ ...n, startMs: parseFloat(n.startMs), durationMs: parseFloat(n.durationMs) }));
             if (isCalibrated) {
                 isListenOnlyMode = true;
                 assignedNotes = [];
                 phase1Complete = true;
-                log(`🎯 Listen‑only mode (already calibrated)`);
+                log(`🎯 Listen‑only mode (already calibrated): will report what I hear of ${new Set(noteSchedule.map(n => n.deviceId)).size} playing phone(s)`);
             } else {
                 isListenOnlyMode = false;
                 // Playing notes means calibrating, even if this phone has a saved calibration
@@ -1691,7 +1697,6 @@
                 // its neighbours or corrected anything.
                 isHappy = false; correctionCount = 0; rawTimeShifts = [];
                 if (sched.schedule) {
-                    noteSchedule = sched.schedule.map(n => ({ ...n, startMs: parseFloat(n.startMs), durationMs: parseFloat(n.durationMs) }));
                     assignedNotes = noteSchedule.filter(n => n.deviceId === mySeat.id);
                     log(`🎯 Assigned ${assignedNotes.length} notes`);
                     if (assignedNotes.length) {
@@ -2387,7 +2392,7 @@
     }
 
     window.onload = async () => {
-        log(`🚀 Loading... (devicedist build 2026-11-11c, config.js build ${SO.BUILD || "old"})`);
+        log(`🚀 Loading... (devicedist build 2026-11-11d, config.js build ${SO.BUILD || "old"})`);
         try {
             await resolveIdentity();
             // Measure the clock before anything is calibrated or played
