@@ -1429,7 +1429,11 @@
                         const dy = mySeat.y - pillar.y;
                         const dist = Math.sqrt(dx*dx + dy*dy);
                         const propMs = (dist / SPEED_OF_SOUND) * 1000;
-                        const micDelay = rawDelay - pillar.speakerDelayMs - propMs;
+                        // The pillar already starts early by its own speaker delay, so its sound leaves
+                        // the speaker at expectedOnset. Don't subtract the speaker delay again (same rule
+                        // as the tuba path); doing so made every phone's mic delay come out ~100 ms low.
+                        const micDelay = rawDelay - propMs;
+                        log(`📊 ${pillarId}: rawDelay=${rawDelay.toFixed(1)}ms, propMs=${propMs.toFixed(1)}ms, micDelay=${micDelay.toFixed(1)}ms`);
                         if (micDelay >= MIC_DELAY_SANITY_MIN && micDelay <= MIC_DELAY_SANITY_MAX) {
                             micDelaySamples.push(micDelay);
                             pillarDetectionsCount++;
@@ -1726,7 +1730,10 @@
             if (!isListenOnlyMode && pillarWindows.length && activePillars.length) {
                 await loadPillarTemplates();   // normally already done at preload; instant then
                 schedulePillarRecordings();
-                // Set a timeout to fall back to default mic delay if no detections
+                // Fall back to the default mic delay only after the last window has been recorded
+                // and analysed. (This used to wait phase1EndMs from *now*, about 5 s before the
+                // start, so it fired during the last window and threw away the last results.)
+                const phase1TimeoutMs = Math.max(0, tuningStartTime + phase1EndMs + RECORDING_POST_MS + 3000 - SO.now());
                 setTimeout(() => {
                     if (phase1WindowActive && !phase1Complete) {
                         log(`⏱️ Phase 1 timeout, using default mic delay`);
@@ -1735,7 +1742,7 @@
                         myMicDelayMs = micDelaySamples.length ? calculateMedian(micDelaySamples) : estimatedDeviceMicDelayMs;
                         updateCalibrationDisplay();
                     }
-                }, phase1EndMs);
+                }, phase1TimeoutMs);
             }
         });
     }
