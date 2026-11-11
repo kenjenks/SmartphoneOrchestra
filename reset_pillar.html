@@ -246,7 +246,6 @@
 
 <div id="detection-flash" class="detection-flash"></div>
 
-</body>
 <script>
     // --------------------------------------------------------------
     //  FIREBASE CONFIG
@@ -1063,19 +1062,29 @@
     // ---- One calibration run: its timers and its playing sound, so STOP / KILL can cancel it
     const calRun = { active: false, timers: [], playback: null };
     function runTimer(fn, ms) { const id = setTimeout(fn, ms); calRun.timers.push(id); return id; }
+    function stopRunSound() {
+        const pb = calRun.playback;
+        calRun.playback = null;
+        if (!pb || !pb.source) return false;
+        const t = audioCtx.currentTime;
+        const g = (pb.gainNode || pb.gain || {}).gain;
+        try {
+            if (g) { g.cancelScheduledValues(t); g.setValueAtTime(g.value, t); g.linearRampToValueAtTime(0, t + 0.05); }
+        } catch (e) {}
+        try { pb.source.stop(t + 0.06); } catch (e) {}   // stop even if the fade could not be set
+        return true;
+    }
     function abortCalibration(reason) {
-        if (!calRun.active) { addLog(`⏹️ ${reason}: no calibration run in progress`, 'info'); return; }
+        if (!calRun.active) {
+            // The listening phase may be over while the tuning music is still playing
+            const stopped = stopRunSound();
+            addLog(stopped ? `⏹️ ${reason}: tuning music stopped (listening phase had already finished)`
+                           : `⏹️ ${reason}: nothing playing`, 'info');
+            return;
+        }
         calRun.timers.forEach(clearTimeout); calRun.timers = [];
         (window.detectionIntervals || []).forEach(i => i && clearInterval(i)); window.detectionIntervals = [];
-        if (calRun.playback && calRun.playback.source) {
-            try {
-                const t = audioCtx.currentTime;
-                calRun.playback.gainNode.gain.setValueAtTime(calRun.playback.gainNode.gain.value, t);
-                calRun.playback.gainNode.gain.linearRampToValueAtTime(0, t + 0.05);
-                calRun.playback.source.stop(t + 0.06);
-            } catch (e) {}
-        }
-        calRun.playback = null;
+        stopRunSound();
         calRun.active = false;
         // Still armed: the tuning listener stays attached, so the next START PICCOLO runs normally
         isListening = true;
@@ -1296,11 +1305,15 @@
             // ============================================================
             const myWindow = (windows || []).find(w => w.pillar_id === myId);
             if (myWindow && pillarData[myId]?.audioUrl) {
-                const myStartMs = myWindow.start_ms;
-                // Use global Firebase time for precise synchronization
-                const targetFirebaseTime = globalStartTime + myStartMs;
+                // Every pillar's track is the full tuning piece, timed from its own start (the
+                // phones cut their templates at window.start_ms INTO the file, and ePillar plays
+                // the same track from the global start). So all four start together at the
+                // global start; each pillar's calibration notes are already at its window inside
+                // the file. Starting a track at its window instead pushed FR, BR and BL 5, 10 and
+                // 15 s late, out of step with each other and with their windows.
+                const targetFirebaseTime = globalStartTime;
 
-                addLog(`🎵 Scheduling ${myId} playback at ${myStartMs}ms after global start`);
+                addLog(`🎵 Scheduling ${myId} track from the global start; its calibration notes are at ${(myWindow.start_ms / 1000).toFixed(1)}–${(myWindow.end_ms / 1000).toFixed(1)} s`);
                 const scheduled = await schedulePrecisePlayback(pillarData[myId].audioUrl, targetFirebaseTime);
                 if (!calRun.active) {   // STOP arrived while this was being scheduled
                     try { scheduled && scheduled.source.stop(); } catch (e) {}
@@ -1442,4 +1455,5 @@
         flushLogs();
     });
 </script>
+</body>
 </html>

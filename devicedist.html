@@ -1509,6 +1509,7 @@
             }, next);
         };
         schedule();
+        sendHeartbeat();   // one now, so the conductor doesn't mark the phone DEAD while waiting for the first interval
         log(`💓 Heartbeat started`);
     }
 
