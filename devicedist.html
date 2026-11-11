@@ -1050,8 +1050,7 @@
         updateCalibrationDisplay();
 
         if (clamped <= MIN_DELAY && correctionCount > 0) {
-            log(`⚠️ Delay hit minimum (${MIN_DELAY}ms). Completing calibration.`);
-            completeCalibration();
+            failCalibration(`speaker delay hit its minimum (${MIN_DELAY} ms)`);
         }
     }
 
@@ -1096,12 +1095,12 @@
         const MIN_DELAY = -500, MAX_DELAY = 2000;
         if (curDelay <= MIN_DELAY && median < 0) {
             log(`⚠️ At min delay, still early by ${Math.abs(median).toFixed(1)}ms`);
-            if (correctionCount > 0) completeCalibration();
+            if (correctionCount > 0) failCalibration('still early at the minimum delay');
             return;
         }
         if (curDelay >= MAX_DELAY && median > 0) {
             log(`⚠️ At max delay, still late by ${Math.abs(median).toFixed(1)}ms`);
-            if (correctionCount > 0) completeCalibration();
+            if (correctionCount > 0) failCalibration('still late at the maximum delay');
             return;
         }
         if (shouldIterate(median, stdDev, rawTimeShifts.length)) {
@@ -1149,7 +1148,7 @@
         // Listen-only (calibrated) phones keep detecting and reporting; only phones that are
         // calibrating themselves evaluate and correct.
         if ((!isHappy || isListenOnlyMode) && isPhase2 && tuningStartTime) {
-            processDetectionWindows(now, piccoloEnergy);
+            if (!NEIGHBOR_XCORR) processDetectionWindows(now, piccoloEnergy);
             if (!isListenOnlyMode && !isHappy && now - lastEvaluationTime > EVALUATION_INTERVAL_MS) {
                 lastEvaluationTime = now;
                 evaluateInRealTime();
@@ -1219,6 +1218,93 @@
                     log(`👥 ${note.deviceId} note ${note.noteIndex} → delay=${speakerDelay.toFixed(1)}ms`);
                 }
             }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    //  HEARING THE OTHER PHONES, BY CROSS-CORRELATION
+    //  Every phone records phase 2 in 2-second chunks. For each neighbour with notes in a chunk,
+    //  it builds what that neighbour plays there (the piccolo track masked to its notes, exactly
+    //  as the neighbour builds its own buffer) and finds it in the recording. The result goes to
+    //  that neighbour, which corrects itself from these reports.
+    //  This replaced note-energy detection, which latched onto the PREVIOUS note: with one phone
+    //  playing every note, 286 ms apart, every report came out -288 ms whatever the delay was,
+    //  and the phone ran its delay down to the -500 ms limit.
+    // ------------------------------------------------------------------
+    const NEIGHBOR_XCORR = true;
+    const NB_CHUNK_MS = 2000, NB_MARGIN_MS = 340, NB_SEARCH_MS = 320, NB_MIN_SCORE = 0.05;
+    let neighborListenRun = 0;
+    function stopNeighborListening() { neighborListenRun++; }
+    function templateForDevice(src, notes, aMs, bMs) {
+        const sr = src.sampleRate, a = Math.round(aMs / 1000 * sr), n = Math.round((bMs - aMs) / 1000 * sr);
+        const out = new Float32Array(n), fade = Math.round(FADE_MS / 1000 * sr) || 1;
+        for (const note of notes) {
+            const s0 = Math.round(note.startMs / 1000 * sr), s1 = Math.round((note.startMs + note.durationMs) / 1000 * sr);
+            for (let ch = 0; ch < src.numberOfChannels; ch++) {
+                const d = src.getChannelData(ch);
+                for (let s = Math.max(s0, a); s < Math.min(s1, a + n, d.length); s++) {
+                    const g = Math.min(1, (s - s0) / fade, (s1 - s) / fade);
+                    out[s - a] += d[s] * g / src.numberOfChannels;
+                }
+            }
+        }
+        return out;
+    }
+    async function startNeighborListening() {
+        const run = ++neighborListenRun;
+        const src = bufferCache[PICCOLO_URL];
+        if (!src || !micStream || !audioCtx) { log('⚠️ Cannot listen to neighbours: piccolo track or microphone missing', 'warn'); return; }
+        if (src.sampleRate !== audioCtx.sampleRate) { log(`⚠️ Piccolo track is ${src.sampleRate} Hz, recording ${audioCtx.sampleRate} Hz; not timing neighbours`, 'warn'); return; }
+        const targets = new Set(allListeningTargets);
+        const byDev = {};
+        for (const n of noteSchedule) if (targets.has(n.deviceId) && n.deviceId !== mySeat.id) (byDev[n.deviceId] = byDev[n.deviceId] || []).push(n);
+        const devs = Object.keys(byDev);
+        if (!devs.length) { log('👂 No playing neighbours to listen to'); return; }
+        const lastEnd = Math.max(...devs.flatMap(d => byDev[d].map(n => n.startMs + n.durationMs)));
+        log(`👂 Timing ${devs.join(', ')} by cross-correlation, ${NB_CHUNK_MS / 1000} s at a time`);
+        const runId = Math.floor(tuningStartTime);
+        const startT = tuningStartTime;
+        let t0 = phase1EndMs;
+        while (run === neighborListenRun && startT === tuningStartTime && t0 < lastEnd) {
+            const recStart = startT + t0;
+            const wait = recStart - SO.now() - 400;
+            if (wait > 0) await new Promise(r => setTimeout(r, wait));
+            if (run !== neighborListenRun) break;
+            if (SO.now() > recStart + NB_CHUNK_MS - 2 * NB_MARGIN_MS) { t0 += NB_CHUNK_MS; continue; }   // fell behind: skip
+            const chunkT0 = t0;
+            SO.audio.record(audioCtx, micStream, { startServerMs: recStart, durationMs: NB_CHUNK_MS })
+                .then(rec => { if (run === neighborListenRun) analyzeNeighborChunk(rec, chunkT0, byDev, runId, startT); })
+                .catch(e => log(`⚠️ Neighbour recording failed: ${e.message}`, 'warn'));
+            t0 += NB_CHUNK_MS;
+        }
+    }
+    async function analyzeNeighborChunk(rec, t0, byDev, runId, startT) {
+        const sr = rec.sampleRate;
+        const recT0 = rec.startServerMs - startT;                     // song time of sample 0
+        const recT1 = recT0 + rec.samples.length / sr * 1000;
+        const a = recT0 + NB_MARGIN_MS, b = recT1 - NB_MARGIN_MS;     // template window, song time
+        if (b - a < 400) return;
+        for (const dev of Object.keys(byDev)) {
+            const notes = byDev[dev].filter(n => n.startMs < b - 100 && n.startMs + n.durationMs > a + 50);
+            if (!notes.length) continue;
+            await new Promise(r => setTimeout(r, 0));
+            const tpl = templateForDevice(bufferCache[PICCOLO_URL], notes, a, b);
+            const center = Math.round((a - recT0) / 1000 * sr), span = Math.round(NB_SEARCH_MS / 1000 * sr);
+            const res = SO.dsp.findTemplate(tpl, rec.samples, center - span, center + span, sr);
+            if (res.index < 0 || res.score < NB_MIN_SCORE) continue;
+            if (Math.abs(res.index - center) > span - 0.002 * sr) continue;   // stuck at the edge of the search
+            const heardAt = rec.startServerMs + res.index / sr * 1000;
+            const raw = heardAt - (startT + a);
+            const n0 = notes[0];
+            const propMs = Math.hypot(mySeat.x - n0.originX, mySeat.y - n0.originY) / SPEED_OF_SOUND * 1000;
+            const err = raw - propMs - (myMicDelayMs || 0);
+            if (Math.abs(err) > 400) continue;
+            neighborDetectionsCount++;
+            neighborDetectionsPerNeighbor.set(dev, (neighborDetectionsPerNeighbor.get(dev) || 0) + 1);
+            db.ref(`measurements/byTarget/${runId}/${dev}/${mySeat.id}_x${Math.round(a)}`)
+                .set({ err: Math.round(err * 10) / 10, at: Math.round(heardAt), by: mySeat.id, score: Math.round(res.score * 100) / 100, notes: notes.length, method: 'xcorr' })
+                .catch(e => log(`❌ Report failed: ${e.message}`));
+            log(`👂 ${dev}: ${notes.length} notes, ${err > 0 ? '+' : ''}${err.toFixed(1)} ms (match ${res.score.toFixed(2)})`, 'debug');
         }
     }
 
@@ -1468,9 +1554,11 @@
                             micDelaySamples.push(micDelay);
                             pillarDetectionsCount++;
                             if (micDelaySamples.length >= MIN_MIC_SAMPLES) {
+                                const oldMic = myMicDelayMs;
                                 myMicDelayMs = calculateMedian(micDelaySamples);
                                 phase1Complete = true;
-                                log(`🎤 Mic delay: ${myMicDelayMs.toFixed(1)}ms (${micDelaySamples.length} detections)`);
+                                log(`🎤 Mic delay: ${myMicDelayMs.toFixed(1)}ms (${micDelaySamples.length} detections)${isListenOnlyMode && oldMic != null ? `, was ${oldMic.toFixed(1)}ms` : ''}`);
+                                if (isListenOnlyMode) saveCalibration();
                                 updateCalibrationDisplay();
                             }
                         } else {
@@ -1507,6 +1595,19 @@
         updateCalibrationDisplay();
         stopPeriodicLogging();
         startPhase3();
+    }
+
+    // Running into a delay limit means the measurements were wrong, not that the phone is
+    // calibrated: stop, keep nothing, and say so. (It used to save the limit as a calibration.)
+    async function failCalibration(reason) {
+        if (isHappy) return;
+        isHappy = true;
+        stopSelfReportListener();
+        log(`⛔ Calibration FAILED: ${reason}. Nothing saved; this phone stays uncalibrated.`, 'error');
+        try { localStorage.removeItem(`calibration_${mySeat.id}`); } catch (e) {}
+        await db.ref(`devices/${mySeat.id}`).update({ status: 'CAL_FAILED', calibrated: false, calFailedReason: reason, calFailedAt: SO.now() }).catch(() => {});
+        updateCalibrationDisplay();
+        stopPeriodicLogging();
     }
 
     function saveCalibration() {
@@ -1690,7 +1791,9 @@
             if (isCalibrated) {
                 isListenOnlyMode = true;
                 assignedNotes = [];
-                phase1Complete = true;
+                phase1Complete = true;          // keeps the stored mic delay until a new one is measured
+                micDelaySamples = [];           // ...which it is, from the pillar windows below: the
+                pillarDetectionsCount = 0;      // reference must match the pillars as they are today
                 log(`🎯 Listen‑only mode (already calibrated): will report what I hear of ${new Set(noteSchedule.map(n => n.deviceId)).size} playing phone(s)`);
             } else {
                 isListenOnlyMode = false;
@@ -1763,9 +1866,10 @@
             log("🎧 Listening...");
             startPeriodicLogging();
             startSelfReportListener();
+            if (NEIGHBOR_XCORR) startNeighborListening();
 
             // Schedule waveform‑based pillar recordings for Phase 1
-            if (!isListenOnlyMode && pillarWindows.length && activePillars.length) {
+            if (pillarWindows.length && activePillars.length) {
                 await loadPillarTemplates();   // normally already done at preload; instant then
                 schedulePillarRecordings();
                 // Fall back to the default mic delay only after the last window has been recorded
@@ -2394,7 +2498,7 @@
     }
 
     window.onload = async () => {
-        log(`🚀 Loading... (devicedist build 2026-11-11f, config.js build ${SO.BUILD || "old"})`);
+        log(`🚀 Loading... (devicedist build 2026-11-11g, config.js build ${SO.BUILD || "old"})`);
         if (SO.BUILD !== "2026-11-11c") { log(`⚠️ config.js is build ${SO.BUILD || "old"}, this page needs 2026-11-11c: reload`, "warn"); SO.showWarning("build", [`This phone has an old copy of config.js (${SO.BUILD || "old"}). Close this tab and open the link again.`]); }
         try {
             await resolveIdentity();

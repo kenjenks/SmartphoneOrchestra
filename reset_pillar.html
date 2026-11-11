@@ -1285,6 +1285,11 @@
             }
 
             lastProcessedStartTime = schedule.startTime;
+            // Use the delays as they are now (an Apply in admin since the last run counts)
+            const before = pillarData[myId] && pillarData[myId].speakerDelayMs;
+            await loadPillarConfig().catch(e => addLog(`⚠️ Could not reload pillar_config: ${e.message}`, 'warn'));
+            if (before !== undefined && pillarData[myId] && pillarData[myId].speakerDelayMs !== before)
+                addLog(`🔄 Speaker delay updated from pillar_config: ${before} → ${pillarData[myId].speakerDelayMs} ms`, 'info');
             calRun.active = true; calRun.timers = []; calRun.playback = null; calRun.writes = [];
             calRun.configured = {};   // the delays this run is played with (the solver corrects these)
             for (const id of pillarOrder) calRun.configured[id] = { spk: pillarData[id].speakerDelayMs, mic: pillarData[id].micDelayMs };
@@ -1421,12 +1426,10 @@
                 // Compute final delays from collected measurements
                 computePillarDelays();
 
-                // Clean up tuning listener
-                if (currentTuningListener) {
-                    tuningRef.off('value', currentTuningListener);
-                    currentTuningListener = null;
-                    addLog('🔇 Tuning listener removed', 'info');
-                }
+                // The tuning listener stays attached, so the next START PICCOLO works without
+                // touching the tablet. (It used to be removed here, so a second run without a
+                // reload played nothing.) Old and repeated starts are already ignored above.
+                addLog('🔊 Ready for the next START PICCOLO', 'info');
 
                 // Clean up any remaining detection intervals
                 if (window.detectionIntervals) {
@@ -1454,7 +1457,7 @@
             return;
         }
         myId = seatParam;
-        addLog(`🚀 ${myId} Loaded (reset_pillar build 2026-11-11e, config.js build ${SO.BUILD || "old"})`);
+        addLog(`🚀 ${myId} Loaded (reset_pillar build 2026-11-11g, config.js build ${SO.BUILD || "old"})`);
         if (SO.BUILD !== "2026-11-11c") { addLog(`❌ config.js is build ${SO.BUILD || "old"}, this page needs 2026-11-11c. Close this tab and open the link again.`, "error"); SO.showWarning("build", [`Old copy of config.js (${SO.BUILD || "old"}): close this tab and open the link again.`]); }
         document.getElementById('pillar-id-badge').innerText = myId;
 
