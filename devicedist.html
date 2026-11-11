@@ -88,8 +88,11 @@
     const MIN_DETECTION_ENERGY = 0.03;
     const PILLAR_ONSET_THRESHOLD = 2.0;
     const PHASE1_SCHEDULE_WINDOW_MS = 200;
-    const MIC_DELAY_SANITY_MIN = -100;
-    const MIC_DELAY_SANITY_MAX = 200;
+    // Mic delay is measured against the pillars, so it also carries whatever offset the pillars
+    // have (they can run early or late as a group). Phones calibrated against that value stay in
+    // step with the pillars, so the range has to allow it.
+    const MIC_DELAY_SANITY_MIN = -250;
+    const MIC_DELAY_SANITY_MAX = 250;
     const MIN_MIC_SAMPLES = 4;
     const NOTE_BAND_RATIO = Math.pow(2, 1/48);
     const RECORDING_WINDOW_MS = 200;
@@ -1683,6 +1686,10 @@
                 log(`🎯 Listen‑only mode (already calibrated)`);
             } else {
                 isListenOnlyMode = false;
+                // Playing notes means calibrating, even if this phone has a saved calibration
+                // (a re-run). It used to keep isHappy from the saved one, so it never listened to
+                // its neighbours or corrected anything.
+                isHappy = false; correctionCount = 0; rawTimeShifts = [];
                 if (sched.schedule) {
                     noteSchedule = sched.schedule.map(n => ({ ...n, startMs: parseFloat(n.startMs), durationMs: parseFloat(n.durationMs) }));
                     assignedNotes = noteSchedule.filter(n => n.deviceId === mySeat.id);
@@ -2380,7 +2387,7 @@
     }
 
     window.onload = async () => {
-        log("🚀 Loading...");
+        log(`🚀 Loading... (devicedist build 2026-11-11c, config.js build ${SO.BUILD || "old"})`);
         try {
             await resolveIdentity();
             // Measure the clock before anything is calibrated or played

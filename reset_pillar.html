@@ -895,8 +895,23 @@
     //  shared clock, with no detection lag. (The old method polled an FFT for note energy:
     //  readings scattered from about 25 to 190 ms, which limited the result to about ±10 ms.)
     // ------------------------------------------------------------------
-    const XCORR_CHUNKS = 4;
-    const XCORR_MIN_SCORE = 0.10;     // normalized correlation; below this the piece wasn't heard clearly
+    const XCORR_CHUNKS = 6;
+    // Which pieces to trust: in the room, correct pieces often score only 0.05–0.1, while a piece
+    // that wasn't heard lands somewhere random. So instead of a score cut-off, keep the largest
+    // group of pieces that agree with each other within XCORR_AGREE_MS (ignoring near-zero scores
+    // and matches stuck at the edge of the search).
+    const XCORR_FLOOR_SCORE = 0.03;
+    const XCORR_AGREE_MS = 6;
+    function selectConsistentPieces(found) {
+        const c = found.filter(f => f.score >= XCORR_FLOOR_SCORE && !f.atEdge);
+        let best = [], bestScore = -1;
+        for (const a of c) {
+            const g = c.filter(f => Math.abs(f.raw - a.raw) <= XCORR_AGREE_MS);
+            const sc = g.reduce((t, f) => t + f.score, 0);
+            if (g.length > best.length || (g.length === best.length && sc > bestScore)) { best = g; bestScore = sc; }
+        }
+        return best;
+    }
     const LISTEN_PRE_MS = 250;        // search this much before the expected arrival…
     const LISTEN_POST_MS = 450;       // …and this much after (travel + mic + remaining error)
     const RECORDER_LEAD_MS = 400;     // start the recorder early; it trims to the asked start
@@ -956,16 +971,19 @@
                 center - Math.round(LISTEN_PRE_MS / 1000 * sr), center + Math.round(LISTEN_POST_MS / 1000 * sr), sr);
             if (res.index < 0) continue;
             const raw = rec.startServerMs + res.index / sr * 1000 - expectedServer;
-            found.push({ k, raw, score: res.score });
-            if (res.score < XCORR_MIN_SCORE) continue;
+            const lo = center - Math.round(LISTEN_PRE_MS / 1000 * sr), hi = center + Math.round(LISTEN_POST_MS / 1000 * sr);
+            found.push({ k, raw, score: res.score, chunkMs, atEdge: res.index - lo < 0.002 * sr || hi - res.index < 0.002 * sr });
+        }
+        const good = selectConsistentPieces(found);
+        for (const { k, raw, score, chunkMs } of good) {
+            const res = { score };
             calRun.writes.push(db.ref(`pillar_calibration/runs/${runId}/${pillarId}/${myId}/${k}`).set({
                 rawDelayMs: Math.round(raw * 100) / 100, score: Math.round(res.score * 1000) / 1000,
                 listenerId: myId, method: 'xcorr', chunk: k, chunkMs: Math.round(chunkMs), timestamp: SO.now()
             }));
             (pillarMeasurements[pillarId] = pillarMeasurements[pillarId] || []).push({ rawDelay: raw, score: res.score });
         }
-        const good = found.filter(f => f.score >= XCORR_MIN_SCORE);
-        addLog(`🎯 ${pillarId}: ${good.length}/${XCORR_CHUNKS} pieces heard, raw ${found.map(f => `${f.raw.toFixed(1)}${f.score < XCORR_MIN_SCORE ? '✗' : ''}`).join(' / ')} ms (match ${found.map(f => f.score.toFixed(2)).join(' / ')})`,
+        addLog(`🎯 ${pillarId}: ${good.length}/${XCORR_CHUNKS} pieces agree, raw ${found.map(f => `${f.raw.toFixed(1)}${good.includes(f) ? '' : '✗'}`).join(' / ')} ms (match ${found.map(f => f.score.toFixed(2)).join(' / ')})`,
                good.length >= CAL_MIN_NOTES_PER_LISTENER ? 'success' : 'warn');
         updateResultsDisplay();
     }
@@ -979,7 +997,7 @@
     // and its new speaker delay = c + correction. Mic delays are kept: pillar-to-pillar timing
     // only fixes the sum of a speaker and a mic delay, so it cannot measure them separately.
     // Every tablet reads the same complete set of detections for this run and gets the same answer.
-    const CAL_MIN_NOTES_PER_LISTENER = 3;
+    const CAL_MIN_NOTES_PER_LISTENER = 2;   // agreeing cross-correlation pieces
     const CAL_MIN_LISTENERS = 2;
     async function computePillarDelays() {
         const runId = Math.floor(tuningStartTime);
@@ -1436,7 +1454,7 @@
             return;
         }
         myId = seatParam;
-        addLog(`🚀 ${myId} Loaded`);
+        addLog(`🚀 ${myId} Loaded (reset_pillar build 2026-11-11c, config.js build ${SO.BUILD || "old"})`);
         document.getElementById('pillar-id-badge').innerText = myId;
 
         // Clock comes from config.js; measure it before calibrating

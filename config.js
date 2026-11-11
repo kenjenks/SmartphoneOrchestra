@@ -857,6 +857,7 @@
 
     // ---------------------------------------------------------------- Export
     window.SO = {
+        BUILD: '2026-11-11c',
         FIREBASE_CONFIG, LIMITS, FALLBACK, db,
         now, onClockSync,
         get serverOffset() { return now() - Date.now(); },   // legacy: server − Date.now()
