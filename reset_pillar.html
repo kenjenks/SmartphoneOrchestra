@@ -246,6 +246,7 @@
 
 <div id="detection-flash" class="detection-flash"></div>
 
+</body>
 <script>
     // --------------------------------------------------------------
     //  FIREBASE CONFIG
@@ -666,6 +667,9 @@
     // --------------------------------------------------------------
     function processPillarDetectionWindows(now, pillarNotes, pillarId, windowStartMs, windowEndMs) {
         if (!analyser || !frequencyData) return;
+        // Read the microphone's spectrum now. (Without this the array stays all zeros, and no
+        // pillar can ever be heard: every baseline and every note reads 0.0000.)
+        analyser.getByteFrequencyData(frequencyData);
         if (!tuningStartTime) return;
 
         const songPosition = now - tuningStartTime;
@@ -1438,5 +1442,4 @@
         flushLogs();
     });
 </script>
-</body>
 </html>

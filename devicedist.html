@@ -733,27 +733,40 @@
         });
     }
 
+    // Where in the recording does the template line up best? Returns that offset in ms.
+    // Two steps, so a phone doesn't freeze: a coarse search on both signals averaged down by
+    // XCORR_DECIMATE, then an exact search at full rate a few samples either side of the best
+    // coarse match. Same answer as trying every offset at full rate (which took ~18 s per pillar
+    // on a Pixel 6 and stalled the page), in a fraction of a second.
+    const XCORR_DECIMATE = 8;
+    function decimate(x, f) {
+        const out = new Float32Array(Math.floor(x.length / f));
+        for (let i = 0, j = 0; i < out.length; i++) {
+            let s = 0;
+            for (let k = 0; k < f; k++) s += x[j++];
+            out[i] = s / f;
+        }
+        return out;
+    }
+    function bestLagIn(t, r, from, to) {
+        let bestLag = from, maxCorr = -Infinity;
+        const m = t.length;
+        for (let lag = Math.max(0, from); lag <= to && lag + m <= r.length; lag++) {
+            let sum = 0;
+            for (let i = 0; i < m; i++) sum += t[i] * r[lag + i];
+            if (sum > maxCorr) { maxCorr = sum; bestLag = lag; }
+        }
+        return bestLag;
+    }
     function crossCorrelate(template, recorded) {
         const t = template.getChannelData(0);
         const r = recorded.getChannelData(0);
-        const n = r.length;
-        const m = t.length;
+        const n = r.length, m = t.length;
         if (n < m) return 0;
-        let bestLag = 0;
-        let maxCorr = -Infinity;
-        for (let lag = 0; lag <= n - m; lag++) {
-            let sum = 0;
-            for (let i = 0; i < m; i++) {
-                sum += t[i] * r[lag + i];
-            }
-            if (sum > maxCorr) {
-                maxCorr = sum;
-                bestLag = lag;
-            }
-        }
-        const sampleRate = recorded.sampleRate;
-        const offsetMs = (bestLag / sampleRate) * 1000;
-        return offsetMs;
+        const f = XCORR_DECIMATE;
+        const coarse = bestLagIn(decimate(t, f), decimate(r, f), 0, Math.floor((n - m) / f));
+        const fine = bestLagIn(t, r, coarse * f - 2 * f, coarse * f + 2 * f);
+        return (fine / recorded.sampleRate) * 1000;
     }
 
     // The patron phone listens for each pillar during its calibration window and lines the
