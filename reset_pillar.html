@@ -654,6 +654,7 @@
 
             isMicActive = true;
             addLog('🎤 Microphone ready for detecting other pillars', 'success');
+            SO.audio.prepareRecorder(audioCtx).catch(e => addLog(`⚠️ AudioWorklet recorder unavailable (${e.message}); using the ScriptProcessor fallback`, 'warn'));
             return true;
         } catch (e) {
             addLog(`❌ Microphone error: ${e.message}`, 'warn');
@@ -768,7 +769,7 @@
                     // Store to Firebase: every detection, filed under this run, so all four pillars
                     // compute from the same complete set (and old runs never mix in)
                     const measurementRef = db.ref(`pillar_calibration/runs/${Math.floor(tuningStartTime)}/${pillarId}/${myId}/${note.index}`);
-                    measurementRef.set({
+                    calRun.writes.push(measurementRef.set({
                         rawDelayMs: rawDelay,
                         listenerId: myId,
                         timestamp: detectionTime,
@@ -777,7 +778,7 @@
                         notePitch: note.pitch,
                         noteMsOffset: note.ms_offset,
                         energy: combinedEnergy
-                    });
+                    }));
 
                     processedMeasurements.add(noteKey);
                     detectionWindows.delete(noteKey);
@@ -863,7 +864,7 @@
         }
 
         let html = '<table class="measurement-table">';
-        html += ' hilab<th>Target Pillar</th><th>Raw Delays (ms)</th><th>Median (ms)</th><th>StdDev (ms)</th><th>Samples</th> </tr>';
+        html += ' <tr><th>Target Pillar</th><th>Raw Delays (ms)</th><th>Median (ms)</th><th>StdDev (ms)</th><th>Samples</th> </tr>';
 
         for (const [pillarId, measurements] of Object.entries(pillarMeasurements)) {
             const rawDelays = measurements.map(m => m.rawDelay);
@@ -884,11 +885,96 @@
         resultsPanel.innerHTML = html;
     }
 
+    // ------------------------------------------------------------------
+    //  LISTENING BY CROSS-CORRELATION
+    //  Each tablet records every other pillar's window and lines the recording up against a
+    //  copy of what that pillar plays (its pillar_config track, cut at the window). The window
+    //  is split into XCORR_CHUNKS pieces, each placed separately, so each listener gives several
+    //  independent readings (the solver takes their median). The recording is timestamped by
+    //  its first captured sample (SO.audio.record), so the result is in milliseconds on the
+    //  shared clock, with no detection lag. (The old method polled an FFT for note energy:
+    //  readings scattered from about 25 to 190 ms, which limited the result to about ±10 ms.)
+    // ------------------------------------------------------------------
+    const XCORR_CHUNKS = 4;
+    const XCORR_MIN_SCORE = 0.10;     // normalized correlation; below this the piece wasn't heard clearly
+    const LISTEN_PRE_MS = 250;        // search this much before the expected arrival…
+    const LISTEN_POST_MS = 450;       // …and this much after (travel + mic + remaining error)
+    const RECORDER_LEAD_MS = 400;     // start the recorder early; it trims to the asked start
+    let templateBytes = {};           // pillarId -> Promise<ArrayBuffer>  (fetched once per page)
+    let windowTemplates = {};         // `${pillarId}:${start}` -> Promise<Float32Array|null>
+
+    function fetchTrackBytes(pillarId) {
+        const url = pillarData[pillarId]?.audioUrl;
+        if (!url) return Promise.resolve(null);
+        if (!templateBytes[pillarId]) {
+            templateBytes[pillarId] = fetch(url).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.arrayBuffer(); })
+                .catch(e => { delete templateBytes[pillarId]; addLog(`❌ Could not fetch ${pillarId}'s track: ${e.message}`, 'warn'); return null; });
+        }
+        return templateBytes[pillarId];
+    }
+    // One decode at a time, keeping only the window (a full decoded track would be ~70 MB)
+    let decodeQueue = Promise.resolve();
+    function getWindowTemplate(pillarId, startMs, endMs) {
+        const key = `${pillarId}:${startMs}`;
+        if (!windowTemplates[key]) {
+            windowTemplates[key] = decodeQueue = decodeQueue.then(async () => {
+                const bytes = await fetchTrackBytes(pillarId);
+                if (!bytes) return null;
+                await ensureAudioContext();
+                const full = await new Promise((ok, no) => { const pr = audioCtx.decodeAudioData(bytes.slice(0), ok, no); if (pr && pr.then) pr.then(ok, no); });
+                if (full.sampleRate !== audioCtx.sampleRate) addLog(`⚠️ ${pillarId} decoded at ${full.sampleRate} Hz, recording at ${audioCtx.sampleRate} Hz`, 'warn');
+                const t = SO.dsp.monoSlice(full, startMs / 1000, (endMs - startMs) / 1000);
+                addLog(`📐 Template for ${pillarId}: ${(t.length / full.sampleRate).toFixed(2)} s of ${pillarData[pillarId].audioUrl.split('/').pop()}`);
+                return t;
+            }).catch(e => { addLog(`❌ Template for ${pillarId} failed: ${e.message}`, 'warn'); return null; });
+        }
+        return windowTemplates[key];
+    }
+
+    async function listenToWindowByXcorr(pillarId, startMs, endMs) {
+        const runId = Math.floor(tuningStartTime);
+        const recStart = tuningStartTime + startMs - LISTEN_PRE_MS;
+        const recDur = (endMs - startMs) + LISTEN_PRE_MS + LISTEN_POST_MS;
+        addLog(`🎧 Recording ${pillarId}'s window...`);
+        let rec;
+        try {
+            rec = await SO.audio.record(audioCtx, micStream, { startServerMs: recStart, durationMs: recDur });
+        } catch (e) { addLog(`❌ Recording ${pillarId} failed: ${e.message}`, 'warn'); return; }
+        if (!calRun.active) return;
+        const lateMs = rec.startServerMs - recStart;
+        if (lateMs > LISTEN_PRE_MS - 50) addLog(`⚠️ Recording for ${pillarId} started ${Math.round(lateMs)} ms late (${rec.method})`, 'warn');
+        const tpl = await getWindowTemplate(pillarId, startMs, endMs);
+        if (!tpl || !calRun.active) return;
+        const sr = rec.sampleRate, n = Math.floor(tpl.length / XCORR_CHUNKS);
+        const found = [];
+        for (let k = 0; k < XCORR_CHUNKS; k++) {
+            await new Promise(r => setTimeout(r, 0));      // keep the page responsive between pieces
+            const chunkMs = startMs + k * n / sr * 1000;
+            const expectedServer = tuningStartTime + chunkMs;
+            const center = Math.round((expectedServer - rec.startServerMs) / 1000 * sr);
+            const res = SO.dsp.findTemplate(tpl.subarray(k * n, (k + 1) * n), rec.samples,
+                center - Math.round(LISTEN_PRE_MS / 1000 * sr), center + Math.round(LISTEN_POST_MS / 1000 * sr), sr);
+            if (res.index < 0) continue;
+            const raw = rec.startServerMs + res.index / sr * 1000 - expectedServer;
+            found.push({ k, raw, score: res.score });
+            if (res.score < XCORR_MIN_SCORE) continue;
+            calRun.writes.push(db.ref(`pillar_calibration/runs/${runId}/${pillarId}/${myId}/${k}`).set({
+                rawDelayMs: Math.round(raw * 100) / 100, score: Math.round(res.score * 1000) / 1000,
+                listenerId: myId, method: 'xcorr', chunk: k, chunkMs: Math.round(chunkMs), timestamp: SO.now()
+            }));
+            (pillarMeasurements[pillarId] = pillarMeasurements[pillarId] || []).push({ rawDelay: raw, score: res.score });
+        }
+        const good = found.filter(f => f.score >= XCORR_MIN_SCORE);
+        addLog(`🎯 ${pillarId}: ${good.length}/${XCORR_CHUNKS} pieces heard, raw ${found.map(f => `${f.raw.toFixed(1)}${f.score < XCORR_MIN_SCORE ? '✗' : ''}`).join(' / ')} ms (match ${found.map(f => f.score.toFixed(2)).join(' / ')})`,
+               good.length >= CAL_MIN_NOTES_PER_LISTENER ? 'success' : 'warn');
+        updateResultsDisplay();
+    }
+
     // --------------------------------------------------------------
     //  COMPUTE PILLAR DELAYS
     // --------------------------------------------------------------
     // Each pillar played early by its configured speaker delay (c), so what the others hear is
-    //   raw = (true speaker delay - c) + travel time + listener's mic delay (+ detection lag)
+    //   raw = (true speaker delay - c) + travel time + listener's mic delay
     // For each pillar: correction = median over listeners of (raw - travel - listener mic),
     // and its new speaker delay = c + correction. Mic delays are kept: pillar-to-pillar timing
     // only fixes the sum of a speaker and a mic delay, so it cannot measure them separately.
@@ -897,8 +983,32 @@
     const CAL_MIN_LISTENERS = 2;
     async function computePillarDelays() {
         const runId = Math.floor(tuningStartTime);
-        await new Promise(r => setTimeout(r, 3000));   // let the other tablets finish writing
-        const runData = (await db.ref(`pillar_calibration/runs/${runId}`).once('value')).val() || {};
+        const runRef = db.ref(`pillar_calibration/runs/${runId}`);
+        // Mark this tablet done only once every detection it made has reached Firebase, then wait
+        // for the other tablets to do the same. A fixed 3 s wait wasn't enough: a tablet on a slow
+        // connection delivered its detections ~7 s late, so the other three solved with only part
+        // of the data and three of the four pillars came out unsolved.
+        // (keep waiting while the last analyses are still adding writes)
+        for (let seen = 0; seen < (calRun.writes || []).length; ) {
+            const batch = calRun.writes.slice(seen); seen = calRun.writes.length;
+            await Promise.allSettled(batch);
+        }
+        await db.ref(`pillar_calibration/runs/${runId}/_done/${myId}`).set(SO.now()).catch(() => {});
+        const DONE_WAIT_MS = 20000;
+        const waitStart = Date.now();
+        let missing = pillarOrder.slice();
+        while (Date.now() - waitStart < DONE_WAIT_MS) {
+            const done = (await db.ref(`pillar_calibration/runs/${runId}/_done`).once('value')).val() || {};
+            missing = pillarOrder.filter(id => !done[id]);
+            if (!missing.length) break;
+            await new Promise(r => setTimeout(r, 500));
+        }
+        if (missing.length) {
+            addLog(`⚠️ No word from ${missing.map(id => id.replace('PILLAR_', '')).join(', ')} after ${DONE_WAIT_MS / 1000} s; solving with what has arrived`, 'warn');
+        } else {
+            addLog(`📥 All ${pillarOrder.length} pillars' detections are in (${((Date.now() - waitStart) / 1000).toFixed(1)} s)`);
+        }
+        const runData = (await runRef.once('value')).val() || {};
         const configured = calRun.configured || {};
         const spk = {}, mic = {}, detail = {};
         for (const id of pillarOrder) {
@@ -1023,7 +1133,7 @@
     //  LISTEN TO TUNING MOVEMENT WITH PRECISE FIREBASE TIME SYNC
     // --------------------------------------------------------------
     // ---- One calibration run: its timers and its playing sound, so STOP / KILL can cancel it
-    const calRun = { active: false, timers: [], playback: null };
+    const calRun = { active: false, timers: [], playback: null, writes: [] };
     function runTimer(fn, ms) { const id = setTimeout(fn, ms); calRun.timers.push(id); return id; }
     function stopRunSound() {
         const pb = calRun.playback;
@@ -1157,7 +1267,7 @@
             }
 
             lastProcessedStartTime = schedule.startTime;
-            calRun.active = true; calRun.timers = []; calRun.playback = null;
+            calRun.active = true; calRun.timers = []; calRun.playback = null; calRun.writes = [];
             calRun.configured = {};   // the delays this run is played with (the solver corrects these)
             for (const id of pillarOrder) calRun.configured[id] = { spk: pillarData[id].speakerDelayMs, mic: pillarData[id].micDelayMs };
 
@@ -1234,32 +1344,12 @@
 
                 addLog(`🎯 Will listen for ${pillarId} (${pillarNotesForWindow.length} notes) between ${(startMs/1000).toFixed(1)}s-${(endMs/1000).toFixed(1)}s`);
 
+                getWindowTemplate(pillarId, startMs, endMs);   // decode in the background meanwhile
                 if (delayMs > 0 && delayMs < 25000) {
                     runTimer(() => {
-                        addLog(`🎧 Listening for ${pillarId}...`);
-
-                        // Continuous detection loop for this window
-                        const detectionInterval = setInterval(() => {
-                            const now = SO.now();
-                            const songPosition = now - tuningStartTime;
-
-                            // Stop if we're past the window
-                            if (songPosition > endMs + 500) {
-                                clearInterval(detectionInterval);
-                                addLog(`⏹️ Stopped listening for ${pillarId} (window ended)`);
-                                return;
-                            }
-
-                            // Process detections for this pillar
-                            processPillarDetectionWindows(now, pillarNotesForWindow, pillarId, startMs, endMs);
-
-                        }, 20); // Check every 20ms for better timing resolution
-
-                        // Store interval ID to clear later if needed
-                        if (!window.detectionIntervals) window.detectionIntervals = [];
-                        window.detectionIntervals.push(detectionInterval);
-
-                    }, delayMs);
+                        const done = listenToWindowByXcorr(pillarId, startMs, endMs);
+                        calRun.writes.push(done);     // the solver waits for this (and its writes)
+                    }, Math.max(0, delayMs - LISTEN_PRE_MS - RECORDER_LEAD_MS));
                 } else {
                     addLog(`⚠️ Detection window for ${pillarId} is too ${delayMs < 0 ? 'late' : 'far'} (${delayMs}ms), skipping`, 'warn');
                 }

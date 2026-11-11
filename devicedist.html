@@ -681,6 +681,7 @@
             isMicActive = true;
             document.getElementById('energy-meter').style.display = 'block';
             log(`🎤 Microphone active, sample rate: ${sampleRate}Hz, FFT size: ${FFT_SIZE}`);
+            SO.audio.prepareRecorder(audioCtx).catch(e => log(`⚠️ AudioWorklet recorder unavailable (${e.message}); using the ScriptProcessor fallback`, 'warn'));
             requestAnimationFrame(detectNeighborNotes);
             return true;
         } catch (e) { log(`❌ Mic setup failed: ${e.message}`); return false; }
@@ -695,42 +696,20 @@
     // ============================================================================
     // RECORDING & CORRELATION
     // ============================================================================
-    async function recordAudioBuffer(durationMs) {
+    // Records the mic from startServerMs for durationMs (shared recorder, config.js). The result
+    // carries .startServerMs: the true server time of its first sample. Use that, never the time
+    // you asked for: the old recorder assumed recording began on request, but the first block
+    // arrived one ScriptProcessor buffer (85 ms) later, so every mic delay came out ~-85 ms.
+    // Call it RECORDER_LEAD_MS early; it trims to startServerMs itself.
+    const RECORDER_LEAD_MS = 400;
+    async function recordAudioBuffer(durationMs, startServerMs) {
         if (!micStream) throw new Error('No microphone stream');
-        const sampleRate = audioCtx.sampleRate;
-        const length = Math.floor(durationMs / 1000 * sampleRate);
-        const recordingBuffer = new AudioBuffer({ numberOfChannels: 1, length: length, sampleRate: sampleRate });
-        const recordChannel = recordingBuffer.getChannelData(0);
-
-        const source = audioCtx.createMediaStreamSource(micStream);
-        const processor = audioCtx.createScriptProcessor(4096, 1, 1);
-        source.connect(processor);
-        processor.connect(audioCtx.destination);
-
-        let writeIndex = 0;
-        const startTime = audioCtx.currentTime;
-        const endTime = startTime + durationMs / 1000;
-
-        return new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => {
-                processor.disconnect();
-                source.disconnect();
-                resolve(recordingBuffer);
-            }, durationMs);
-
-            processor.onaudioprocess = (event) => {
-                const inputData = event.inputBuffer.getChannelData(0);
-                for (let i = 0; i < inputData.length && writeIndex < length; i++) {
-                    recordChannel[writeIndex++] = inputData[i];
-                }
-                if (writeIndex >= length) {
-                    clearTimeout(timeout);
-                    processor.disconnect();
-                    source.disconnect();
-                    resolve(recordingBuffer);
-                }
-            };
-        });
+        const rec = await SO.audio.record(audioCtx, micStream, { startServerMs, durationMs });
+        const buf = new AudioBuffer({ numberOfChannels: 1, length: Math.max(1, rec.samples.length), sampleRate: rec.sampleRate });
+        buf.copyToChannel(rec.samples, 0);
+        buf.startServerMs = rec.startServerMs;
+        if (rec.startServerMs - startServerMs > 50) log(`⚠️ Recording started ${Math.round(rec.startServerMs - startServerMs)} ms late (${rec.method})`, 'warn');
+        return buf;
     }
 
     // Where in the recording does the template line up best? Returns that offset in ms.
@@ -758,15 +737,23 @@
         }
         return bestLag;
     }
+    // Now: the template is cut into XCORR_PIECES pieces, each placed with the shared GCC-PHAT
+    // search (SO.dsp.findTemplate: one sharp peak, not fooled by sustained notes or echoes),
+    // and the answer is the median. Returns NaN if no piece was heard clearly.
+    const XCORR_PIECES = 4, XCORR_MIN_SCORE = 0.10;
     function crossCorrelate(template, recorded) {
         const t = template.getChannelData(0);
         const r = recorded.getChannelData(0);
-        const n = r.length, m = t.length;
-        if (n < m) return 0;
-        const f = XCORR_DECIMATE;
-        const coarse = bestLagIn(decimate(t, f), decimate(r, f), 0, Math.floor((n - m) / f));
-        const fine = bestLagIn(t, r, coarse * f - 2 * f, coarse * f + 2 * f);
-        return (fine / recorded.sampleRate) * 1000;
+        const sr = recorded.sampleRate, m = t.length, span = r.length - m;
+        if (span < 0) return NaN;
+        const pieces = Math.max(1, Math.min(XCORR_PIECES, Math.floor(m / sr)));   // pieces of at least 1 s
+        const n = Math.floor(m / pieces), lags = [];
+        for (let k = 0; k < pieces; k++) {
+            const res = SO.dsp.findTemplate(t.subarray(k * n, (k + 1) * n), r, k * n, k * n + span, sr);
+            if (res.index >= 0 && res.score >= XCORR_MIN_SCORE) lags.push(res.index - k * n);
+        }
+        if (!lags.length) return NaN;
+        return (calculateMedian(lags) / sr) * 1000;
     }
 
     // The patron phone listens for each pillar during its calibration window and lines the
@@ -1009,13 +996,13 @@
             if (wait > 0 && wait < 30000) {
                 log(`🎵 Scheduling correction at rest ${(nextRest.startMs/1000).toFixed(1)}s (wait ${wait.toFixed(0)}ms)`, 'info');
                 setTimeout(() => {
-                    const newDelay = currentDelay - medianShift;
+                    const newDelay = currentDelay + medianShift;
                     const clamped = Math.max(-500, Math.min(1000, newDelay));
                     log(`🔄 REST CORRECTION: ${currentDelay.toFixed(1)}ms → ${clamped.toFixed(1)}ms`, 'info');
                     currentSpeakerDelay = clamped;
-                    const now2 = SO.now();
-                    const curPos = now2 - tuningStartTime;
-                    createNewPlaybackStream(now2 - curPos + clamped, clamped, curPos);
+                    createNewPlaybackStream(tuningStartTime - clamped, clamped, 0, true);
+                    correctionEffectiveAt = SO.now() + CORRECTION_SETTLE_MS;
+                    rawTimeShifts = [];
                     updateCalibrationDisplay();
                 }, wait);
                 return true;
@@ -1026,7 +1013,8 @@
 
     function applyCorrection(medianShift) {
         const currentDelay = currentSpeakerDelay;
-        const newDelay = currentDelay - medianShift;
+        // medianShift: how late my notes arrive (+ late). Late → start earlier → larger delay.
+        const newDelay = currentDelay + medianShift;
         const MIN_DELAY = -500;
         const MAX_DELAY = 2000;
         const clamped = Math.max(MIN_DELAY, Math.min(MAX_DELAY, newDelay));
@@ -1048,9 +1036,11 @@
         if (!scheduled) {
             log(`⚠️ No suitable rest, applying immediately`, 'warn');
             currentSpeakerDelay = clamped;
-            const now = SO.now();
-            const curPos = now - tuningStartTime;
-            createNewPlaybackStream(now - curPos + clamped, clamped, curPos);
+            // File position 0 belongs at (start - delay); joinLate picks up at the right spot now.
+            // (This used to pass start + delay with joinLate off, so the new stream just started
+            // immediately at the current position: the new delay never took effect.)
+            createNewPlaybackStream(tuningStartTime - clamped, clamped, 0, true);
+            correctionEffectiveAt = SO.now() + CORRECTION_SETTLE_MS;
         }
         rawTimeShifts = [];
         correctionCount++;
@@ -1101,12 +1091,12 @@
             return;
         }
         const MIN_DELAY = -500, MAX_DELAY = 2000;
-        if (curDelay <= MIN_DELAY && median > 0) {
+        if (curDelay <= MIN_DELAY && median < 0) {
             log(`⚠️ At min delay, still early by ${Math.abs(median).toFixed(1)}ms`);
             if (correctionCount > 0) completeCalibration();
             return;
         }
-        if (curDelay >= MAX_DELAY && median < 0) {
+        if (curDelay >= MAX_DELAY && median > 0) {
             log(`⚠️ At max delay, still late by ${Math.abs(median).toFixed(1)}ms`);
             if (correctionCount > 0) completeCalibration();
             return;
@@ -1198,14 +1188,21 @@
                 const dx = mySeat.x - note.originX, dy = mySeat.y - note.originY;
                 const dist = Math.sqrt(dx*dx + dy*dy);
                 const propMs = (dist / SPEED_OF_SOUND) * 1000;
+                // How late the PLAYER's note arrived, after travel time and my mic delay:
+                // + = it played late (its speaker delay should grow), - = early.
                 const speakerDelay = rawDelay - propMs - (myMicDelayMs || 0);
-                if (speakerDelay >= -50 && speakerDelay <= 500) {
+                if (speakerDelay >= -300 && speakerDelay <= 300) {
                     if (localRecordings.has(note.deviceId)) {
                         const rec = localRecordings.get(note.deviceId).find(r => r.noteIndex === note.noteIndex);
                         if (rec) rec.realTimeEstimate = speakerDelay;
                     }
-                    rawTimeShifts.push(speakerDelay);
-                    if (rawTimeShifts.length > 50) rawTimeShifts.shift();
+                    // This measures the other phone, so it goes to that phone (byTarget), which
+                    // corrects ITSELF from what its neighbours hear. Each phone used to correct
+                    // itself from its neighbours' errors; with two phones doing it at once they
+                    // chased each other and never settled.
+                    db.ref(`measurements/byTarget/${Math.floor(tuningStartTime)}/${note.deviceId}/${mySeat.id}_${note.noteIndex}`)
+                        .set({ err: Math.round(speakerDelay * 10) / 10, at: Math.round(now), by: mySeat.id })
+                        .catch(e => log(`❌ Report failed: ${e.message}`));
                     neighborDetectionsCount++;
                     const cnt = neighborDetectionsPerNeighbor.get(note.deviceId) || 0;
                     neighborDetectionsPerNeighbor.set(note.deviceId, cnt + 1);
@@ -1215,6 +1212,28 @@
                 }
             }
         }
+    }
+
+    // Reports from other phones about MY notes. Only reports of notes heard after my last
+    // correction took effect count (older ones describe the old delay).
+    let selfReportRef = null, correctionEffectiveAt = 0;
+    const CORRECTION_SETTLE_MS = 300;   // new stream fades in over 100 ms; margin for travel/detection
+    function startSelfReportListener() {
+        stopSelfReportListener();
+        if (isListenOnlyMode || !mySeat) return;
+        correctionEffectiveAt = 0;
+        selfReportRef = db.ref(`measurements/byTarget/${Math.floor(tuningStartTime)}/${mySeat.id}`);
+        selfReportRef.on('child_added', snap => {
+            const v = snap.val();
+            if (!v || !isFinite(v.err) || isHappy) return;
+            if (v.at < correctionEffectiveAt) return;
+            rawTimeShifts.push(v.err);
+            if (rawTimeShifts.length > 50) rawTimeShifts.shift();
+            log(`📨 ${v.by} heard me ${v.err > 0 ? '+' : ''}${v.err.toFixed(1)}ms`, 'debug');
+        });
+    }
+    function stopSelfReportListener() {
+        if (selfReportRef) { selfReportRef.off(); selfReportRef = null; }
     }
 
     async function reportMeasurement(noteIndex, playingSeatId, speakerDelay, rawDelay, propMs, detectionTime) {
@@ -1278,10 +1297,11 @@
         if (delayMs > 0 && delayMs < 30000) {
             setTimeout(async () => {
                 log(`🔴 Oboe recording START at ${SO.now()}`, 'info');
-                const recorded = await recordAudioBuffer(recordingDuration);
+                const recorded = await recordAudioBuffer(recordingDuration, recordingStart);
                 const offset = crossCorrelate(oboeBuffer, recorded);
+                if (!isFinite(offset)) { log(`⚠️ Oboe not heard clearly enough to time`, 'warn'); return; }
                 log(`📐 Cross-correlation offset = ${offset.toFixed(1)}ms`, 'debug');
-                const actualOnset = recordingStart + offset;
+                const actualOnset = recorded.startServerMs + offset;
                 const rawDelay = actualOnset - expectedStart;
                 const targetSeatData = seatData[targetSeat];
                 if (targetSeatData) {
@@ -1295,7 +1315,7 @@
                 } else {
                     log(`⚠️ No coordinates for target seat ${targetSeat}`);
                 }
-            }, delayMs);
+            }, Math.max(0, delayMs - RECORDER_LEAD_MS));
         } else if (delayMs > -1000) {
             log(`⚠️ Oboe recording start too late (${Math.round(-delayMs)}ms)`, 'warn');
         } else {
@@ -1344,11 +1364,12 @@
         if (delayMs > 0 && delayMs < 30000) {
             setTimeout(async () => {
                 log(`🔴 Tuba recording START at ${SO.now()}`, 'info');
-                const recorded = await recordAudioBuffer(recordingDuration);
+                const recorded = await recordAudioBuffer(recordingDuration, recordingStart);
                 const offset = crossCorrelate(tubaBuffer, recorded);
+                if (!isFinite(offset)) { log(`⚠️ Tuba not heard clearly enough to time`, 'warn'); return; }
                 log(`📐 Cross-correlation offset = ${offset.toFixed(1)}ms`, 'debug');
 
-                const actualOnset = recordingStart + offset;
+                const actualOnset = recorded.startServerMs + offset;
                 const rawDelay = actualOnset - expectedStart;
 
                 const pillar = pillarData[pillarId];
@@ -1386,7 +1407,7 @@
                 }
 
                 log(`🔇 Tuba calibration finished`);
-            }, delayMs);
+            }, Math.max(0, delayMs - RECORDER_LEAD_MS));
         } else if (delayMs > -1000) {
             log(`⚠️ Tuba recording start too late (${Math.round(-delayMs)}ms)`, 'warn');
         } else {
@@ -1416,10 +1437,11 @@
 
             if (delayMs > 0 && delayMs < 30000) {
                 setTimeout(async () => {
-                    log(`🎙️ Recording pillar ${pillarId} window (${recordingDuration}ms)...`);
-                    const recorded = await recordAudioBuffer(recordingDuration);
+                    log(`🎙️ Recording pillar ${pillarId} window (${Math.round(recordingDuration)}ms)...`);
+                    const recorded = await recordAudioBuffer(recordingDuration, recordingStartWall);
                     const offsetMs = crossCorrelate(template, recorded);
-                    const actualOnset = recordingStartWall + offsetMs;
+                    if (!isFinite(offsetMs)) { log(`⚠️ ${pillarId}: not heard clearly enough to time`, 'warn'); return; }
+                    const actualOnset = recorded.startServerMs + offsetMs;
                     const expectedOnset = tuningStartTime + windowStartMs;
                     const rawDelay = actualOnset - expectedOnset;
 
@@ -1449,7 +1471,7 @@
                     } else {
                         log(`⚠️ No coordinates for pillar ${pillarId}`);
                     }
-                }, delayMs);
+                }, Math.max(0, delayMs - RECORDER_LEAD_MS));
             } else if (delayMs > -1000) {
                 log(`⚠️ Pillar ${pillarId} recording start too late (${Math.round(-delayMs)}ms)`, 'warn');
             } else {
@@ -1464,6 +1486,7 @@
     async function completeCalibration() {
         if (isHappy) return;
         isHappy = true;
+        stopSelfReportListener();
         log(`✅✅✅ CALIBRATION COMPLETE ✅✅✅`);
         log(`   Speaker: ${currentSpeakerDelay.toFixed(1)}ms, Mic: ${myMicDelayMs?.toFixed(1) || '0'}ms`);
         saveCalibration();
@@ -1725,6 +1748,7 @@
             await enableMicrophone();
             log("🎧 Listening...");
             startPeriodicLogging();
+            startSelfReportListener();
 
             // Schedule waveform‑based pillar recordings for Phase 1
             if (!isListenOnlyMode && pillarWindows.length && activePillars.length) {

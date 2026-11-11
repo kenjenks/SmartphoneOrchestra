@@ -91,6 +91,9 @@
     let lastClockSync = null;       // { at, rttMs, uncertaintyMs, changeMs, samples }
     let clockSyncing = null;
     const clockListeners = [];
+    let wallMinusPerf = Date.now() - perfNow();   // see checkForSleep()
+    const SLEEP_JUMP_MS = 1000;
+    let clockSleepJumps = 0;
     const CLOCK = {
         SAMPLES: 6,                 // round trips per sync; their ranges are intersected
         SAMPLE_TIMEOUT_MS: 2000,    // give up on one round trip after this
@@ -107,7 +110,19 @@
         clockSynced = true;
         notifyClock();
     });
-    function now() { return perfNow() + clockOffset; }
+    // performance.now() stops while an Android phone is asleep, but the wall clock keeps going.
+    // So a sudden change in (wall − performance) means the phone slept: shift the offset by that
+    // amount at once (accurate to a few ms) and re-measure right away.
+    function checkForSleep() {
+        const d = (Date.now() - perfNow()) - wallMinusPerf;
+        if (Math.abs(d) < SLEEP_JUMP_MS) return;
+        wallMinusPerf += d;
+        clockOffset += d;   // the wall clock kept running while performance.now() was paused
+        clockSleepJumps++;
+        console.warn(`[clock] jump of ${Math.round(d)} ms (device slept or clock changed); re-measuring`);
+        if (clockPrecise && !clockSyncing) setTimeout(() => clockSync().catch(() => {}), 0);
+    }
+    function now() { checkForSleep(); return perfNow() + clockOffset; }
     function onClockSync(fn) {
         clockListeners.push(fn);
         if (clockSynced) fn(now() - Date.now(), lastClockSync);
@@ -166,7 +181,7 @@
             notifyClock();
             return lastClockSync;
         })();
-        const p = run.finally(() => { if (clockSyncing === p) clockSyncing = null; });
+        const p = run.finally(() => { if (clockSyncing === p) clockSyncing = null; wallMinusPerf = Date.now() - perfNow(); });
         clockSyncing = p;
         return p;
     }
@@ -357,7 +372,7 @@
                 (host ? 'margin:10px 0;' : 'position:fixed;top:8px;left:8px;right:8px;');
             if (host) host.insertBefore(box, host.firstChild); else document.body.appendChild(box);
         }
-        box.innerHTML = '<b>⚠️ Check pillar_config</b> ' +
+        box.innerHTML = '<b>⚠️ Check the setup</b> ' +
             '<span style="float:right;cursor:pointer" onclick="this.parentNode.remove()">✕</span>' +
             '<ul style="margin:4px 0 0 18px;padding:0">' +
             all.map(m => '<li>' + String(m).replace(/</g, '&lt;') + '</li>').join('') + '</ul>';
@@ -613,9 +628,174 @@
         return { source, gain, when, offset, lateMs, primedNow };
     }
 
+    /*
+     * record(ctx, stream, { startServerMs, durationMs })
+     *   → Promise<{ samples: Float32Array, sampleRate, startServerMs, method }>
+     * Records the microphone and says, on the server clock, when its first sample was captured.
+     * Start it a few hundred ms early: it keeps only the audio from startServerMs on (or from
+     * the first sample it gets, if that is later), and reports the true time of sample 0.
+     * Callers place what they find with  result.startServerMs + offset  and never assume the
+     * recording began when they asked. (Assuming that made every phone's mic delay come out
+     * about −85 ms: one ScriptProcessor block of 4096 samples at 48 kHz.)
+     * Timing: each block carries the audio-clock frame it was captured at (AudioWorklet
+     * currentFrame), converted with the same audio-clock ↔ server-clock mapping playAt uses, so
+     * playback and recording share one timeline. Microphone input latency stays in the result;
+     * that is what "mic delay" measures.
+     */
+    const RECORDER_SRC = `class SoRecorder extends AudioWorkletProcessor {
+        constructor() { super(); this.buf = new Float32Array(2048); this.n = 0; this.f0 = 0; }
+        process(inputs) {
+            const ch = inputs[0] && inputs[0][0];
+            if (ch) {
+                if (this.n === 0) this.f0 = currentFrame;
+                this.buf.set(ch, this.n); this.n += ch.length;
+                if (this.n + ch.length > this.buf.length) { this.port.postMessage({ f0: this.f0, data: this.buf.slice(0, this.n) }); this.n = 0; }
+            }
+            return true;
+        }
+    }
+    registerProcessor('so-recorder', SoRecorder);`;
+    const recorderModules = new WeakMap();
+    function prepareRecorder(ctx) {
+        if (!ctx.audioWorklet) return Promise.reject(new Error('no AudioWorklet'));
+        if (!recorderModules.has(ctx)) {
+            const url = URL.createObjectURL(new Blob([RECORDER_SRC], { type: 'application/javascript' }));
+            recorderModules.set(ctx, ctx.audioWorklet.addModule(url));
+        }
+        return recorderModules.get(ctx);
+    }
+    function medianOf(a) { const s = [...a].sort((x, y) => x - y); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; }
+    async function record(ctx, stream, { startServerMs, durationMs }) {
+        const sr = ctx.sampleRate;
+        const src = ctx.createMediaStreamSource(stream);
+        const sink = ctx.createGain(); sink.gain.value = 0; sink.connect(ctx.destination);
+        let node = null, method = 'worklet';
+        try {
+            await prepareRecorder(ctx);
+            node = new AudioWorkletNode(ctx, 'so-recorder', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
+        } catch (e) {
+            method = 'scriptprocessor';
+        }
+        const SP_SIZE = 4096;
+        if (!node) node = ctx.createScriptProcessor(SP_SIZE, 1, 1);
+        if (startServerMs === undefined) startServerMs = now();
+        const endServerMs = startServerMs + durationMs;
+        const blocks = [], ks = [];
+        return new Promise((resolve, reject) => {
+            let finished = false;
+            const finish = () => {
+                if (finished) return; finished = true;
+                clearTimeout(guard);
+                try { src.disconnect(); node.disconnect(); sink.disconnect(); } catch (e) {}
+                if (node.port) node.port.onmessage = null; else node.onaudioprocess = null;
+                if (!blocks.length) { reject(new Error('the microphone delivered no audio')); return; }
+                const K = medianOf(ks);                           // server ms at audio frame 0
+                const want0 = Math.ceil((startServerMs - K) / 1000 * sr);
+                const want1 = Math.floor((endServerMs - K) / 1000 * sr);
+                const first = Math.max(want0, blocks[0].f0);
+                const last = Math.min(want1, blocks[blocks.length - 1].f0 + blocks[blocks.length - 1].data.length);
+                const samples = new Float32Array(Math.max(0, last - first));
+                for (const b of blocks) {
+                    const a = Math.max(first, b.f0), z = Math.min(last, b.f0 + b.data.length);
+                    if (z > a) samples.set(b.data.subarray(a - b.f0, z - b.f0), a - first);
+                }
+                resolve({ samples, sampleRate: sr, startServerMs: K + first / sr * 1000, method });
+            };
+            const onBlock = (f0, data) => {
+                ks.push(now() - ctx.currentTime * 1000);           // the same mapping playAt schedules with
+                blocks.push({ f0, data });
+                if (medianOf(ks) + (f0 + data.length) / sr * 1000 >= endServerMs) finish();
+            };
+            if (node.port) node.port.onmessage = e => onBlock(e.data.f0, e.data.data);
+            else node.onaudioprocess = e => {   // fallback: the input block was captured one block before playbackTime
+                const d = new Float32Array(e.inputBuffer.getChannelData(0));
+                onBlock(Math.round(e.playbackTime * sr) - SP_SIZE, d);
+            };
+            src.connect(node); node.connect(sink);
+            const guard = setTimeout(finish, Math.max(0, endServerMs - now()) + 3000);
+        });
+    }
+
     // Plays the first 0.1 s of the buffer almost silently, right now, to wake the speaker path.
     // playAt() calls this automatically for any buffer not yet primed; pages may also call it
     // earlier (e.g. at activation) so the hardware is awake well before the first cue.
+    /*
+     * findTemplate(template, signal, fromIdx, toIdx, sampleRate = 48000)
+     *   → { index, score }   where in signal (start index between fromIdx and toIdx) the template
+     * lines up best, and how well (normalized correlation at that spot, 0…1).
+     * Uses GCC-PHAT: the cross-spectrum is whitened (every frequency weighted equally) before
+     * transforming back, so the answer is a single sharp peak at the true delay instead of the
+     * broad, many-humped correlation that sustained tonal notes give, and room echoes, which
+     * arrive later, don't pull it off. Limited to 300 Hz – 8 kHz, where the calibration sounds are.
+     */
+    function fftInPlace(re, im, inverse) {
+        const n = re.length;
+        for (let i = 1, j = 0; i < n; i++) {
+            let bit = n >> 1;
+            for (; j & bit; bit >>= 1) j ^= bit;
+            j ^= bit;
+            if (i < j) { let t = re[i]; re[i] = re[j]; re[j] = t; t = im[i]; im[i] = im[j]; im[j] = t; }
+        }
+        for (let len = 2; len <= n; len <<= 1) {
+            const ang = (inverse ? 2 : -2) * Math.PI / len, wr = Math.cos(ang), wi = Math.sin(ang);
+            for (let i = 0; i < n; i += len) {
+                let cr = 1, ci = 0;
+                for (let k = 0; k < len / 2; k++) {
+                    const a = i + k, b = a + len / 2;
+                    const xr = re[b] * cr - im[b] * ci, xi = re[b] * ci + im[b] * cr;
+                    re[b] = re[a] - xr; im[b] = im[a] - xi; re[a] += xr; im[a] += xi;
+                    const t = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = t;
+                }
+            }
+        }
+    }
+    function findTemplate(template, signal, fromIdx = 0, toIdx = signal.length - template.length, sampleRate = 48000) {
+        const m = template.length;
+        fromIdx = Math.max(0, Math.round(fromIdx)); toIdx = Math.min(signal.length - m, Math.round(toIdx));
+        if (toIdx < fromIdx || m < 64) return { index: -1, score: 0 };
+        const segLen = toIdx - fromIdx + m;
+        let N = 1; while (N < segLen + m) N <<= 1;
+        const ar = new Float64Array(N), ai = new Float64Array(N), br = new Float64Array(N), bi = new Float64Array(N);
+        for (let i = 0; i < segLen; i++) ar[i] = signal[fromIdx + i];
+        for (let i = 0; i < m; i++) br[i] = template[i];
+        fftInPlace(ar, ai, false); fftInPlace(br, bi, false);
+        const lo = Math.floor(300 / sampleRate * N), hi = Math.min(N / 2, Math.ceil(8000 / sampleRate * N));
+        let maxMag = 0;
+        for (let k = 0; k < N; k++) {           // G = A · conj(B)
+            const gr = ar[k] * br[k] + ai[k] * bi[k], gi = ai[k] * br[k] - ar[k] * bi[k];
+            ar[k] = gr; ai[k] = gi; const mag = Math.hypot(gr, gi); if (mag > maxMag) maxMag = mag;
+        }
+        const eps = maxMag * 1e-4;
+        for (let k = 0; k < N; k++) {
+            const f = k <= N / 2 ? k : N - k;
+            if (f < lo || f > hi) { ar[k] = 0; ai[k] = 0; continue; }
+            const w = 1 / (Math.hypot(ar[k], ai[k]) + eps); ar[k] *= w; ai[k] *= w;
+        }
+        fftInPlace(ar, ai, true);
+        let best = 0, max = -Infinity;
+        for (let lag = 0; lag <= toIdx - fromIdx; lag++) if (ar[lag] > max) { max = ar[lag]; best = lag; }
+        const index = fromIdx + best;
+        let dot = 0, et = 0, es = 0;
+        for (let i = 0; i < m; i++) { const a = template[i], b = signal[index + i]; dot += a * b; et += a * a; es += b * b; }
+        return { index, score: et && es ? Math.max(0, dot / Math.sqrt(et * es)) : 0 };
+    }
+    function decimateBy(x, f) {
+        const out = new Float32Array(Math.floor(x.length / f));
+        for (let i = 0, j = 0; i < out.length; i++) { let s = 0; for (let k = 0; k < f; k++) s += x[j++]; out[i] = s / f; }
+        return out;
+    }
+    // Mono copy of part of a decoded buffer (channels averaged)
+    function monoSlice(buffer, startSec, durSec) {
+        const sr = buffer.sampleRate, a = Math.max(0, Math.round(startSec * sr));
+        const z = Math.min(buffer.length, Math.round((startSec + durSec) * sr));
+        const out = new Float32Array(Math.max(0, z - a));
+        for (let c = 0; c < buffer.numberOfChannels; c++) {
+            const d = buffer.getChannelData(c);
+            for (let i = a; i < z; i++) out[i - a] += d[i] / buffer.numberOfChannels;
+        }
+        return out;
+    }
+
     const PRIME_DEFAULTS = Object.freeze({ gain: 0.001, durationSec: 0.1 });
     const primedSet = new WeakSet();
     function primeBuffer(ctx, buffer, { gain = PRIME_DEFAULTS.gain, durationSec = PRIME_DEFAULTS.durationSec, destination } = {}) {
@@ -685,6 +865,7 @@
             setDeviceId: id => { clockDeviceId = id; },
             get status() { return lastClockSync; },
             get precise() { return clockPrecise; },
+            get sleepJumps() { return clockSleepJumps; },
             SETTINGS: CLOCK
         },
         requireCrew, showWarning,
@@ -692,7 +873,8 @@
         validatePillarConfig, normalizePillarConfig, loadPillarConfig, watchPillarConfig,
         parseSeatTsv, computeNeighborMap, validateSeatConfig, normalizeSeatConfig, loadSeatConfig, getSeat,
         loadTuningMode,
-        audio: { getBuffer, serverToAudioTime, playAt, primeBuffer, isPrimed, PRIME_DEFAULTS },
+        audio: { getBuffer, serverToAudioTime, playAt, primeBuffer, isPrimed, PRIME_DEFAULTS, record, prepareRecorder },
+        dsp: { findTemplate, monoSlice, decimate: decimateBy },
         geometry: { dist, pillarPolygon, distanceOutside },
         spatial: { reachesSeat, gainAt, isMoving, pathOk: stemPathOk }
     };
