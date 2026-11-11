@@ -765,8 +765,9 @@
                         noteMsOffset: note.ms_offset
                     });
 
-                    // Store to Firebase
-                    const measurementRef = db.ref(`pillar_calibration/measurements/${pillarId}/${myId}`);
+                    // Store to Firebase: every detection, filed under this run, so all four pillars
+                    // compute from the same complete set (and old runs never mix in)
+                    const measurementRef = db.ref(`pillar_calibration/runs/${Math.floor(tuningStartTime)}/${pillarId}/${myId}/${note.index}`);
                     measurementRef.set({
                         rawDelayMs: rawDelay,
                         listenerId: myId,
@@ -886,98 +887,55 @@
     // --------------------------------------------------------------
     //  COMPUTE PILLAR DELAYS
     // --------------------------------------------------------------
+    // Each pillar played early by its configured speaker delay (c), so what the others hear is
+    //   raw = (true speaker delay - c) + travel time + listener's mic delay (+ detection lag)
+    // For each pillar: correction = median over listeners of (raw - travel - listener mic),
+    // and its new speaker delay = c + correction. Mic delays are kept: pillar-to-pillar timing
+    // only fixes the sum of a speaker and a mic delay, so it cannot measure them separately.
+    // Every tablet reads the same complete set of detections for this run and gets the same answer.
+    const CAL_MIN_NOTES_PER_LISTENER = 3;
+    const CAL_MIN_LISTENERS = 2;
     async function computePillarDelays() {
-        // Collect from Firebase
-        const snap = await db.ref('pillar_calibration/measurements').once('value');
-        const allMeasurements = snap.val() || {};
-
-        for (const [targetId, listeners] of Object.entries(allMeasurements)) {
-            for (const [listenerId, data] of Object.entries(listeners)) {
-                if (!pillarMeasurements[targetId]) {
-                    pillarMeasurements[targetId] = [];
-                }
-                const exists = pillarMeasurements[targetId].some(m =>
-                    m.timestamp === data.timestamp && m.listenerId === data.listenerId
-                );
-                if (!exists && data.rawDelayMs) {
-                    pillarMeasurements[targetId].push({
-                        rawDelay: data.rawDelayMs,
-                        listenerId: data.listenerId,
-                        timestamp: data.timestamp,
-                        expectedTime: data.expectedTime,
-                        noteIndex: data.noteIndex,
-                        notePitch: data.notePitch
-                    });
-                }
+        const runId = Math.floor(tuningStartTime);
+        await new Promise(r => setTimeout(r, 3000));   // let the other tablets finish writing
+        const runData = (await db.ref(`pillar_calibration/runs/${runId}`).once('value')).val() || {};
+        const configured = calRun.configured || {};
+        const spk = {}, mic = {}, detail = {};
+        for (const id of pillarOrder) {
+            spk[id] = configured[id]?.spk ?? pillarData[id].speakerDelayMs;
+            mic[id] = configured[id]?.mic ?? pillarData[id].micDelayMs;
+        }
+        let pillarsSolved = 0;
+        for (const player of pillarOrder) {
+            const byListener = runData[player] || {};
+            const perListener = [];
+            for (const [listener, notes] of Object.entries(byListener)) {
+                if (listener === player || !pillarData[listener]) continue;
+                const raws = Object.values(notes || {}).map(n => n && n.rawDelayMs).filter(v => isFinite(v));
+                if (raws.length < CAL_MIN_NOTES_PER_LISTENER) continue;
+                const dist = Math.hypot(pillarData[player].x - pillarData[listener].x, pillarData[player].y - pillarData[listener].y);
+                const prop = (dist / SPEED_OF_SOUND) * 1000;
+                perListener.push({ listener, n: raws.length, err: calculateMedian(raws) - prop - mic[listener] });
+            }
+            const c = spk[player];
+            if (perListener.length >= CAL_MIN_LISTENERS) {
+                const correction = calculateMedian(perListener.map(x => x.err));
+                spk[player] = c + correction;
+                pillarsSolved++;
+                const errs = perListener.map(x => x.err);
+                detail[player] = { configured: c, correction, listeners: perListener.length,
+                                   notes: perListener.reduce((s, x) => s + x.n, 0), spread: Math.max(...errs) - Math.min(...errs) };
+                addLog(`🧮 ${player}: heard by ${perListener.map(x => `${x.listener.replace('PILLAR_', '')} ${x.err.toFixed(0)} ms (${x.n} notes)`).join(', ')} → speaker ${c} + ${correction.toFixed(0)} = ${spk[player].toFixed(0)} ms`);
+            } else {
+                detail[player] = { configured: c, correction: null, listeners: perListener.length,
+                                   notes: perListener.reduce((s, x) => s + x.n, 0), spread: null };
+                addLog(`⚠️ ${player}: only ${perListener.length} listener(s) with ${CAL_MIN_NOTES_PER_LISTENER}+ notes; speaker delay left at ${c} ms`, 'warn');
             }
         }
-
         updateResultsDisplay();
-
-        if (Object.keys(pillarMeasurements).length < pillarOrder.length) {
-            addLog(`⚠️ Not enough measurements yet (got ${Object.keys(pillarMeasurements).length}/${pillarOrder.length})`, 'warn');
+        if (!pillarsSolved) {
+            addLog(`⚠️ Not enough detections in this run to calibrate any pillar`, 'warn');
             return;
-        }
-
-        // Calculate delays
-        let spk = {}, mic = {};
-        for (let id of pillarOrder) {
-            spk[id] = pillarData[id].speakerDelayMs;
-            mic[id] = pillarData[id].micDelayMs;
-        }
-
-        const iterations = 6;
-        for (let iter = 0; iter < iterations; iter++) {
-            for (let player of pillarOrder) {
-                let values = [];
-                const measurements = pillarMeasurements[player] || [];
-                for (let meas of measurements) {
-                    const listener = meas.listenerId;
-                    if (listener === player) continue;
-                    const raw = meas.rawDelay;
-                    if (raw === undefined) continue;
-
-                    const dist = Math.sqrt(
-                        Math.pow(pillarData[player]?.x - pillarData[listener]?.x, 2) +
-                        Math.pow(pillarData[player]?.y - pillarData[listener]?.y, 2)
-                    );
-                    const prop = (dist / SPEED_OF_SOUND) * 1000;
-                    const est = raw - prop - mic[listener];
-
-                    if (isFinite(est) && Math.abs(est) < 300 && Math.abs(est) > 0) {
-                        values.push(est);
-                    }
-                }
-                if (values.length >= 3) {
-                    spk[player] = calculateMedian(values);
-                }
-            }
-
-            for (let listener of pillarOrder) {
-                let values = [];
-                for (let player of pillarOrder) {
-                    if (player === listener) continue;
-                    const measurements = pillarMeasurements[player] || [];
-                    const meas = measurements.find(m => m.listenerId === listener);
-                    if (!meas) continue;
-                    const raw = meas.rawDelay;
-                    if (raw === undefined) continue;
-
-                    const dist = Math.sqrt(
-                        Math.pow(pillarData[player]?.x - pillarData[listener]?.x, 2) +
-                        Math.pow(pillarData[player]?.y - pillarData[listener]?.y, 2)
-                    );
-                    const prop = (dist / SPEED_OF_SOUND) * 1000;
-                    const est = raw - spk[player] - prop;
-
-                    if (isFinite(est) && Math.abs(est) < 150 && est > 0) {
-                        values.push(est);
-                    }
-                }
-                if (values.length >= 3) {
-                    mic[listener] = calculateMedian(values);
-                }
-            }
         }
 
         let resultHtml = '<div class="section-title">✅ Calibration Results</div>';
@@ -985,9 +943,9 @@
         resultHtml += ' <thead> <tr><th>Pillar</th><th>Speaker Delay (ms)</th><th>Mic Delay (ms)</th><th>Samples</th><th>Status</th></tr> </thead> <tbody>';
 
         for (let id of pillarOrder) {
-            let spkVal = Math.round(Math.max(5, Math.min(300, spk[id])));
-            let micVal = Math.round(Math.max(2, Math.min(150, mic[id])));
-            const sampleCount = pillarMeasurements[id]?.length || 0;
+            let spkVal = Math.round(Math.max(5, Math.min(400, spk[id])));
+            let micVal = Math.round(mic[id]);
+            const sampleCount = detail[id]?.notes || 0;
 
             resultHtml += `
                 <tr>
@@ -995,7 +953,7 @@
                     <td><strong>${spkVal} ms</strong></td>
                     <td><strong>${micVal} ms</strong></td>
                     <td>${sampleCount}</td>
-                    <td>${sampleCount >= 4 ? '✅' : '⚠️'}</td>
+                    <td>${detail[id]?.correction !== null && detail[id]?.listeners >= 3 ? '✅' : '⚠️'}</td>
                 </tr>
             `;
             updateCardValue(id, 'spk', `${spkVal} ms`);
@@ -1007,12 +965,17 @@
         resultHtml += '<div class="small-text" style="margin-top: 8px;">💾 Saved to Firebase. Open the admin page and click "Apply pillar calibration" to use these values.</div>';
 
         // Save for the admin page, which can apply them to pillar_config
-        const results = { computedBy: myId, computedAt: SO.now(), speedOfSound: SPEED_OF_SOUND, pillars: {} };
+        const results = { computedBy: myId, computedAt: SO.now(), runId, speedOfSound: SPEED_OF_SOUND, pillars: {} };
         for (let id of pillarOrder) {
+            const d = detail[id] || {};
             results.pillars[id] = {
                 speakerDelayMs: pillarData[id].speakerDelayMs,
                 micDelayMs: pillarData[id].micDelayMs,
-                samples: pillarMeasurements[id]?.length || 0
+                samples: d.notes || 0,
+                listeners: d.listeners || 0,
+                configuredSpeakerDelayMs: d.configured ?? null,
+                correctionMs: d.correction === null || d.correction === undefined ? null : Math.round(d.correction * 10) / 10,
+                spreadMs: d.spread === null || d.spread === undefined ? null : Math.round(d.spread)
             };
         }
         db.ref('pillar_calibration/results').set(results)
@@ -1195,6 +1158,8 @@
 
             lastProcessedStartTime = schedule.startTime;
             calRun.active = true; calRun.timers = []; calRun.playback = null;
+            calRun.configured = {};   // the delays this run is played with (the solver corrects these)
+            for (const id of pillarOrder) calRun.configured[id] = { spk: pillarData[id].speakerDelayMs, mic: pillarData[id].micDelayMs };
 
             // Recheck the clock right before calibration; finishes at least 1.5 s before the start
             await SO.clock.recheckBefore(schedule.startTime).catch(e => addLog(`⚠️ Pre-calibration clock recheck failed: ${e.message}`));
