@@ -1056,6 +1056,41 @@
     // --------------------------------------------------------------
     //  LISTEN TO TUNING MOVEMENT WITH PRECISE FIREBASE TIME SYNC
     // --------------------------------------------------------------
+    // ---- One calibration run: its timers and its playing sound, so STOP / KILL can cancel it
+    const calRun = { active: false, timers: [], playback: null };
+    function runTimer(fn, ms) { const id = setTimeout(fn, ms); calRun.timers.push(id); return id; }
+    function abortCalibration(reason) {
+        if (!calRun.active) { addLog(`⏹️ ${reason}: no calibration run in progress`, 'info'); return; }
+        calRun.timers.forEach(clearTimeout); calRun.timers = [];
+        (window.detectionIntervals || []).forEach(i => i && clearInterval(i)); window.detectionIntervals = [];
+        if (calRun.playback && calRun.playback.source) {
+            try {
+                const t = audioCtx.currentTime;
+                calRun.playback.gainNode.gain.setValueAtTime(calRun.playback.gainNode.gain.value, t);
+                calRun.playback.gainNode.gain.linearRampToValueAtTime(0, t + 0.05);
+                calRun.playback.source.stop(t + 0.06);
+            } catch (e) {}
+        }
+        calRun.playback = null;
+        calRun.active = false;
+        // Still armed: the tuning listener stays attached, so the next START PICCOLO runs normally
+        isListening = true;
+        calibrateBtn.disabled = true;
+        calibrateBtn.innerText = '🎧 Listening for tuning movement...';
+        stateTextSpan.innerText = 'Stopped – listening for tuning...';
+        stateLed.className = 'status-led led-yellow';
+        addLog(`⏹️ ${reason}: calibration run stopped (sound, listening and timers cancelled). Waiting for a new START PICCOLO.`, 'warn');
+    }
+    function watchKill() {
+        const since = SO.now();
+        db.ref('show/currentCue').on('value', snap => {
+            const cue = snap.val();
+            if (!cue || cue.action !== 'KILL') return;
+            if (!(cue.triggerTime > since - 5000)) return;   // a KILL from before this page opened
+            abortCalibration('KILL from conductor');
+        });
+    }
+
     async function listenToTuningMovement() {
         if (isListening) {
             addLog('Already listening for tuning movement', 'warn');
@@ -1115,6 +1150,7 @@
             const schedule = snap.val();
 
             if (!schedule || schedule.status !== 'ACTIVE') {
+                if (calRun.active) abortCalibration('STOP from conductor');
                 return;
             }
 
@@ -1145,6 +1181,7 @@
             }
 
             lastProcessedStartTime = schedule.startTime;
+            calRun.active = true; calRun.timers = []; calRun.playback = null;
 
             // Recheck the clock right before calibration; finishes at least 1.5 s before the start
             await SO.clock.recheckBefore(schedule.startTime).catch(e => addLog(`⚠️ Pre-calibration clock recheck failed: ${e.message}`));
@@ -1220,7 +1257,7 @@
                 addLog(`🎯 Will listen for ${pillarId} (${pillarNotesForWindow.length} notes) between ${(startMs/1000).toFixed(1)}s-${(endMs/1000).toFixed(1)}s`);
 
                 if (delayMs > 0 && delayMs < 25000) {
-                    setTimeout(() => {
+                    runTimer(() => {
                         addLog(`🎧 Listening for ${pillarId}...`);
 
                         // Continuous detection loop for this window
@@ -1261,6 +1298,11 @@
 
                 addLog(`🎵 Scheduling ${myId} playback at ${myStartMs}ms after global start`);
                 const scheduled = await schedulePrecisePlayback(pillarData[myId].audioUrl, targetFirebaseTime);
+                if (!calRun.active) {   // STOP arrived while this was being scheduled
+                    try { scheduled && scheduled.source.stop(); } catch (e) {}
+                    return;
+                }
+                calRun.playback = scheduled;
 
                 if (scheduled) {
                     addLog(`✅ ${myId} playback scheduled successfully`);
@@ -1276,7 +1318,8 @@
             // ============================================================
             // Timeout to stop listening after Phase 1 completes
             // ============================================================
-            setTimeout(() => {
+            runTimer(() => {
+                calRun.active = false;
                 isListening = false;
                 hasStartedListening = false;
                 calibrateBtn.disabled = false;
@@ -1334,6 +1377,7 @@
 
         await loadPillarConfig();
         startHeartbeat();
+        watchKill();   // conductor's KILL ALL / STOP cancels a calibration run in progress
         renderCards();
         initLogging();
 
