@@ -7,7 +7,7 @@
 
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
-    <script src="config.js"></script>
+    <script src="config.js?v=2026-11-11c"></script>
 
     <style>
         body {
@@ -2392,7 +2392,8 @@
     }
 
     window.onload = async () => {
-        log(`🚀 Loading... (devicedist build 2026-11-11d, config.js build ${SO.BUILD || "old"})`);
+        log(`🚀 Loading... (devicedist build 2026-11-11e, config.js build ${SO.BUILD || "old"})`);
+        if (SO.BUILD !== "2026-11-11c") { log(`⚠️ config.js is build ${SO.BUILD || "old"}, this page needs 2026-11-11c: reload`, "warn"); SO.showWarning("build", [`This phone has an old copy of config.js (${SO.BUILD || "old"}). Close this tab and open the link again.`]); }
         try {
             await resolveIdentity();
             // Measure the clock before anything is calibrated or played

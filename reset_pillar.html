@@ -7,7 +7,7 @@
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
-    <script src="config.js"></script>
+    <script src="config.js?v=2026-11-11c"></script>
     <style>
         * {
             box-sizing: border-box;
@@ -1454,7 +1454,8 @@
             return;
         }
         myId = seatParam;
-        addLog(`🚀 ${myId} Loaded (reset_pillar build 2026-11-11c, config.js build ${SO.BUILD || "old"})`);
+        addLog(`🚀 ${myId} Loaded (reset_pillar build 2026-11-11e, config.js build ${SO.BUILD || "old"})`);
+        if (SO.BUILD !== "2026-11-11c") { addLog(`❌ config.js is build ${SO.BUILD || "old"}, this page needs 2026-11-11c. Close this tab and open the link again.`, "error"); SO.showWarning("build", [`Old copy of config.js (${SO.BUILD || "old"}): close this tab and open the link again.`]); }
         document.getElementById('pillar-id-badge').innerText = myId;
 
         // Clock comes from config.js; measure it before calibrating
