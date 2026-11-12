@@ -290,6 +290,11 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
                 <button id="start-tuning-btn" class="primary">▶️ START PICCOLO</button>
                 <button id="stop-tuning-btn" style="background:#600; border-color:#a00;">⏹️ STOP</button>
             </div>
+            <label style="display:block; margin:6px 0; font-size:0.85rem;">
+                <input type="checkbox" id="auto-end-chk" checked> End with a fade when every playing phone is calibrated<br>
+                <input type="checkbox" id="short-tuning-chk"> Short test: stop after
+                <input type="number" id="short-tuning-sec" value="60" min="30" max="180" style="width:4em;"> s (no reload of the devices)
+            </label>
 
             <div id="tuning-progress" style="display: none;">
                 <div style="display: flex; justify-content: space-between;">
@@ -1525,6 +1530,18 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             return;
         }
 
+        // Short test: keep only the notes that start before the limit, and end the run there
+        // by clearing tuning/current (no KILL, so no device reloads).
+        clearTimeout(window.shortTuningTimer);
+        const shortChk = document.getElementById('short-tuning-chk');
+        const shortMs = shortChk && shortChk.checked ? Math.max(30, Math.min(180, +document.getElementById('short-tuning-sec').value || 60)) * 1000 : 0;
+        if (shortMs) {
+            const all = tuningSchedule.notes.length;
+            tuningSchedule.notes = tuningSchedule.notes.filter(n => parseFloat(n.startMs) + parseFloat(n.durationMs) <= shortMs);
+            tuningSchedule.totalNotes = tuningSchedule.notes.length;
+            conductorLog(`⏱️ Short test: ${shortMs / 1000} s, ${tuningSchedule.notes.length} of ${all} phone notes`);
+        }
+
         const firstNotes = tuningSchedule.notes.slice(0, 20);
         conductorLog(`🎼 First 20 spiral notes:`);
         firstNotes.forEach((note, idx) => {
@@ -1575,6 +1592,40 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
 
         conductorLog(`🎯 Tuning started: ${uncalibratedPatrons.length} uncalibrated patrons, ${calibratedPatrons.length} listening-only patrons, ${activePillarsList.length} pillars, ${tuningSchedule.totalNotes} notes`);
         conductorLog(`   Start time: ${new Date(tuningStartTimeAbs).toISOString().substr(11, 12)}`);
+        // End the tune (devices fade out) once every phone that is playing reports done or failed
+        // for THIS run. Not before the pillar part has finished and been solved.
+        clearInterval(window.autoEndTimer);
+        const autoChk = document.getElementById('auto-end-chk');
+        if (autoChk && autoChk.checked) {
+            const playing = pillarsOnly ? [] : uncalibratedPatrons.map(d => d.id);
+            const earliest = tuningStartTimeAbs + phase1EndMs + 8000;
+            let lastNote = '';
+            window.autoEndTimer = setInterval(async () => {
+                const cur = (await db.ref('tuning/current/startTime').once('value')).val();
+                if (cur !== tuningStartTimeAbs) { clearInterval(window.autoEndTimer); return; }
+                if (Date.now() + serverOffset < earliest) return;
+                const devs = (await db.ref('devices').once('value')).val() || {};
+                const st = id => { const r = devs[id] && devs[id].calRun; return r && r.runId === tuningStartTimeAbs ? r.state : 'running'; };
+                const waiting = playing.filter(id => st(id) === 'running');
+                if (waiting.length) {
+                    const note = `⏳ Waiting for ${waiting.length} of ${playing.length} phones: ${waiting.slice(0, 8).join(', ')}${waiting.length > 8 ? ', …' : ''}`;
+                    if (note !== lastNote) { conductorLog(note); lastNote = note; }
+                    return;
+                }
+                clearInterval(window.autoEndTimer);
+                const failed = playing.filter(id => st(id) === 'failed');
+                await db.ref('tuning/current').remove();
+                conductorLog(`🎬 Tuning ended: ${playing.length - failed.length} phones calibrated${failed.length ? `, ${failed.length} FAILED (${failed.join(', ')})` : ''}; devices fading out`, failed.length ? 'error' : 'match');
+            }, 2000);
+        }
+        if (shortMs) {
+            window.shortTuningTimer = setTimeout(async () => {
+                const cur = (await db.ref('tuning/current/startTime').once('value')).val();
+                if (cur !== tuningStartTimeAbs) return;          // a newer run has started
+                await db.ref('tuning/current').remove();
+                conductorLog(`⏱️ Short test ended after ${shortMs / 1000} s (devices not reloaded)`);
+            }, 5000 + shortMs + 3000);
+        }
     }
 
     async function stopTuning(manualStop = true) {

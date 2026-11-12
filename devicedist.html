@@ -102,7 +102,7 @@
     const MIN_CORRECTION_MS = 5;
     const MIN_SAMPLES_FOR_CORRECTION = 3;
     const CONVERGENCE_STD_DEV_MS = 15;
-    const MAX_CORRECTIONS = 3;
+    const MAX_CORRECTIONS = 6;
     const HEARTBEAT_TIMEOUT_MS = 12100;
     const BASELINE_WINDOW_SAMPLES = 50;
     const FADE_MS = 5;
@@ -1080,7 +1080,7 @@
         const stdDev = calculateStdDev(rawTimeShifts);
         const curDelay = currentSpeakerDelay;
         log(`📊 Real-time: shift=${median>0?'+':''}${median.toFixed(1)}ms, σ=${stdDev.toFixed(1)}ms, samples=${rawTimeShifts.length}, delay=${curDelay.toFixed(1)}ms, corr=${correctionCount}`);
-        if (correctionCount === 0 && rawTimeShifts.length >= 5 && Math.abs(median) > 20) {
+        if (correctionCount === 0 && rawTimeShifts.length >= 5 && Math.abs(median) > 20 && stdDev <= 60) {
             log(`🔧 FORCE FIRST CORRECTION: shift=${median.toFixed(1)}ms`, 'info');
             applyCorrection(median);
             rawTimeShifts = []; rawShiftsBy = [];
@@ -1094,8 +1094,9 @@
             return;
         }
         if (correctionCount >= MAX_CORRECTIONS) {
-            log(`✅ Max corrections (${MAX_CORRECTIONS}) reached`, 'info');
-            completeCalibration();
+            // Out of corrections: only a small remaining error counts as calibrated
+            if (Math.abs(median) <= 20) { log(`✅ Max corrections (${MAX_CORRECTIONS}) reached, error ${median.toFixed(1)} ms`, 'info'); completeCalibration(); }
+            else failCalibration(`still ${median.toFixed(0)} ms off after ${MAX_CORRECTIONS} corrections`);
             return;
         }
         const MIN_DELAY = -500, MAX_DELAY = 2000;
@@ -1238,7 +1239,15 @@
     //  and the phone ran its delay down to the -500 ms limit.
     // ------------------------------------------------------------------
     const NEIGHBOR_XCORR = true;
-    const NB_CHUNK_MS = 2000, NB_MARGIN_MS = 340, NB_SEARCH_MS = 320, NB_MIN_SCORE = 0.05;
+    const NB_CHUNK_MS = 2000, NB_MARGIN_MS = 340, NB_SEARCH_MS = 320, NB_MIN_SCORE = 0.10, NB_OWN_MIN_SCORE = 0.15;
+    let ownNotesWarned = 0, ownMisses = 0;
+    const SELF_CAL = true;      // phones correct themselves from their own notes; neighbours' reports are a cross-check
+    function setSpeakerDelay(ms) {
+        currentSpeakerDelay = ms;
+        createNewPlaybackStream(tuningStartTime - ms, ms, 0, true);
+        correctionEffectiveAt = SO.now() + CORRECTION_SETTLE_MS;
+        rawTimeShifts = []; rawShiftsBy = [];
+    }
     let neighborListenRun = 0;
     function stopNeighborListening() { neighborListenRun++; }
     function templateForDevice(src, notes, aMs, bMs) {
@@ -1265,8 +1274,10 @@
         const byDev = {};
         for (const n of noteSchedule) if (targets.has(n.deviceId) && n.deviceId !== mySeat.id) (byDev[n.deviceId] = byDev[n.deviceId] || []).push(n);
         const devs = Object.keys(byDev);
-        if (!devs.length) { log('👂 No playing neighbours to listen to'); return; }
-        const lastEnd = Math.max(...devs.flatMap(d => byDev[d].map(n => n.startMs + n.durationMs)));
+        const iPlay = !isListenOnlyMode && assignedNotes.length > 0;
+        if (!devs.length && !iPlay) { log('👂 No playing neighbours to listen to'); return; }
+        const lastEnd = Math.max(...devs.flatMap(d => byDev[d].map(n => n.startMs + n.durationMs)), ...(iPlay ? assignedNotes.map(n => n.startMs + n.durationMs) : []));
+        ownMisses = 0; ownNotesWarned = 0;
         log(`👂 Timing ${devs.join(', ')} by cross-correlation, ${NB_CHUNK_MS / 1000} s at a time`);
         const runId = Math.floor(tuningStartTime);
         const startT = tuningStartTime;
@@ -1302,8 +1313,34 @@
             const mine = assignedNotes.filter(n => n.startMs < b + NB_SEARCH_MS && n.startMs + n.durationMs > a - NB_SEARCH_MS);
             if (mine.length) {
                 const own = SO.dsp.findTemplate(templateForDevice(bufferCache[PICCOLO_URL], mine, a, b), samples, center - span, center + span, sr);
-                if (own.index < 0 || own.score < NB_MIN_SCORE) return;          // can't place my own notes: don't trust this chunk
+                // Can't place my own notes confidently (or only at the edge of the search):
+                // then I can't blank them, and anything I reported would be about myself.
+                if (own.index < 0 || own.score < NB_OWN_MIN_SCORE || Math.abs(own.index - center) > span - 0.002 * sr) {
+                    if (ownNotesWarned++ % 10 === 0) log(`🙉 Can't find my own notes in my recording (match ${own.score.toFixed(2)}); not reporting on neighbours`, 'warn');
+                    ownMisses++;
+                    // RECOVERY: my notes are nowhere near where they should be. Go back to the
+                    // default delay and start over; if that doesn't help either, give up cleanly.
+                    if (!isHappy && ownMisses === 3 && Math.abs(currentSpeakerDelay - estimatedDeviceDelayMs) > 1) {
+                        log(`↩️ Lost my own notes at ${currentSpeakerDelay.toFixed(0)} ms; restarting from the default ${estimatedDeviceDelayMs} ms`, 'warn');
+                        setSpeakerDelay(estimatedDeviceDelayMs);
+                    } else if (!isHappy && ownMisses >= 10) {
+                        failCalibration("can't hear my own notes (volume too low, or microphone blocked?)");
+                    }
+                    return;
+                }
+                ownMisses = 0;
                 const shift = own.index - center;
+                // SELF-CALIBRATION: I am the loudest thing in my own recording, so I time MYSELF.
+                // (heard - scheduled - my mic delay) is how late my notes are on the pillars'
+                // timeline, because the mic delay was measured against the pillars. This needs no
+                // other phone, so one phone's bad state can no longer drag the others off.
+                const ownHeardAt = rec.startServerMs + own.index / sr * 1000;
+                const selfErr = ownHeardAt - (startT + a) - (myMicDelayMs || 0);
+                if (!isHappy && ownHeardAt >= correctionEffectiveAt) {
+                    rawTimeShifts.push(selfErr);
+                    if (rawTimeShifts.length > 50) rawTimeShifts.shift();
+                    log(`🪞 Heard myself ${selfErr > 0 ? '+' : ''}${selfErr.toFixed(1)} ms (match ${own.score.toFixed(2)})`, 'debug');
+                }
                 mask = new Uint8Array(samples.length).fill(1);
                 for (const n of mine) {
                     const z0 = Math.round((n.startMs - recT0 - 10) / 1000 * sr) + shift;
@@ -1360,9 +1397,11 @@
             const v = snap.val();
             if (!v || !isFinite(v.err) || isHappy) return;
             if (v.at < correctionEffectiveAt) return;
-            rawTimeShifts.push(v.err);
-            rawShiftsBy.push({ by: v.by, err: v.err });
-            if (rawTimeShifts.length > 50) { rawTimeShifts.shift(); rawShiftsBy.shift(); }
+            if (!SELF_CAL) {
+                rawTimeShifts.push(v.err);
+                rawShiftsBy.push({ by: v.by, err: v.err });
+                if (rawTimeShifts.length > 50) { rawTimeShifts.shift(); rawShiftsBy.shift(); }
+            }
             log(`📨 ${v.by} heard me ${v.err > 0 ? '+' : ''}${v.err.toFixed(1)}ms`, 'debug');
         });
     }
@@ -1624,6 +1663,7 @@
         isHappy = true;
         stopSelfReportListener();
         log(`✅✅✅ CALIBRATION COMPLETE ✅✅✅`);
+        db.ref(`devices/${mySeat.id}/calRun`).set({ runId: tuningStartTime, state: 'done' }).catch(() => {});
         log(`   Speaker: ${currentSpeakerDelay.toFixed(1)}ms, Mic: ${myMicDelayMs?.toFixed(1) || '0'}ms`);
         saveCalibration();
         await db.ref(`devices/${mySeat.id}`).update({
@@ -1644,6 +1684,7 @@
         isHappy = true;
         stopSelfReportListener();
         log(`⛔ Calibration FAILED: ${reason}. Nothing saved; this phone stays uncalibrated.`, 'error');
+        db.ref(`devices/${mySeat.id}/calRun`).set({ runId: tuningStartTime, state: 'failed' }).catch(() => {});
         try { localStorage.removeItem(`calibration_${mySeat.id}`); } catch (e) {}
         await db.ref(`devices/${mySeat.id}`).update({ status: 'CAL_FAILED', calibrated: false, calFailedReason: reason, calFailedAt: SO.now() }).catch(() => {});
         updateCalibrationDisplay();
@@ -1792,7 +1833,12 @@
     // after the first until it was reloaded: a re-run never reached it.)
     function endTuningRun(reason) {
         if (!tuningStartTime) return;
-        for (const st of allStreams) { try { st.source.stop(); } catch (e) {} }
+        // Fade out over 1.5 s instead of cutting off
+        const t = audioCtx ? audioCtx.currentTime : 0, FADE = 1.5;
+        for (const st of allStreams) {
+            try { const g = st.gain.gain; g.cancelScheduledValues(t); g.setValueAtTime(g.value, t); g.linearRampToValueAtTime(0, t + FADE); } catch (e) {}
+            try { st.source.stop(t + FADE + 0.05); } catch (e) {}
+        }
         allStreams = []; activeStream = null;
         stopNeighborListening();
         stopSelfReportListener();
@@ -1858,6 +1904,16 @@
                 // (a re-run). It used to keep isHappy from the saved one, so it never listened to
                 // its neighbours or corrected anything.
                 isHappy = false; correctionCount = 0; rawTimeShifts = []; rawShiftsBy = [];
+                // Tells the conductor where this phone is in this run, so it can end the tune
+                // once every playing phone is done.
+                db.ref(`devices/${mySeat.id}/calRun`).set({ runId: sched.startTime, state: 'running' }).catch(() => {});
+                // The other phones can only time me within about ±300 ms. A stored delay far
+                // outside the plausible range (A1 carried 869 ms from a bad run) puts me beyond
+                // that, and my own misplaced notes then corrupt what I report about the others.
+                if (!(currentSpeakerDelay >= 0 && currentSpeakerDelay <= 400)) {
+                    log(`↩️ Stored speaker delay ${currentSpeakerDelay.toFixed(0)} ms is not plausible; starting from ${estimatedDeviceDelayMs} ms`, 'warn');
+                    currentSpeakerDelay = estimatedDeviceDelayMs;
+                }
                 if (sched.schedule) {
                     assignedNotes = noteSchedule.filter(n => n.deviceId === mySeat.id);
                     log(`🎯 Assigned ${assignedNotes.length} notes`);
@@ -2556,7 +2612,7 @@
     }
 
     window.onload = async () => {
-        log(`🚀 Loading... (devicedist build 2026-11-11i, config.js build ${SO.BUILD || "old"})`);
+        log(`🚀 Loading... (devicedist build 2026-11-12c, config.js build ${SO.BUILD || "old"})`);
         if (SO.BUILD !== "2026-11-11h") { log(`⚠️ config.js is build ${SO.BUILD || "old"}, this page needs 2026-11-11h: reload`, "warn"); SO.showWarning("build", [`This phone has an old copy of config.js (${SO.BUILD || "old"}). Close this tab and open the link again.`]); }
         try {
             await resolveIdentity();

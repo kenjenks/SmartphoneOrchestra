@@ -1153,22 +1153,23 @@
     // ---- One calibration run: its timers and its playing sound, so STOP / KILL can cancel it
     const calRun = { active: false, timers: [], playback: null, writes: [] };
     function runTimer(fn, ms) { const id = setTimeout(fn, ms); calRun.timers.push(id); return id; }
-    function stopRunSound() {
+    function stopRunSound(fadeSec = 0.05) {
         const pb = calRun.playback;
         calRun.playback = null;
         if (!pb || !pb.source) return false;
         const t = audioCtx.currentTime;
         const g = (pb.gainNode || pb.gain || {}).gain;
         try {
-            if (g) { g.cancelScheduledValues(t); g.setValueAtTime(g.value, t); g.linearRampToValueAtTime(0, t + 0.05); }
+            if (g) { g.cancelScheduledValues(t); g.setValueAtTime(g.value, t); g.linearRampToValueAtTime(0, t + fadeSec); }
         } catch (e) {}
-        try { pb.source.stop(t + 0.06); } catch (e) {}   // stop even if the fade could not be set
+        try { pb.source.stop(t + fadeSec + 0.01); } catch (e) {}   // stop even if the fade could not be set
         return true;
     }
     function abortCalibration(reason) {
         if (!calRun.active) {
-            // The listening phase may be over while the tuning music is still playing
-            const stopped = stopRunSound();
+            // The listening phase may be over while the tuning music is still playing.
+            // A normal end from the conductor fades out; a KILL cuts off.
+            const stopped = stopRunSound(/KILL/.test(reason) ? 0.05 : 1.5);
             addLog(stopped ? `⏹️ ${reason}: tuning music stopped (listening phase had already finished)`
                            : `⏹️ ${reason}: nothing playing`, 'info');
             return;
@@ -1254,7 +1255,7 @@
             const schedule = snap.val();
 
             if (!schedule || schedule.status !== 'ACTIVE') {
-                if (calRun.active) abortCalibration('STOP from conductor');
+                if (calRun.active || calRun.playback) abortCalibration('STOP from conductor');
                 return;
             }
 
@@ -1457,7 +1458,7 @@
             return;
         }
         myId = seatParam;
-        addLog(`🚀 ${myId} Loaded (reset_pillar build 2026-11-11h, config.js build ${SO.BUILD || "old"})`);
+        addLog(`🚀 ${myId} Loaded (reset_pillar build 2026-11-12c, config.js build ${SO.BUILD || "old"})`);
         if (SO.BUILD !== "2026-11-11h") { addLog(`❌ config.js is build ${SO.BUILD || "old"}, this page needs 2026-11-11h. Close this tab and open the link again.`, "error"); SO.showWarning("build", [`Old copy of config.js (${SO.BUILD || "old"}): close this tab and open the link again.`]); }
         document.getElementById('pillar-id-badge').innerText = myId;
 
