@@ -276,6 +276,12 @@
             else if (!isNum(p.micDelayMs) || p.micDelayMs < LIMITS.MIC_DELAY_MS[0] || p.micDelayMs > LIMITS.MIC_DELAY_MS[1])
                 errors.push(`${name}: micDelayMs ${p.micDelayMs} is outside ${LIMITS.MIC_DELAY_MS.join('–')} ms.`);
             if (!isNum(p.preferred_freq)) warnings.push(`${name}: no preferred_freq (needed only for the seat survey beacons).`);
+            // resetPillarSwoop is optional (only reset_pillar.html uses it).
+            // Warn only when the field is present but malformed, so existing deployments stay quiet.
+            if (p.resetPillarSwoop !== undefined && p.resetPillarSwoop !== null) {
+                if (typeof p.resetPillarSwoop !== 'string' || !/^https:\/\//.test(p.resetPillarSwoop))
+                    warnings.push(`${name}: resetPillarSwoop is not an https:// URL ("${String(p.resetPillarSwoop).slice(0, 40)}…"); reset_pillar.html will not be able to play this pillar's swoop.`);
+            }
         });
         if (data.pillars.length !== 4) warnings.push(`Expected 4 pillars, found ${data.pillars.length}.`);
         if (data.room_temp_c !== undefined &&
@@ -322,6 +328,7 @@
             const n = {
                 id: p.id, label: p.label || p.id, x: p.x, y: p.y,
                 audioUrl: p.audioUrl || null,
+                resetPillarSwoop: typeof p.resetPillarSwoop === 'string' ? p.resetPillarSwoop : null,
                 speakerDelayMs: pick('speakerDelayMs'),
                 micDelayMs: pick('micDelayMs'),
                 preferred_freq: isNum(p.preferred_freq) ? p.preferred_freq : null,
