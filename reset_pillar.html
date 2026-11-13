@@ -186,6 +186,7 @@
 
     // Xcorr quality gates
     const XCORR_FLOOR_SCORE = 0.03;
+    const CAL_MAX_SPREAD_MS = 20;     // listeners of one pillar must agree this closely
     const EDGE_MARGIN_MS = 5;         // reject a match that touches the search window's edge
 
     // Game over: require at least this many distinct listeners per target, and
@@ -902,6 +903,17 @@
             }
 
             const c = spk[player];
+            // The listeners hear one pillar within a few ms of each other (distances differ by
+            // under 10 ms). If they disagree by more, at least one matched the wrong place in
+            // the swoop, and the median can't be trusted.
+            const errsAll = perListener.map(x => x.err);
+            const spreadAll = errsAll.length ? Math.max(...errsAll) - Math.min(...errsAll) : 0;
+            if (perListener.length >= CAL_MIN_LISTENERS && spreadAll > CAL_MAX_SPREAD_MS) {
+                detail[player] = { configured: c, correction: null, listeners: perListener.length,
+                                   notes: perListener.reduce((s, x) => s + x.n, 0), spread: spreadAll };
+                addLog(`⛔ ${player.replace('PILLAR_', '')}: listeners disagree by ${spreadAll.toFixed(0)} ms (${perListener.map(x => `${x.listener.replace('PILLAR_', '')} ${(x.err > 0 ? '+' : '') + x.err.toFixed(0)}`).join(', ')}); speaker left at ${c} ms`, 'warn');
+                continue;
+            }
             if (perListener.length >= CAL_MIN_LISTENERS) {
                 const correction = calculateMedian(perListener.map(x => x.err));
                 spk[player] = c + correction;
@@ -1225,7 +1237,7 @@
             return;
         }
         myId = seatParam;
-        addLog(`🚀 ${myId} loaded (reset_pillar build 2026-11-12-swoop3, config.js build ${SO.BUILD || "old"})`);
+        addLog(`🚀 ${myId} loaded (reset_pillar build 2026-11-12-swoop4, config.js build ${SO.BUILD || "old"})`);
         if (SO.BUILD !== "2026-11-11h") {
             addLog(`❌ config.js is build ${SO.BUILD || "old"}, this page needs 2026-11-11h. Close and reopen.`, "error");
             SO.showWarning("build", [`Old copy of config.js (${SO.BUILD || "old"}). Close and reopen.`]);
