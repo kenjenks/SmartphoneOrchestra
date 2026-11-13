@@ -494,18 +494,33 @@
 
     // Decode a swoop once per URL. Returns { samples, sampleRate, durationMs }.
     async function getSwoopSamples(url) {
+        if (!audioCtx) return null;          // nothing can be decoded before the button is pressed
         if (swoopCache[url]) return swoopCache[url];
         swoopCache[url] = (async () => {
             const buf = await preloadAudio(url);
             if (!buf) return null;
-            const samples = SO.dsp.monoSlice(buf, 0, buf.duration);
-            const out = { samples, sampleRate: buf.sampleRate, durationMs: buf.duration * 1000 };
-            addLog(`📐 Swoop template: ${url.split('/').pop()} → ${out.durationMs.toFixed(0)} ms`);
+            const full = SO.dsp.monoSlice(buf, 0, buf.duration);
+            // The sound ends where the level last exceeds 1% of the peak (-40 dB). Silence after
+            // that is dropped: it carries no timing, and the slot only needs to be as long as the sound.
+            let peak = 0;
+            for (let k = 0; k < full.length; k++) { const a = Math.abs(full[k]); if (a > peak) peak = a; }
+            let end = full.length;
+            if (peak > 0) { const thr = peak * 0.01; while (end > 1 && Math.abs(full[end - 1]) < thr) end--; }
+            let first = 0;
+            if (peak > 0) { const thr = peak * 0.01; while (first < end && Math.abs(full[first]) < thr) first++; }
+            const samples = full.subarray(0, end);
+            const out = { samples, sampleRate: buf.sampleRate, durationMs: end / buf.sampleRate * 1000,
+                          fileMs: buf.duration * 1000, firstSoundMs: first / buf.sampleRate * 1000 };
+            addLog(`📐 Swoop template: ${url.split('/').pop()} → sound from ${out.firstSoundMs.toFixed(0)} to ${out.durationMs.toFixed(0)} ms of a ${out.fileMs.toFixed(0)} ms file`);
             return out;
         })().catch(e => {
             addLog(`❌ Decode ${url.split('/').pop()}: ${e.message}`, 'warn');
             return null;
         });
+        // A failed load must not be remembered: the cards ask for the swoops at page load, before
+        // the audio context exists, and that null used to be cached, so every later listen
+        // found "No template" and nothing was measured.
+        swoopCache[url].then(v => { if (!v) delete swoopCache[url]; });
         return swoopCache[url];
     }
 
@@ -1012,10 +1027,10 @@
         }
         addLog(`📦 Preloading ${slots.length} swoop${slots.length === 1 ? '' : 's'}...`);
         for (const s of slots) {
-            const buf = await preloadAudio(s.url);
+            const buf = await getSwoopSamples(s.url);
             if (buf) {
-                s.durMs = buf.duration * 1000;
-                addLog(`   ${s.pillarId.replace('PILLAR_', '')}: ${s.durMs.toFixed(0)} ms @ +${s.staggerMs} ms`);
+                s.durMs = buf.durationMs;
+                addLog(`   ${s.pillarId.replace('PILLAR_', '')}: sound ends at ${s.durMs.toFixed(0)} ms @ +${s.staggerMs} ms`);
             } else {
                 addLog(`   ⚠️ ${s.pillarId.replace('PILLAR_', '')}: swoop failed to load`, 'warn');
             }
@@ -1029,13 +1044,15 @@
             return;
         }
 
+        for (const s of readySlots) { const el = document.getElementById(`dur-${s.pillarId}`); if (el) el.innerText = `${s.durMs.toFixed(0)} ms`; }
+
         // Cross-template check (informational)
         await checkTemplateDistinctness(readySlots);
 
         // Check for slot overlap
         for (let i = 1; i < readySlots.length; i++) {
             const gap = readySlots[i].staggerMs - (readySlots[i - 1].staggerMs + readySlots[i - 1].durMs);
-            if (gap < 30) {
+            if (gap < LISTEN_PRE_MS) {
                 addLog(`⚠️ Slot gap ${readySlots[i - 1].pillarId.replace('PILLAR_', '')}→${readySlots[i].pillarId.replace('PILLAR_', '')} is only ${gap.toFixed(0)} ms; reverb tails may bleed`, 'warn');
             }
         }
@@ -1090,12 +1107,25 @@
             const usable = [];
             for (const s of runSlots) {
                 if (!s.durMs) {
-                    const buf = await preloadAudio(s.url);
-                    s.durMs = buf ? buf.duration * 1000 : 0;
+                    const buf = await getSwoopSamples(s.url);
+                    s.durMs = buf ? buf.durationMs : 0;
                 }
                 if (s.durMs > 0) usable.push(s);
             }
             if (usable.length < 2) { addLog(`❌ Not enough usable swoops`, 'warn'); return; }
+            // Each tablet records from LISTEN_PRE_MS before a slot to LISTEN_POST_MS after it.
+            // No other swoop may fall inside that, or the tablet hears its own (much louder)
+            // swoop on top of the one it is timing.
+            // durMs is where the sound ends, not the file length, so silent tails don't count.
+            const need = 0;
+            const clash = usable.slice(1).map((s, i) => ({ a: usable[i], b: s, gap: s.staggerMs - (usable[i].staggerMs + usable[i].durMs) })).filter(x => x.gap < need);
+            if (clash.length) {
+                const longest = Math.max(...usable.map(s => s.durMs)), step = Math.ceil((longest + LISTEN_PRE_MS) / 500) * 500;
+                addLog(`❌ Swoop slots overlap (${clash.map(x => `${x.a.pillarId.replace('PILLAR_', '')}→${x.b.pillarId.replace('PILLAR_', '')} gap ${x.gap.toFixed(0)} ms`).join(', ')}. Run refused. Set "stagger" in pillar_config to ${usable.map((s, i) => i * step).join(' / ')} ms.`, 'error');
+                stateTextSpan.innerText = 'Fix stagger in pillar_config';
+                stateLed.className = 'status-led led-red';
+                return;
+            }
             drawRunTimeline(usable, 0);
 
             // Reset run state
@@ -1195,7 +1225,7 @@
             return;
         }
         myId = seatParam;
-        addLog(`🚀 ${myId} loaded (reset_pillar build 2026-11-12-swoop, config.js build ${SO.BUILD || "old"})`);
+        addLog(`🚀 ${myId} loaded (reset_pillar build 2026-11-12-swoop3, config.js build ${SO.BUILD || "old"})`);
         if (SO.BUILD !== "2026-11-11h") {
             addLog(`❌ config.js is build ${SO.BUILD || "old"}, this page needs 2026-11-11h. Close and reopen.`, "error");
             SO.showWarning("build", [`Old copy of config.js (${SO.BUILD || "old"}). Close and reopen.`]);
