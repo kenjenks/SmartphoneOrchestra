@@ -1852,6 +1852,7 @@
                 if (tuningStartTime && !isProcessingTuning && allStreams.length) endTuningRun('STOP from conductor');
                 return;
             }
+            if (sched.mode === 'PILLAR_CAL') { log('🏛️ Pillar calibration running; this phone stays quiet'); return; }
             if (isProcessingTuning || tuningStartTime === sched.startTime) return;
             const now = SO.now();
             if (sched.startTime < now - 60000) { log(`❌ Schedule in past`); return; }
@@ -2612,7 +2613,7 @@
     }
 
     window.onload = async () => {
-        log(`🚀 Loading... (devicedist build 2026-11-12c, config.js build ${SO.BUILD || "old"})`);
+        log(`🚀 Loading... (devicedist build 2026-11-12d, config.js build ${SO.BUILD || "old"})`);
         if (SO.BUILD !== "2026-11-11h") { log(`⚠️ config.js is build ${SO.BUILD || "old"}, this page needs 2026-11-11h: reload`, "warn"); SO.showWarning("build", [`This phone has an old copy of config.js (${SO.BUILD || "old"}). Close this tab and open the link again.`]); }
         try {
             await resolveIdentity();

@@ -7,7 +7,7 @@
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
-    <script src="config.js"></script>
+    <script src="config.js?v=2026-11-11h"></script>
     <style>
         body {
             margin: 0;
@@ -491,6 +491,10 @@
                 return;
             }
 
+            if (schedule.mode === 'PILLAR_CAL') {
+                log('🏛️ START PILLAR CAL ignored: pillar calibration needs reset_pillar.html on this tablet');
+                return;
+            }
             if (!schedule.startTime) {
                 log(`⚠️ Schedule has no startTime`);
                 return;

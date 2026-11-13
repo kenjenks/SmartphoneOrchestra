@@ -155,7 +155,7 @@
     <button id="calibrate-btn" class="primary">🎤 Grant Mic Permission & Start</button>
     <div class="small-text" style="margin-top: 8px; text-align: center;">
         All four pillars must be online. Click to grant mic, preload swoops, and listen.
-        On the conductor's <b>START PICCOLO</b>, each pillar plays its swoop in turn (per its
+        On the conductor's <b>START PILLAR CAL</b>, each pillar plays its swoop in turn (per its
         <code>stagger</code>) while the others listen, then speaker delays are computed automatically.
     </div>
 
@@ -186,13 +186,16 @@
 
     // Xcorr quality gates
     const XCORR_FLOOR_SCORE = 0.03;
-    const CAL_MAX_SPREAD_MS = 20;     // listeners of one pillar must agree this closely
+    const CAL_AGREE_MS = 20;          // listeners of one pillar must agree this closely
+    // Each pillar plays its swoop this many times per run; every listener takes the median of
+    // its own measurements, so one smeared match is outvoted.
+    const CAL_ROUNDS = 4;
     const EDGE_MARGIN_MS = 5;         // reject a match that touches the search window's edge
 
     // Game over: require at least this many distinct listeners per target, and
     // at least 1 xcorr per listener. With 4 pillars, each target gets 3 chances.
     const CAL_MIN_LISTENERS = 2;
-    const CAL_MIN_NOTES_PER_LISTENER = 1;
+    const CAL_MIN_NOTES_PER_LISTENER = 2;   // of CAL_ROUNDS
 
     // If our own playback would be later than this, abort the swoop (measured
     // speaker delay would be polluted by the scheduling lateness).
@@ -555,7 +558,7 @@
     // Bounded by the previous slot's end and the next slot's start, so only
     // the target slot's swoop can match.
     function searchWindowFor(slot, allSlots, globalStartTime) {
-        const i = allSlots.findIndex(s => s.pillarId === slot.pillarId);
+        const i = allSlots.findIndex(s => s.key === slot.key);
         const prevEnd = i > 0
             ? globalStartTime + allSlots[i - 1].staggerMs + allSlots[i - 1].durMs
             : globalStartTime + slot.staggerMs - 1000;
@@ -611,12 +614,13 @@
         const runId = Math.floor(tuningStartTime);
 
         calRun.writes.push(
-            db.ref(`pillar_calibration/runs/${runId}/${slot.pillarId}/${myId}/0`).set({
+            db.ref(`pillar_calibration/runs/${runId}/${slot.pillarId}/${myId}/${slot.round || 0}`).set({
                 rawDelayMs: Math.round(rawMs * 100) / 100,
                 score: Math.round(res.score * 1000) / 1000,
                 listenerId: myId,
                 method: 'xcorr',
                 staggerMs: slot.staggerMs,
+                round: slot.round || 0,
                 timestamp: SO.now()
             })
         );
@@ -631,7 +635,7 @@
             setTimeout(() => { flash.style.background = '#333'; }, 100);
         }
 
-        addLog(`🎯 ${slot.pillarId.replace('PILLAR_', '')} heard: ${rawMs > 0 ? '+' : ''}${rawMs.toFixed(1)} ms (score ${res.score.toFixed(2)})`,
+        addLog(`🎯 ${slot.pillarId.replace('PILLAR_', '')} heard (round ${(slot.round || 0) + 1}): ${rawMs > 0 ? '+' : ''}${rawMs.toFixed(1)} ms (score ${res.score.toFixed(2)})`,
                res.score > 0.15 ? 'success' : 'warn');
         updateResultsDisplay();
     }
@@ -830,7 +834,7 @@
         calibrateBtn.innerText = '🎧 Listening for tuning movement...';
         stateTextSpan.innerText = 'Stopped – listening for tuning...';
         stateLed.className = 'status-led led-yellow';
-        addLog(`⏹️ ${reason}: calibration run stopped. Waiting for a new START PICCOLO.`, 'warn');
+        addLog(`⏹️ ${reason}: calibration run stopped. Waiting for a new START PILLAR CAL.`, 'warn');
     }
 
     function watchKill() {
@@ -899,33 +903,45 @@
                     pillarData[player].y - pillarData[listener].y
                 );
                 const prop = (dist / SPEED_OF_SOUND) * 1000;
-                perListener.push({ listener, n: raws.length, err: calculateMedian(raws) - prop - mic[listener] });
+                perListener.push({ listener, n: raws.length, sd: raws.length > 1 ? calculateStdDev(raws) : 0,
+                                   err: calculateMedian(raws) - prop - mic[listener] });
             }
 
             const c = spk[player];
             // The listeners hear one pillar within a few ms of each other (distances differ by
-            // under 10 ms). If they disagree by more, at least one matched the wrong place in
-            // the swoop, and the median can't be trusted.
-            const errsAll = perListener.map(x => x.err);
-            const spreadAll = errsAll.length ? Math.max(...errsAll) - Math.min(...errsAll) : 0;
-            if (perListener.length >= CAL_MIN_LISTENERS && spreadAll > CAL_MAX_SPREAD_MS) {
+            // under 10 ms). Use the largest group of listeners that agree within CAL_AGREE_MS;
+            // a listener outside it matched the wrong place and is left out. No agreeing pair:
+            // the pillar keeps its value.
+            const fmt = x => `${x.listener.replace('PILLAR_', '')} ${(x.err > 0 ? '+' : '') + x.err.toFixed(0)}`;
+            const byErr = perListener.slice().sort((a, b) => a.err - b.err);
+            let agree = [];
+            for (const lo of byErr) {
+                const g = byErr.filter(x => x.err >= lo.err && x.err <= lo.err + CAL_AGREE_MS);
+                const gs = g.length ? g[g.length - 1].err - g[0].err : 0;
+                const as = agree.length ? agree[agree.length - 1].err - agree[0].err : Infinity;
+                if (g.length > agree.length || (g.length === agree.length && gs < as)) agree = g;
+            }
+            if (perListener.length >= CAL_MIN_LISTENERS && agree.length < CAL_MIN_LISTENERS) {
+                const spreadAll = byErr.length ? byErr[byErr.length - 1].err - byErr[0].err : 0;
                 detail[player] = { configured: c, correction: null, listeners: perListener.length,
                                    notes: perListener.reduce((s, x) => s + x.n, 0), spread: spreadAll };
-                addLog(`⛔ ${player.replace('PILLAR_', '')}: listeners disagree by ${spreadAll.toFixed(0)} ms (${perListener.map(x => `${x.listener.replace('PILLAR_', '')} ${(x.err > 0 ? '+' : '') + x.err.toFixed(0)}`).join(', ')}); speaker left at ${c} ms`, 'warn');
+                addLog(`⛔ ${player.replace('PILLAR_', '')}: no two listeners agree within ${CAL_AGREE_MS} ms (${perListener.map(fmt).join(', ')}); speaker left at ${c} ms`, 'warn');
                 continue;
             }
             if (perListener.length >= CAL_MIN_LISTENERS) {
-                const correction = calculateMedian(perListener.map(x => x.err));
+                const dropped = perListener.filter(x => !agree.includes(x));
+                if (dropped.length) addLog(`   ${player.replace('PILLAR_', '')}: left out ${dropped.map(fmt).join(', ')} (disagrees with ${agree.map(fmt).join(', ')})`, 'warn');
+                const correction = agree.reduce((s, x) => s + x.err, 0) / agree.length;
                 spk[player] = c + correction;
                 pillarsSolved++;
-                const errs = perListener.map(x => x.err);
+                const errs = agree.map(x => x.err);
                 detail[player] = {
                     configured: c, correction,
-                    listeners: perListener.length,
+                    listeners: agree.length,
                     notes: perListener.reduce((s, x) => s + x.n, 0),
                     spread: Math.max(...errs) - Math.min(...errs)
                 };
-                addLog(`🧮 ${player.replace('PILLAR_', '')}: heard by ${perListener.map(x => `${x.listener.replace('PILLAR_', '')} ${(x.err > 0 ? '+' : '') + x.err.toFixed(0)}ms (${x.n})`).join(', ')} → speaker ${c} + ${correction.toFixed(0)} = ${spk[player].toFixed(0)} ms`);
+                addLog(`🧮 ${player.replace('PILLAR_', '')}: heard by ${perListener.map(x => `${x.listener.replace('PILLAR_', '')} ${(x.err > 0 ? '+' : '') + x.err.toFixed(0)}ms (median of ${x.n}, ±${x.sd.toFixed(0)})`).join(', ')} → speaker ${c} + ${correction.toFixed(0)} = ${spk[player].toFixed(0)} ms`);
             } else {
                 detail[player] = {
                     configured: c, correction: null,
@@ -1077,7 +1093,7 @@
         stateTextSpan.innerText = 'Listening for tuning...';
         stateLed.className = 'status-led led-yellow';
 
-        addLog('🔊 Waiting for conductor to START PICCOLO...', 'info');
+        addLog('🔊 Waiting for conductor to START PILLAR CAL...', 'info');
 
         const tuningListener = async (snap) => {
             const schedule = snap.val();
@@ -1088,7 +1104,11 @@
             }
             if (!schedule.startTime) return;
 
-            // Conductor's tuba buttons also write here; ignore those
+            // Only START PILLAR CAL starts a run; START PICCOLO and the tuba buttons are for the show pages
+            if (schedule.mode !== 'PILLAR_CAL') {
+                addLog(`⏭️ Ignoring ${schedule.type || 'START PICCOLO'}; waiting for START PILLAR CAL`, 'info');
+                return;
+            }
             if (schedule.type) {
                 addLog(`⏭️ Ignoring ${schedule.type}${schedule.instrument ? ' (' + schedule.instrument + ')' : ''}; still waiting for START PICCOLO`, 'info');
                 return;
@@ -1138,7 +1158,23 @@
                 stateLed.className = 'status-led led-red';
                 return;
             }
-            drawRunTimeline(usable, 0);
+            // Repeat the whole sequence CAL_ROUNDS times. Rounds continue the stagger pattern: the
+            // next round starts one stagger step after this round's last swoop, so all spacing
+            // comes from the staggers in pillar_config.
+            const roundStart = Math.min(...usable.map(s => s.staggerMs));
+            const roundEnd = Math.max(...usable.map(s => s.staggerMs + s.durMs));
+            const staggers = usable.map(s => s.staggerMs).sort((a, b) => a - b);
+            const step = staggers.length > 1
+                ? (staggers[staggers.length - 1] - staggers[0]) / (staggers.length - 1)
+                : roundEnd - roundStart + LISTEN_PRE_MS;
+            const period = Math.max(staggers[staggers.length - 1] - staggers[0] + step,
+                                    roundEnd - roundStart + LISTEN_PRE_MS);
+            const allSlots = [];
+            for (let r = 0; r < CAL_ROUNDS; r++) {
+                for (const s of usable) allSlots.push({ ...s, staggerMs: s.staggerMs + r * period, round: r, key: `${s.pillarId}#${r}` });
+            }
+            addLog(`🔁 ${CAL_ROUNDS} rounds, every ${period} ms; run lasts ${((allSlots[allSlots.length - 1].staggerMs + allSlots[allSlots.length - 1].durMs) / 1000).toFixed(1)} s`);
+            drawRunTimeline(allSlots, 0);
 
             // Reset run state
             calRun.active = true;
@@ -1160,7 +1196,7 @@
             const globalStartTime = schedule.startTime;
             tuningStartTime = globalStartTime;
             const startStr = new Date(globalStartTime).toISOString().substr(11, 12);
-            addLog(`🎵 START PICCOLO — global start: ${startStr}`, 'success');
+            addLog(`🏛️ START PILLAR CAL — global start: ${startStr}`, 'success');
             addLog(`   Server offset: ${serverOffset > 0 ? '+' : ''}${serverOffset.toFixed(1)}ms`);
 
             pillarMeasurements = {};
@@ -1169,11 +1205,10 @@
             stateTextSpan.innerText = `Run starting at ${startStr}`;
             stateLed.className = 'status-led led-blue';
 
-            // Schedule my own swoop
-            const mySlot = usable.find(s => s.pillarId === myId);
-            if (!mySlot) {
-                addLog(`⚠️ No swoop window for ${myId}; cannot calibrate`, 'warn');
-            } else {
+            // Schedule my own swoops
+            const mySlots = allSlots.filter(s => s.pillarId === myId);
+            if (!mySlots.length) addLog(`⚠️ No swoop window for ${myId}; cannot calibrate`, 'warn');
+            for (const mySlot of mySlots) {
                 const playAtMs = globalStartTime + mySlot.staggerMs - RECORDER_LEAD_MS;
                 const delay = playAtMs - SO.now();
                 if (delay > -1000) {
@@ -1190,13 +1225,13 @@
             }
 
             // Schedule listening for every OTHER pillar's slot
-            for (const slot of usable) {
+            for (const slot of allSlots) {
                 if (slot.pillarId === myId) continue;
                 const listenAtMs = globalStartTime + slot.staggerMs - LISTEN_PRE_MS - RECORDER_LEAD_MS;
                 const delay = listenAtMs - SO.now();
                 if (delay > -LISTEN_PRE_MS) {
                     runTimer(() => {
-                        const p = listenToSlot(slot, usable, globalStartTime);
+                        const p = listenToSlot(slot, allSlots, globalStartTime);
                         calRun.writes.push(p);
                     }, Math.max(0, delay));
                 } else {
@@ -1205,7 +1240,7 @@
             }
 
             // End-of-run timer
-            const runEndMs = Math.max(...usable.map(s => s.staggerMs + s.durMs));
+            const runEndMs = Math.max(...allSlots.map(s => s.staggerMs + s.durMs));
             const finishAtMs = globalStartTime + runEndMs + LISTEN_POST_MS + 5000;
             runTimer(() => {
                 calRun.active = false;
@@ -1217,7 +1252,7 @@
                 stateLed.className = 'status-led led-green';
                 addLog('⏹️ Swoop run complete', 'info');
                 computePillarDelays();
-                addLog('🔊 Ready for the next START PICCOLO', 'info');
+                addLog('🔊 Ready for the next START PILLAR CAL', 'info');
             }, Math.max(2000, finishAtMs - SO.now()));
         };
 
@@ -1237,7 +1272,7 @@
             return;
         }
         myId = seatParam;
-        addLog(`🚀 ${myId} loaded (reset_pillar build 2026-11-12-swoop4, config.js build ${SO.BUILD || "old"})`);
+        addLog(`🚀 ${myId} loaded (reset_pillar build 2026-11-13-swoop7, config.js build ${SO.BUILD || "old"})`);
         if (SO.BUILD !== "2026-11-11h") {
             addLog(`❌ config.js is build ${SO.BUILD || "old"}, this page needs 2026-11-11h. Close and reopen.`, "error");
             SO.showWarning("build", [`Old copy of config.js (${SO.BUILD || "old"}). Close and reopen.`]);

@@ -277,6 +277,16 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             </div>
         </div>
 
+        <!-- PILLAR CALIBRATION (reset_pillar.html on the four tablets) -->
+        <div class="section">
+            <h2>🏛️ Pillar Calibration</h2>
+            <div style="font-size:0.85rem; margin-bottom:8px;">Before the show: open reset_pillar.html on all four pillars and press their buttons, then start here. Patron phones stay quiet.</div>
+            <div class="btn-group">
+                <button id="start-pillar-cal-btn" class="primary">🏛️ START PILLAR CAL</button>
+                <button id="stop-pillar-cal-btn" style="background:#600; border-color:#a00;">⏹️ STOP</button>
+            </div>
+        </div>
+
         <!-- DYNAMIC TUNING MODE -->
         <div class="section">
             <h2>🎯 Distributed Calibration: Piccolo</h2>
@@ -1408,6 +1418,38 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
 
     // ==================== COMPLETE TUNING FLOW ====================
 
+    // Pillar calibration: reset_pillar.html on each tablet plays its swoops and times the others.
+    // tuning/current carries only a start time and mode PILLAR_CAL; phones and epillar ignore it.
+    async function startPillarCal() {
+        conductorLog('🏛️ START PILLAR CAL pressed');
+        clearInterval(window.autoEndTimer);
+        clearTimeout(window.shortTuningTimer);
+        clearInterval(window.pillarCalTimer);
+        await db.ref('tuning/current').remove();
+        await refreshActiveDevices();
+        const pillars = activeDevices.filter(d => d.isPillar).map(d => d.id);
+        if (pillars.length < 2) {
+            alert(`Only ${pillars.length} pillar(s) online. Open reset_pillar.html on the pillars first.`);
+            conductorLog(`❌ Only ${pillars.length} pillar(s) online`, 'error');
+            return;
+        }
+        const startTime = Date.now() + serverOffset + 5000;
+        await db.ref('tuning/current').set({ status: 'ACTIVE', mode: 'PILLAR_CAL', startTime, activePillars: pillars, generatedAt: Date.now() + serverOffset });
+        conductorLog(`🏛️ Pillar calibration starts at ${new Date(startTime).toISOString().substr(11, 12)} with ${pillars.join(', ')}`);
+        // End once the tablets have saved their results (or after 3 minutes)
+        window.pillarCalTimer = setInterval(async () => {
+            const cur = (await db.ref('tuning/current/startTime').once('value')).val();
+            if (cur !== startTime) { clearInterval(window.pillarCalTimer); return; }
+            const res = (await db.ref('pillar_calibration/results/runId').once('value')).val();
+            const late = Date.now() + serverOffset > startTime + 180000;
+            if (res !== Math.floor(startTime) && !late) return;
+            clearInterval(window.pillarCalTimer);
+            await db.ref('tuning/current').remove();
+            const ok = res === Math.floor(startTime);
+            conductorLog(ok ? '✅ Pillar calibration done. Review on a tablet, then Apply in admin.' : '⚠️ Pillar calibration ended without results (see the tablet logs)', ok ? 'match' : 'error');
+        }, 2000);
+    }
+
     async function startTuningMovement() {
         conductorLog("🔴 START PICCOLO BUTTON PRESSED");
 
@@ -1489,16 +1531,9 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         conductorLog(`🏛️ Active pillars: ${activePillarsList.length}`);
 
         if (pillarsOnly) {
-            // No patron phones: run the pillar calibration on its own (reset_pillar.html on the tablets)
-            if (!activePillarsList.length) {
-                alert("No pillars or patron phones are online.");
-                return;
-            }
-            if (!confirm(`No patron phones are connected.\n\nRun the PILLAR calibration only, with the ${activePillarsList.length} pillar(s) online?`)) {
-                conductorLog("Tuning cancelled");
-                return;
-            }
-            conductorLog(`🏛️ Pillar-only calibration (${activePillarsList.length} pillars, no patron phones)`);
+            conductorLog("No patron phones connected; nothing for the piccolo to calibrate. For the pillars, use START PILLAR CAL.", 'error');
+            alert("No patron phones are connected.\n\nTo calibrate the pillars, use 🏛️ START PILLAR CAL.");
+            return;
         } else if (uncalibratedPatrons.length === 0) {
             if (!confirm(`All ${activePatrons.length} patron phones are already calibrated.\n\nRe-run the calibration anyway? (OK = re-tune every phone and the pillars, Cancel = keep the current calibration)`)) {
                 conductorLog("✅ All patrons already calibrated; re-run cancelled.");
@@ -1606,6 +1641,15 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
                 if (Date.now() + serverOffset < earliest) return;
                 const devs = (await db.ref('devices').once('value')).val() || {};
                 const st = id => { const r = devs[id] && devs[id].calRun; return r && r.runId === tuningStartTimeAbs ? r.state : 'running'; };
+                // A pillar-only run (reset_pillar) is done once the tablets have saved their results.
+                if (pillarsOnly) {
+                    const res = (await db.ref('pillar_calibration/results/runId').once('value')).val();
+                    if (res !== Math.floor(tuningStartTimeAbs) && Date.now() + serverOffset < earliest + 90000) {
+                        const note = '⏳ Waiting for the pillars to finish';
+                        if (note !== lastNote) { conductorLog(note); lastNote = note; }
+                        return;
+                    }
+                }
                 const waiting = playing.filter(id => st(id) === 'running');
                 if (waiting.length) {
                     const note = `⏳ Waiting for ${waiting.length} of ${playing.length} phones: ${waiting.slice(0, 8).join(', ')}${waiting.length > 8 ? ', …' : ''}`;
@@ -1846,6 +1890,12 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         conductorLog("Device list refreshed", 'info');
     };
     document.getElementById('start-tuning-btn').onclick = startTuningMovement;
+    document.getElementById('start-pillar-cal-btn').onclick = startPillarCal;
+    document.getElementById('stop-pillar-cal-btn').onclick = async () => {
+        clearInterval(window.pillarCalTimer);
+        await db.ref('tuning/current').remove();
+        conductorLog('⏹️ Pillar calibration stopped');
+    };
     document.getElementById('stop-tuning-btn').onclick = stopTuning;
 
     document.getElementById('kill-all-btn').onclick = () => {
