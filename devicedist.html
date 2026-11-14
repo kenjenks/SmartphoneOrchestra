@@ -155,6 +155,10 @@
     let rawTimeShifts = []; let rawShiftsBy = [];
     let pillarSyncShifts = [];
     let isHappy = false;
+    // A failed calibration also sets isHappy (to stop correcting), so it needs its own flag:
+    // without it the phone reported itself as calibrated, the next run made it listen-only,
+    // and it saved its failed delay as a calibration.
+    let calFailed = false;
     let estimatedDeviceDelayMs = 175;
     let estimatedDeviceMicDelayMs = 13;
     let myMicDelayMs = null;
@@ -532,7 +536,8 @@
             if (stored) {
                 const cal = JSON.parse(stored);
                 const age = Date.now() - cal.timestamp;
-                if (age < 30 * 24 * 60 * 60 * 1000 && typeof cal.speakerDelay === 'number' && typeof cal.micDelay === 'number') {
+                if (age < 30 * 24 * 60 * 60 * 1000 && typeof cal.speakerDelay === 'number' && typeof cal.micDelay === 'number'
+                    && cal.speakerDelay >= 0 && cal.speakerDelay <= 400) {   // a delay outside 0-400 ms was saved by mistake
                     currentSpeakerDelay = cal.speakerDelay;
                     myMicDelayMs = cal.micDelay;
                     phase1Complete = true;
@@ -987,10 +992,6 @@
     }
 
     function scheduleCorrectionDuringRest(medianShift, currentDelay) {
-        if (isSingleDeviceMode) {
-            log(`🎧 Single‑device mode: skipping correction scheduling`);
-            return false;
-        }
         const nowWall = SO.now();
         const songPos = nowWall - tuningStartTime;
         const nextRest = findNextRestPeriod(songPos);
@@ -1027,15 +1028,9 @@
 
         log(`🔄 Correction needed: shift=${medianShift.toFixed(1)}ms → ${currentDelay.toFixed(1)}ms → ${clamped.toFixed(1)}ms`);
 
-        if (isSingleDeviceMode) {
-            log(`🔧 Single‑device mode: storing delay ${clamped.toFixed(1)}ms, keeping current stream`);
-            currentSpeakerDelay = clamped;
-            rawTimeShifts = []; rawShiftsBy = [];
-            correctionCount++;
-            updateCalibrationDisplay();
-            return;
-        }
-
+        // A phone on its own used to store the new delay without applying it (from when phones
+        // were timed by their neighbours, and a lone phone had none). Phones now time their own
+        // notes, so a lone phone corrects exactly like the others.
         const scheduled = scheduleCorrectionDuringRest(medianShift, currentDelay);
         if (!scheduled) {
             log(`⚠️ No suitable rest, applying immediately`, 'warn');
@@ -1076,6 +1071,22 @@
             log(`⏸️ Listeners disagree about me (${disagree} ms); waiting for more before correcting`, 'warn');
             if (rawTimeShifts.length >= 30) { rawTimeShifts.splice(0, 10); rawShiftsBy.splice(0, 10); }
             return;
+        }
+        // Cross-check: my own timing depends on my mic delay; the neighbours' doesn't. If they
+        // disagree by more than SELF_NEIGHBOUR_AGREE_MS, my mic delay is probably wrong (e.g. the
+        // pillar windows were recorded late while the page was hidden), and correcting would
+        // move me the wrong way. Wait; if it persists, fail rather than save a wrong delay.
+        if (SELF_CAL && rawShiftsBy.length >= 3) {
+            const me = calculateMedian(rawTimeShifts);
+            const nb = calculateMedian(rawShiftsBy.map(r => r.err));
+            if (Math.abs(me - nb) > SELF_NEIGHBOUR_AGREE_MS) {
+                selfNeighbourDisagreements++;
+                log(`⏸️ I hear myself ${me > 0 ? '+' : ''}${me.toFixed(0)} ms, neighbours hear me ${nb > 0 ? '+' : ''}${nb.toFixed(0)} ms: my mic delay (${(myMicDelayMs || 0).toFixed(0)} ms) is probably wrong; not correcting`, 'warn');
+                if (selfNeighbourDisagreements >= 5) { failCalibration(`my own timing and my neighbours' disagree by ${Math.abs(me - nb).toFixed(0)} ms (mic delay wrong?)`); return; }
+                if (rawTimeShifts.length >= 30) rawTimeShifts.splice(0, 10);
+                return;
+            }
+            selfNeighbourDisagreements = 0;
         }
         const median = calculateMedian(rawTimeShifts);
         const stdDev = calculateStdDev(rawTimeShifts);
@@ -1341,6 +1352,12 @@
                     rawTimeShifts.push(selfErr);
                     if (rawTimeShifts.length > 50) rawTimeShifts.shift();
                     log(`🪞 Heard myself ${selfErr > 0 ? '+' : ''}${selfErr.toFixed(1)} ms (match ${own.score.toFixed(2)})`, 'debug');
+                    // Evaluate here too: the energy loop that normally does it stops when the
+                    // page is hidden (screen off), but these 2 s recordings keep coming.
+                    if (!isListenOnlyMode && SO.now() - lastEvaluationTime > EVALUATION_INTERVAL_MS) {
+                        lastEvaluationTime = SO.now();
+                        evaluateInRealTime();
+                    }
                 }
                 mask = new Uint8Array(samples.length).fill(1);
                 for (const n of mine) {
@@ -1379,6 +1396,8 @@
     let selfReportRef = null, correctionEffectiveAt = 0;
     // When two or more phones report on me, their medians must agree before I move.
     const LISTENER_AGREE_MS = 40;
+    const SELF_NEIGHBOUR_AGREE_MS = 40;
+    let selfNeighbourDisagreements = 0;
     function listenersDisagree() {
         const by = {};
         for (const r of rawShiftsBy) (by[r.by] = by[r.by] || []).push(r.err);
@@ -1402,6 +1421,10 @@
                 rawTimeShifts.push(v.err);
                 rawShiftsBy.push({ by: v.by, err: v.err });
                 if (rawTimeShifts.length > 50) { rawTimeShifts.shift(); rawShiftsBy.shift(); }
+            } else {
+                // Kept as a cross-check on my own timing (see evaluateInRealTime)
+                rawShiftsBy.push({ by: v.by, err: v.err });
+                if (rawShiftsBy.length > 50) rawShiftsBy.shift();
             }
             log(`📨 ${v.by} heard me ${v.err > 0 ? '+' : ''}${v.err.toFixed(1)}ms`, 'debug');
         });
@@ -1683,7 +1706,15 @@
     async function failCalibration(reason) {
         if (isHappy) return;
         isHappy = true;
+        calFailed = true;
         stopSelfReportListener();
+        // Back to the delay from before this run (or the default), not the failed one
+        let restored = estimatedDeviceDelayMs;
+        try {
+            const cal = JSON.parse(localStorage.getItem(`calibration_${mySeat.id}`) || 'null');
+            if (cal && typeof cal.speakerDelay === 'number' && cal.speakerDelay >= 0 && cal.speakerDelay <= 400) restored = cal.speakerDelay;
+        } catch (e) {}
+        currentSpeakerDelay = restored;
         log(`⛔ Calibration FAILED: ${reason}. Nothing saved; this phone stays uncalibrated.`, 'error');
         db.ref(`devices/${mySeat.id}/calRun`).set({ runId: tuningStartTime, state: 'failed' }).catch(() => {});
         try { localStorage.removeItem(`calibration_${mySeat.id}`); } catch (e) {}
@@ -1693,6 +1724,7 @@
     }
 
     function saveCalibration() {
+        if (calFailed) { log("💾 Not saving: this phone's last calibration failed. It needs a new run (it will play notes)."); return; }
         try {
             const calData = {
                 speakerDelay: currentSpeakerDelay,
@@ -1737,8 +1769,8 @@
             await db.ref(`devices/${mySeat.id}`).update({
                 uid: SO.uid(),
                 lastSeen: SO.now(),
-                status: isHappy ? 'HAPPY' : (phase1Complete ? 'CALIBRATING' : 'ACTIVE'),
-                calibrated: isHappy,
+                status: calFailed ? 'CAL_FAILED' : (isHappy ? 'HAPPY' : (phase1Complete ? 'CALIBRATING' : 'ACTIVE')),
+                calibrated: isHappy && !calFailed,
                 x: mySeat.x, y: mySeat.y,
                 speakerDelay: currentSpeakerDelay,
                 micDelay: myMicDelayMs || 0,
@@ -1906,7 +1938,7 @@
                 // Playing notes means calibrating, even if this phone has a saved calibration
                 // (a re-run). It used to keep isHappy from the saved one, so it never listened to
                 // its neighbours or corrected anything.
-                isHappy = false; correctionCount = 0; rawTimeShifts = []; rawShiftsBy = [];
+                isHappy = false; calFailed = false; correctionCount = 0; rawTimeShifts = []; rawShiftsBy = []; selfNeighbourDisagreements = 0;
                 // Tells the conductor where this phone is in this run, so it can end the tune
                 // once every playing phone is done.
                 db.ref(`devices/${mySeat.id}/calRun`).set({ runId: sched.startTime, state: 'running' }).catch(() => {});
@@ -2615,7 +2647,7 @@
     }
 
     window.onload = async () => {
-        log(`🚀 Loading... (devicedist build 2026-11-13a, config.js build ${SO.BUILD || "old"})`);
+        log(`🚀 Loading... (devicedist build 2026-11-14b, config.js build ${SO.BUILD || "old"})`);
         if (SO.BUILD !== "2026-11-13a") { log(`⚠️ config.js is build ${SO.BUILD || "old"}, this page needs 2026-11-13a: reload`, "warn"); SO.showWarning("build", [`This phone has an old copy of config.js (${SO.BUILD || "old"}). Close this tab and open the link again.`]); }
         try {
             await SO.signIn();   // anonymous: lets the database rules tie this seat to this phone
