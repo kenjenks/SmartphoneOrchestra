@@ -170,12 +170,28 @@
     // Constants
     const HEARTBEAT_INTERVAL_MS = 10000;
 
+    const EPILLAR_BUILD = '2026-11-14a';
+
     // ==================== UTILITY FUNCTIONS ====================
+    // Log lines go to the console and to device_logs/<pillar>, so they show in the conductor's
+    // device logs alongside the phones (sent in batches every 2 s).
+    let logQueue = [];
     function log(message, eventType = "log", meta = {}) {
         const timestamp = SO.now();
         const pillarId = mySeat?.id || 'unknown';
-        console.log(`[${new Date(timestamp).toISOString().substr(11, 12)}] [${pillarId}] ${message}`);
+        const timeStr = new Date(timestamp).toISOString().substr(11, 12);
+        console.log(`[${timeStr}] [${pillarId}] ${message}`);
+        logQueue.push({ timestamp, timeStr, message, seatId: pillarId, type: eventType });
+        if (logQueue.length > 200) logQueue = logQueue.slice(-200);
     }
+    setInterval(() => {
+        if (!mySeat || !logQueue.length) return;
+        const batch = {};
+        logQueue.forEach((e, i) => { batch[`${Math.floor(e.timestamp)}_${i}_${Math.random().toString(36).substr(2, 6)}`] = e; });
+        const sent = logQueue;
+        logQueue = [];
+        db.ref(`device_logs/${mySeat.id}`).update(batch).catch(() => { logQueue = sent.concat(logQueue).slice(-200); });
+    }, 2000);
 
     // ==================== CLOCK SYNC WITH LOGGING ====================
     // Clock comes from config.js (SO.now(): monotonic, measured with SO.clock.sync()).
@@ -265,7 +281,7 @@
             mySeat = { id: seatId };
             document.getElementById('seat-label').innerText = `Pillar ${seatId}`;
             document.getElementById('id-ind').className = 'indicator active';
-            document.getElementById('pillar-badge').innerHTML = `🎵 ${seatId} | ePillar v1.0`;
+            document.getElementById('pillar-badge').innerHTML = `🎵 ${seatId} | ePillar ${EPILLAR_BUILD}`;
             document.getElementById('performance-overlay').innerHTML = `Pillar: ${seatId} | Status: Ready`;
             log(`✅ Resolved pillar: ${mySeat.id}`);
 
@@ -633,7 +649,7 @@
                 gain.connect(audioCtx.destination);
                 osc.start();
                 osc.stop(audioCtx.currentTime + 0.5);
-                log(`🔊 Test tone played (440Hz)`);
+                log(`🔊 Test tone played (440 Hz): the speaker works`);
             } catch (e) {
                 log(`⚠️ Could not play test tone: ${e.message}`);
             }
@@ -659,7 +675,7 @@
         try { await SO.clock.sync(); } catch (err) { log(`⚠️ Clock sync failed, using Firebase's estimate: ${err.message}`); }
 
         const myConfig = pillarConfig[mySeat.id];
-        log(`🔊 Pillar ${mySeat.id} activated`);
+        log(`🔊 Pillar ${mySeat.id} activated (epillar build ${EPILLAR_BUILD}, config.js build ${SO.BUILD || 'old'}). Waiting for START PICCOLO or a show cue.`);
         log(`   Audio: ${myConfig?.audioUrl?.split('/').pop() || 'none'}`);
         log(`   Speaker delay: ${myConfig?.speakerDelayMs}ms`);
 
@@ -677,7 +693,11 @@
 
     // ==================== INITIALIZATION ====================
     window.onload = async () => {
-        log(`🎧 ePillar starting`);
+        log(`🎧 ePillar starting (epillar build ${EPILLAR_BUILD}, config.js build ${SO.BUILD || 'old'})`);
+        if (SO.BUILD !== '2026-11-13a') {
+            log(`⚠️ config.js is build ${SO.BUILD || 'old'}, this page needs 2026-11-13a: close and reopen`);
+            SO.showWarning('build', [`Old copy of config.js (${SO.BUILD || 'old'}). Close this tab and open the link again.`]);
+        }
 
         // Set a timeout to show error if identity resolution takes too long
         const timeoutId = setTimeout(() => {
