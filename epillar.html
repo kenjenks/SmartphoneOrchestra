@@ -170,7 +170,7 @@
     // Constants
     const HEARTBEAT_INTERVAL_MS = 10000;
 
-    const EPILLAR_BUILD = '2026-11-14a';
+    const EPILLAR_BUILD = '2026-11-14b';
 
     // ==================== UTILITY FUNCTIONS ====================
     // Log lines go to the console and to device_logs/<pillar>, so they show in the conductor's
@@ -561,11 +561,18 @@
 
     // ==================== SHOW MOVEMENT LISTENER ====================
     function listenForShowMovement() {
+        const listeningSince = SO.now();
         db.ref('show/currentCue').on('value', snap => {
             const cue = snap.val();
             if (!cue) return;
 
             if (cue.action === 'KILL') {
+                // Firebase hands every new listener the stored cue. A KILL sent before this pillar
+                // was activated is history, not an order: reloading on it loops forever.
+                if (!(cue.triggerTime > listeningSince - 5000)) {
+                    log(`⏭️ Ignoring an earlier KILL (${cue.triggerTime ? new Date(cue.triggerTime).toISOString().substr(11, 8) + ' UTC' : 'no time'})`);
+                    return;
+                }
                 log(`💀 KILL signal received - stopping playback`);
                 stopPlayback();
                 stopHeartbeat();
