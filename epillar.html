@@ -170,7 +170,7 @@
     // Constants
     const HEARTBEAT_INTERVAL_MS = 10000;
 
-    const EPILLAR_BUILD = '2026-11-14b';
+    const EPILLAR_BUILD = '2026-11-14c';
 
     // ==================== UTILITY FUNCTIONS ====================
     // Log lines go to the console and to device_logs/<pillar>, so they show in the conductor's
@@ -696,6 +696,23 @@
 
         listenForTuning();
         listenForShowMovement();
+        listenForCommands();
+    }
+
+    // Commands from the conductor's seat-map menu (devices/<pillar>/command)
+    function listenForCommands() {
+        const since = SO.now();
+        let last = null;
+        db.ref(`devices/${mySeat.id}/command`).on('value', snap => {
+            const c = snap.val();
+            if (!c || !c.nonce || c.nonce === last) return;
+            last = c.nonce;
+            if (!(c.at > since - 2000)) return;
+            if (c.action === 'logBuild') {
+                const cfg = pillarConfig[mySeat.id] || {};
+                log(`🏷️ epillar build ${EPILLAR_BUILD}, config.js build ${SO.BUILD || 'old'}; ${mySeat.id}; speaker ${cfg.speakerDelayMs} ms, mic ${cfg.micDelayMs} ms`);
+            }
+        });
     }
 
     // ==================== INITIALIZATION ====================

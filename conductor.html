@@ -447,6 +447,20 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
     // --- MASTER STATE ---
     let MAX_LOG_ENTRIES = 5000;
     let seats = [];
+    // Pillar positions from pillar_config, drawn on the seat map with the seats
+    let pillarSpots = [];
+    function mapPoints() {
+        return seats.concat(pillarSpots.filter(p => !seats.some(s => s.id === p.id)));
+    }
+    function watchPillarSpots() {
+        db.ref('pillar_config/pillars').on('value', snap => {
+            const list = snap.val() || [];
+            pillarSpots = (Array.isArray(list) ? list : Object.values(list))
+                .filter(p => p && p.id && isFinite(p.x) && isFinite(p.y))
+                .map(p => ({ id: p.id, x: Number(p.x), y: Number(p.y) }));
+            renderMap();
+        });
+    }
     let deviceData = {};
     let isTuningActive = false;
     let currentMeasure = 0;
@@ -969,11 +983,12 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
     }
 
     function renderMap() {
-        if (!ctx || seats.length === 0) return;
+        const points = mapPoints();
+        if (!ctx || points.length === 0) return;
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        const xValues = seats.map(s => s.x);
-        const yValues = seats.map(s => s.y);
+        const xValues = points.map(s => s.x);
+        const yValues = points.map(s => s.y);
         const minX = Math.min(...xValues) - 1;
         const maxX = Math.max(...xValues) + 1;
         const minY = Math.min(...yValues) - 1;
@@ -998,7 +1013,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         ctx.font = '10px Arial';
         ctx.fillText('🎭 STAGE', minX * scale + offsetX + 10, minY * scale + offsetY + 20);
 
-        seats.forEach(seat => {
+        points.forEach(seat => {
             const screenX = seat.x * scale + offsetX;
             const screenY = seat.y * scale + offsetY;
             if (screenX < 0 || screenX > canvas.width || screenY < 0 || screenY > canvas.height) return;
@@ -1012,7 +1027,11 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             let bgColor = 'transparent';
 
             if (isPillar) {
-                if (status === 'HAPPY' || status === 'ACTIVE') {
+                if (status === 'PLAYING') {
+                    icon = '🔊';
+                    color = '#88ff88';
+                    bgColor = 'rgba(136,255,136,0.35)';
+                } else if (status === 'HAPPY' || status === 'ACTIVE') {
                     icon = '🏛️';
                     color = '#88ff88';
                     bgColor = 'rgba(136,255,136,0.2)';
@@ -1050,7 +1069,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
                     icon = '🚪';
                     color = '#ffaa66';
                     bgColor = 'rgba(255,170,102,0.2)';
-                } else if (status === 'FAILED') {
+                } else if (status === 'FAILED' || status === 'CAL_FAILED') {
                     icon = '❌';
                     color = '#ff4444';
                     bgColor = 'rgba(255,68,68,0.2)';
@@ -1085,12 +1104,12 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             ctx.textBaseline = 'middle';
             ctx.fillText(icon, screenX, screenY);
 
-            // Draw seat label for front row seats
-            if (seat.y < 10) {
+            // Label: pillars always (FL, FR...), seats in the front rows
+            if (isPillar || seat.y < 10) {
                 ctx.fillStyle = '#888';
                 ctx.font = '8px monospace';
                 ctx.textAlign = 'center';
-                ctx.fillText(seat.id, screenX, screenY - 14);
+                ctx.fillText(isPillar ? seat.id.replace('PILLAR_', '') : seat.id, screenX, screenY - (isPillar ? 18 : 14));
             }
 
             // Draw status indicator for devices with issues
@@ -1936,9 +1955,10 @@ canvas.addEventListener('click', (e) => {
     let closestSeat = null;
     let minDist = Infinity;
 
-    seats.forEach(seat => {
-        const xValues = seats.map(s => s.x);
-        const yValues = seats.map(s => s.y);
+    const points = mapPoints();
+    points.forEach(seat => {
+        const xValues = points.map(s => s.x);
+        const yValues = points.map(s => s.y);
         const minX = Math.min(...xValues) - 1;
         const maxX = Math.max(...xValues) + 1;
         const minY = Math.min(...yValues) - 1;
@@ -1961,17 +1981,68 @@ canvas.addEventListener('click', (e) => {
         }
     });
 
-    if (closestSeat && minDist < 20) {
-        // If it's a patron seat (not a pillar), trigger oboe call
-        if (!closestSeat.id.startsWith('PILLAR_')) {
-            // Trigger oboe call for this seat
-            triggerOboeCall(closestSeat.id);
-        } else {
-            // For pillars, you could optionally trigger tuba? Or just ignore.
-            conductorLog(`⚠️ Clicked on pillar ${closestSeat.id}, not a patron device.`, 'info');
-        }
-    }
+    if (closestSeat && minDist < 20) showSeatMenu(closestSeat, e.clientX, e.clientY);
 });
+
+// ---- Seat-map menu: tap a seat or pillar for per-device actions ----
+function closeSeatMenu() {
+    const m = document.getElementById('seat-menu');
+    if (m) m.remove();
+}
+function showSeatMenu(seat, x, y) {
+    closeSeatMenu();
+    const isPillar = seat.id.startsWith('PILLAR_');
+    const info = deviceData[seat.id] || {};
+    const items = isPillar
+        ? [['📯 Tuba response', () => triggerTuba(seat.id)],
+           ['🏷️ Log build number', () => sendDeviceCommand(seat.id, 'logBuild')]]
+        : [['🏷️ Log build number', () => sendDeviceCommand(seat.id, 'logBuild')],
+           ['🧹 Forget Cal', () => {
+                if (confirm(`Forget ${seat.id}'s calibration?\n\nIt goes back to the default speaker delay and will play notes at the next START PICCOLO.`)) sendDeviceCommand(seat.id, 'forgetCal');
+           }],
+           ['🎺 Oboe call', () => triggerOboeCall(seat.id)]];
+    const m = document.createElement('div');
+    m.id = 'seat-menu';
+    m.style.cssText = 'position:fixed;z-index:9999;background:#111;border:1px solid #00ffcc;border-radius:8px;' +
+        'padding:6px 0;min-width:190px;font-family:monospace;font-size:0.9rem;box-shadow:0 4px 20px rgba(0,0,0,0.6);';
+    m.style.left = Math.min(x, window.innerWidth - 210) + 'px';
+    m.style.top = Math.min(y, window.innerHeight - 160) + 'px';
+    const head = document.createElement('div');
+    head.style.cssText = 'padding:4px 12px 6px;color:#888;border-bottom:1px solid #333;';
+    head.textContent = `${seat.id} · ${info.status || 'OFFLINE'}`;
+    m.appendChild(head);
+    for (const [label, fn] of items) {
+        const it = document.createElement('div');
+        it.textContent = label;
+        it.style.cssText = 'padding:8px 12px;cursor:pointer;color:#eee;';
+        it.onmouseenter = () => it.style.background = '#223';
+        it.onmouseleave = () => it.style.background = '';
+        it.onclick = (ev) => { ev.stopPropagation(); closeSeatMenu(); fn(); };
+        m.appendChild(it);
+    }
+    document.body.appendChild(m);
+}
+// Clicking anywhere else closes the menu (a click on the seat map opens a new one instead)
+document.addEventListener('click', e => {
+    const m = document.getElementById('seat-menu');
+    if (m && e.target !== canvas && !m.contains(e.target)) closeSeatMenu();
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSeatMenu(); });
+
+// The device acts on devices/<id>/command (devicedist: logBuild, forgetCal; pillars: logBuild)
+async function sendDeviceCommand(id, action) {
+    const info = deviceData[id] || {};
+    if (!info.status || info.status === 'DEAD' || info.status === 'OFFLINE') {
+        conductorLog(`⚠️ ${id} is not online; the command will be ignored`, 'error');
+    }
+    try {
+        await db.ref(`devices/${id}/command`).set({ action, at: Date.now() + serverOffset, nonce: Math.random().toString(36).slice(2) });
+        conductorLog(`📨 Sent "${action}" to ${id}`);
+        showToast(`Sent "${action}" to ${id}`);
+    } catch (e) {
+        conductorLog(`❌ Could not send "${action}" to ${id}: ${e.message}`, 'error');
+    }
+}
 
     // Function to trigger oboe call for a given seat
     async function triggerOboeCall(seatId) {
@@ -2012,6 +2083,7 @@ canvas.addEventListener('click', (e) => {
     window.onload = async () => {
         await requireCrew();
         await loadSeatConfig();
+        watchPillarSpots();
         await loadTuningConfig();
         await loadMovements();
 

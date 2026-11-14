@@ -1763,6 +1763,38 @@
         log(`💓 Heartbeat started`);
     }
 
+    // ---- Commands from the conductor's seat-map menu (devices/<seat>/command) ----
+    const DEVICEDIST_BUILD = '2026-11-14c';
+    const pageStartedAt = SO.now();
+    let lastCommandNonce = null;
+    function listenForCommands() {
+        db.ref(`devices/${mySeat.id}/command`).on('value', snap => {
+            const c = snap.val();
+            if (!c || !c.nonce || c.nonce === lastCommandNonce) return;
+            lastCommandNonce = c.nonce;
+            if (!(c.at > pageStartedAt - 2000)) return;          // sent before this page opened
+            if (c.action === 'logBuild') {
+                log(`🏷️ devicedist build ${DEVICEDIST_BUILD}, config.js build ${SO.BUILD || 'old'}; seat ${mySeat.id}; ` +
+                    `speaker ${currentSpeakerDelay.toFixed(1)} ms, mic ${myMicDelayMs == null ? '?' : myMicDelayMs.toFixed(1)} ms; ` +
+                    `${calFailed ? 'calibration FAILED' : isHappy ? 'calibrated' : 'not calibrated'}`);
+            } else if (c.action === 'forgetCal') {
+                forgetCalibration();
+            }
+        });
+    }
+    // Back to a brand-new phone: no saved calibration, default speaker delay, mic delay unknown.
+    function forgetCalibration() {
+        try { localStorage.removeItem(`calibration_${mySeat.id}`); } catch (e) {}
+        isHappy = false;
+        calFailed = false;
+        currentSpeakerDelay = estimatedDeviceDelayMs;
+        myMicDelayMs = null;
+        phase1Complete = false;
+        log(`🧹 Calibration forgotten (from the conductor): speaker back to ${estimatedDeviceDelayMs} ms, mic delay to be measured`);
+        updateCalibrationDisplay();
+        if (heartbeatInterval) sendHeartbeat();   // so the conductor shows it as uncalibrated now
+    }
+
     async function sendHeartbeat() {
         if (!mySeat.id) return;
         try {
@@ -2647,7 +2679,7 @@
     }
 
     window.onload = async () => {
-        log(`🚀 Loading... (devicedist build 2026-11-14b, config.js build ${SO.BUILD || "old"})`);
+        log(`🚀 Loading... (devicedist build ${DEVICEDIST_BUILD}, config.js build ${SO.BUILD || "old"})`);
         if (SO.BUILD !== "2026-11-13a") { log(`⚠️ config.js is build ${SO.BUILD || "old"}, this page needs 2026-11-13a: reload`, "warn"); SO.showWarning("build", [`This phone has an old copy of config.js (${SO.BUILD || "old"}). Close this tab and open the link again.`]); }
         try {
             await SO.signIn();   // anonymous: lets the database rules tie this seat to this phone
@@ -2686,7 +2718,7 @@
                 await loadStoredCalibration();
             }
 
-            if (mySeat.id) initLogging();
+            if (mySeat.id) { initLogging(); listenForCommands(); }
             updateDeviceStatusDisplay();
             log("✅ Initialization complete");
         } catch (err) {

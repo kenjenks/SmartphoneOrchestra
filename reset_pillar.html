@@ -190,6 +190,7 @@
     // Each pillar plays its swoop this many times per run; every listener takes the median of
     // its own measurements, so one smeared match is outvoted.
     const CAL_ROUNDS = 4;
+    const RESET_PILLAR_BUILD = '2026-11-14-swoop11';
     const EDGE_MARGIN_MS = 5;         // reject a match that touches the search window's edge
 
     // Game over: require at least this many distinct listeners per target, and
@@ -861,6 +862,22 @@
         addLog(`⏹️ ${reason}: calibration run stopped. Waiting for a new START PILLAR CAL.`, 'warn');
     }
 
+    // Commands from the conductor's seat-map menu (devices/<pillar>/command)
+    function listenForCommands() {
+        const since = SO.now();
+        let last = null;
+        db.ref(`devices/${myId}/command`).on('value', snap => {
+            const c = snap.val();
+            if (!c || !c.nonce || c.nonce === last) return;
+            last = c.nonce;
+            if (!(c.at > since - 2000)) return;
+            if (c.action === 'logBuild') {
+                const d = pillarData[myId] || {};
+                addLog(`🏷️ reset_pillar build ${RESET_PILLAR_BUILD}, config.js build ${SO.BUILD || 'old'}; ${myId}; speaker ${d.speakerDelayMs} ms, mic ${d.micDelayMs} ms`);
+            }
+        });
+    }
+
     function watchKill() {
         const since = SO.now();
         db.ref('show/currentCue').on('value', snap => {
@@ -1308,7 +1325,7 @@
             return;
         }
         myId = seatParam;
-        addLog(`🚀 ${myId} loaded (reset_pillar build 2026-11-14-swoop10, config.js build ${SO.BUILD || "old"})`);
+        addLog(`🚀 ${myId} loaded (reset_pillar build ${RESET_PILLAR_BUILD}, config.js build ${SO.BUILD || "old"})`);
         if (SO.BUILD !== "2026-11-13a") {
             addLog(`❌ config.js is build ${SO.BUILD || "old"}, this page needs 2026-11-13a. Close and reopen.`, "error");
             SO.showWarning("build", [`Old copy of config.js (${SO.BUILD || "old"}). Close and reopen.`]);
@@ -1332,6 +1349,7 @@
         }
         startHeartbeat();
         watchKill();
+        listenForCommands();
         renderCards();
         initLogging();
 
