@@ -170,7 +170,7 @@
     // Constants
     const HEARTBEAT_INTERVAL_MS = 10000;
 
-    const EPILLAR_BUILD = '2026-11-14c';
+    const EPILLAR_BUILD = '2026-11-14d';
 
     // ==================== UTILITY FUNCTIONS ====================
     // Log lines go to the console and to device_logs/<pillar>, so they show in the conductor's
@@ -498,6 +498,7 @@
 
     // ==================== TUNING LISTENER ====================
     function listenForTuning() {
+        const listeningSince = SO.now();
         db.ref('tuning/current').on('value', async snap => {
             const schedule = snap.val();
             if (!schedule) {
@@ -519,6 +520,11 @@
 
             // --- Handle MIC_CAL (tuba calibration) ---
             if (schedule.type === 'MIC_CAL' && schedule.instrument === 'tuba') {
+                // A tuba call sent before this pillar was activated is history, not a cue
+                if (!(schedule.startTime > listeningSince - 1000)) {
+                    log(`⏭️ Ignoring an earlier tuba call (${new Date(schedule.startTime).toISOString().substr(11, 8)} UTC, for ${schedule.pillar})`);
+                    return;
+                }
                 if (schedule.pillar === mySeat.id) {
                     log(`📯 Tuba calibration from ${schedule.pillar}`);
                     const audioUrl = schedule.audio_url;

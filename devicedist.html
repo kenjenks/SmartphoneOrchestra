@@ -1764,7 +1764,7 @@
     }
 
     // ---- Commands from the conductor's seat-map menu (devices/<seat>/command) ----
-    const DEVICEDIST_BUILD = '2026-11-14c';
+    const DEVICEDIST_BUILD = '2026-11-14d';
     const pageStartedAt = SO.now();
     let lastCommandNonce = null;
     function listenForCommands() {
@@ -1921,7 +1921,7 @@
             if (sched.mode === 'PILLAR_CAL') { log('🏛️ Pillar calibration running; this phone stays quiet'); return; }
             if (isProcessingTuning || tuningStartTime === sched.startTime) return;
             const now = SO.now();
-            if (sched.startTime < now - 60000) { log(`❌ Schedule in past`); return; }
+            if (sched.startTime < now - 60000) { log(`⏭️ Ignoring an earlier ${sched.type === 'MIC_CAL' ? 'tuba call' : 'tuning run'} (${new Date(sched.startTime).toISOString().substr(11, 8)} UTC)`); return; }
 
             // Handle tuba mic calibration
             if (sched.type === 'MIC_CAL' && sched.instrument === 'tuba') {
@@ -2593,6 +2593,11 @@
             } else if (cue.action === 'GO') {
                 handleMovementStart(cue);
             } else if (cue.type === 'SPEAKER_CAL' && cue.instrument === 'oboe') {
+                // Like KILL: an oboe call sent before this phone joined is history
+                if (!(cue.startTime > listeningSince - 1000)) {
+                    log(`⏭️ Ignoring an earlier oboe call (${cue.startTime ? new Date(cue.startTime).toISOString().substr(11, 8) + ' UTC' : 'no time'}, for ${cue.targetSeat})`, 'info');
+                    return;
+                }
                 const nowWall = SO.now();
                 log(`📨 Oboe cue received at ${nowWall}, scheduled startTime=${cue.startTime}, delay=${(cue.startTime - nowWall).toFixed(1)}ms`, 'debug');
                 if (mySeat.id === cue.targetSeat) {
