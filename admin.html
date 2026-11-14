@@ -39,7 +39,7 @@ Operational SOP for Admin:
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
-    <script src="config.js"></script>
+    <script src="config.js?v=2026-11-13a"></script>
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #050505; color: #eee; padding: 20px; line-height: 1.4; }
         .dashboard { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
@@ -771,11 +771,34 @@ Operational SOP for Admin:
 
         // --- DOWNLOAD HANDLERS ---
 
+        // Firebase hands objects back with their keys in alphabetical order. Put them back in the
+        // order people read and edit them: room first, then each pillar's identity, position,
+        // calibration and sound files. Keys not listed here are kept, after the listed ones.
+        const PILLAR_CONFIG_TOP_ORDER = ['room_temp_c', 'speed_of_sound', 'pillarOrder', 'pillars'];
+        const PILLAR_KEY_ORDER = ['id', 'label', 'x', 'y', 'speakerDelayMs', 'micDelayMs',
+                                  'stagger', 'preferred_freq', 'audioUrl', 'resetPillarSwoop'];
+        function orderKeys(obj, order) {
+            const out = {};
+            for (const k of order) if (obj[k] !== undefined && obj[k] !== null) out[k] = obj[k];
+            for (const k of Object.keys(obj)) if (!(k in out) && obj[k] !== null) out[k] = obj[k];
+            return out;
+        }
+        function formatPillarConfig(config) {
+            const top = orderKeys(config, PILLAR_CONFIG_TOP_ORDER);
+            const pillars = Array.isArray(config.pillars) ? config.pillars
+                          : Object.values(config.pillars || {});      // in case Firebase stored it as an object
+            if (pillars.length) top.pillars = pillars.filter(Boolean).map(p => orderKeys(p, PILLAR_KEY_ORDER));
+            return top;
+        }
+
         async function downloadPillarConfig() {
             try {
                 const config = (await db.ref('pillar_config').once('value')).val();
                 if (!config) { log("ERROR: No pillar configuration found"); return; }
-                const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
+                const formatted = formatPillarConfig(config);
+                const problems = SO.validatePillarConfig(formatted);
+                if (problems.errors && problems.errors.length) log(`⚠️ pillar_config has problems: ${problems.errors.join(' ')}`);
+                const blob = new Blob([JSON.stringify(formatted, null, 2) + '\n'], { type: 'application/json' });
                 const a = document.createElement('a');
                 a.href = URL.createObjectURL(blob);
                 a.download = 'pillar_config.json';
