@@ -400,6 +400,7 @@
     async function ensureAudioContext() {
         if (!audioCtx) {
             audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            keepSpeakerAwake(audioCtx);
             masterGain = audioCtx.createGain();
             masterGain.gain.value = 1.5;
             masterGain.connect(audioCtx.destination);
@@ -572,7 +573,24 @@
         };
     }
 
-    // Record one slot and xcorr it against the slot's own swoop template.
+
+    // Some tablets power their speaker amplifier down after a few seconds of silence, and the first
+    // sound after that comes out ~150-200 ms late (FL did this on 14 Nov). A 25 Hz tone at -66 dB
+    // (inaudible, and outside the 300 Hz-8 kHz band the timing uses) keeps the speaker awake.
+    function keepSpeakerAwake(ctx) {
+        if (!ctx || ctx._keepAwake) return;
+        const osc = ctx.createOscillator();
+        osc.frequency.value = 25;
+        const g = ctx.createGain();
+        g.gain.value = 0.0005;
+        osc.connect(g); g.connect(ctx.destination);
+        osc.start();
+        ctx._keepAwake = osc;
+    }
+
+    // Time one slot: xcorr its window of the run recording against the slot's own swoop template.
+    // The whole run is one continuous recording, so every slot shares the same mic timing
+    // (separate short recordings each came out up to ~40 ms off, at random).
     async function listenToSlot(slot, allSlots, globalStartTime) {
         const tpl = await getSwoopSamples(slot.url);
         if (!tpl) { addLog(`⚠️ No template for ${slot.pillarId}`, 'warn'); return; }
@@ -583,9 +601,13 @@
 
         let rec;
         try {
-            rec = await SO.audio.record(audioCtx, micStream, { startServerMs: recStart, durationMs: recDur });
+            rec = await calRun.runRecording;
         } catch (e) {
             addLog(`❌ Record ${slot.pillarId}: ${e.message}`, 'warn');
+            return;
+        }
+        if (!rec || rec.startServerMs > recStart + 5 || rec.startServerMs + rec.samples.length / rec.sampleRate * 1000 < recStart + recDur - 5) {
+            addLog(`❌ ${slot.pillarId}: the run recording doesn't cover this swoop`, 'warn');
             return;
         }
         if (!calRun.active) return;
@@ -1225,6 +1247,16 @@
                 }
             }
 
+            // One continuous recording for the whole run (see listenToSlot)
+            {
+                const others = allSlots.filter(s => s.pillarId !== myId);
+                const recFrom = globalStartTime + Math.min(...others.map(s => s.staggerMs)) - LISTEN_PRE_MS - 50;
+                const recTo = globalStartTime + Math.max(...others.map(s => s.staggerMs + s.durMs)) + LISTEN_POST_MS + 50;
+                calRun.runRecording = SO.audio.record(audioCtx, micStream, { startServerMs: recFrom, durationMs: recTo - recFrom });
+                calRun.runRecording.catch(e => addLog(`❌ Run recording failed: ${e.message}`, 'warn'));
+                addLog(`🎙️ Recording the whole run (${((recTo - recFrom) / 1000).toFixed(1)} s) in one piece`);
+            }
+
             // Schedule listening for every OTHER pillar's slot
             for (const slot of allSlots) {
                 if (slot.pillarId === myId) continue;
@@ -1273,7 +1305,7 @@
             return;
         }
         myId = seatParam;
-        addLog(`🚀 ${myId} loaded (reset_pillar build 2026-11-13-swoop8, config.js build ${SO.BUILD || "old"})`);
+        addLog(`🚀 ${myId} loaded (reset_pillar build 2026-11-14-swoop9, config.js build ${SO.BUILD || "old"})`);
         if (SO.BUILD !== "2026-11-13a") {
             addLog(`❌ config.js is build ${SO.BUILD || "old"}, this page needs 2026-11-13a. Close and reopen.`, "error");
             SO.showWarning("build", [`Old copy of config.js (${SO.BUILD || "old"}). Close and reopen.`]);
