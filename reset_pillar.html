@@ -602,6 +602,7 @@
         let rec;
         try {
             rec = await calRun.runRecording;
+            await new Promise(r => setTimeout(r, 0));   // one slot at a time, so the page stays responsive
         } catch (e) {
             addLog(`❌ Record ${slot.pillarId}: ${e.message}`, 'warn');
             return;
@@ -1247,11 +1248,13 @@
                 }
             }
 
-            // One continuous recording for the whole run (see listenToSlot)
+            // One continuous recording for the whole run (see listenToSlot). It runs until the
+            // run's last swoop, my own included, so the analysis (which keeps the tablet busy for a
+            // second or so) can't delay one of my own swoops.
             {
                 const others = allSlots.filter(s => s.pillarId !== myId);
                 const recFrom = globalStartTime + Math.min(...others.map(s => s.staggerMs)) - LISTEN_PRE_MS - 50;
-                const recTo = globalStartTime + Math.max(...others.map(s => s.staggerMs + s.durMs)) + LISTEN_POST_MS + 50;
+                const recTo = globalStartTime + Math.max(...allSlots.map(s => s.staggerMs + s.durMs)) + LISTEN_POST_MS + 50;
                 calRun.runRecording = SO.audio.record(audioCtx, micStream, { startServerMs: recFrom, durationMs: recTo - recFrom });
                 calRun.runRecording.catch(e => addLog(`❌ Run recording failed: ${e.message}`, 'warn'));
                 addLog(`🎙️ Recording the whole run (${((recTo - recFrom) / 1000).toFixed(1)} s) in one piece`);
@@ -1305,7 +1308,7 @@
             return;
         }
         myId = seatParam;
-        addLog(`🚀 ${myId} loaded (reset_pillar build 2026-11-14-swoop9, config.js build ${SO.BUILD || "old"})`);
+        addLog(`🚀 ${myId} loaded (reset_pillar build 2026-11-14-swoop10, config.js build ${SO.BUILD || "old"})`);
         if (SO.BUILD !== "2026-11-13a") {
             addLog(`❌ config.js is build ${SO.BUILD || "old"}, this page needs 2026-11-13a. Close and reopen.`, "error");
             SO.showWarning("build", [`Old copy of config.js (${SO.BUILD || "old"}). Close and reopen.`]);
