@@ -7,7 +7,7 @@
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
-    <script src="config.js?v=2026-11-11h"></script>
+    <script src="config.js?v=2026-11-13a"></script>
     <style>
         * { box-sizing: border-box; user-select: none; }
         body {
@@ -686,6 +686,7 @@
         if (heartbeatInterval) clearInterval(heartbeatInterval);
         heartbeatInterval = setInterval(() => {
             db.ref(`devices/${myId}`).update({
+                uid: SO.uid ? SO.uid() : null,
                 lastSeen: SO.now(),
                 status: calRun.active ? 'CALIBRATING' : 'ACTIVE',
                 type: 'pillar',
@@ -1272,12 +1273,13 @@
             return;
         }
         myId = seatParam;
-        addLog(`🚀 ${myId} loaded (reset_pillar build 2026-11-13-swoop7, config.js build ${SO.BUILD || "old"})`);
-        if (SO.BUILD !== "2026-11-11h") {
-            addLog(`❌ config.js is build ${SO.BUILD || "old"}, this page needs 2026-11-11h. Close and reopen.`, "error");
+        addLog(`🚀 ${myId} loaded (reset_pillar build 2026-11-13-swoop8, config.js build ${SO.BUILD || "old"})`);
+        if (SO.BUILD !== "2026-11-13a") {
+            addLog(`❌ config.js is build ${SO.BUILD || "old"}, this page needs 2026-11-13a. Close and reopen.`, "error");
             SO.showWarning("build", [`Old copy of config.js (${SO.BUILD || "old"}). Close and reopen.`]);
         }
         document.getElementById('pillar-id-badge').innerText = myId;
+        if (SO.signIn) await SO.signIn();   // anonymous: lets the database rules tie this pillar to this tablet
 
         SO.onClockSync((offset, status) => {
             serverOffset = offset;

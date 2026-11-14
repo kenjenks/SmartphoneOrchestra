@@ -412,7 +412,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
     async function requireCrew() {
         const auth = firebase.auth();
         await new Promise(r => { const off = auth.onAuthStateChanged(() => { off(); r(); }); });
-        if (!auth.currentUser) {
+        if (!auth.currentUser || auth.currentUser.isAnonymous) {   // an anonymous user is not crew
             await new Promise(resolve => {
                 const btn = document.createElement('button');
                 btn.textContent = 'Sign in with Google';

@@ -7,7 +7,7 @@
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
-    <script src="config.js?v=2026-11-11h"></script>
+    <script src="config.js?v=2026-11-13a"></script>
     <style>
         body {
             margin: 0;
@@ -456,6 +456,7 @@
         heartbeatInterval = setInterval(() => {
             if (mySeat) {
                 db.ref(`devices/${mySeat.id}`).update({
+                    uid: SO.uid ? SO.uid() : null,
                     lastSeen: SO.now(),
                     status: isPlaying ? 'PLAYING' : 'ACTIVE',
                     type: 'pillar',
@@ -671,6 +672,7 @@
             }
         }, 10000);
 
+        if (SO.signIn) await SO.signIn();   // anonymous: lets the database rules tie this pillar to this tablet
         const idOk = await resolveIdentity();
         clearTimeout(timeoutId);
 

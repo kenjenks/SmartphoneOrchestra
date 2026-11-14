@@ -7,7 +7,8 @@
 
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
-    <script src="config.js?v=2026-11-11h"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
+    <script src="config.js?v=2026-11-13a"></script>
 
     <style>
         body {
@@ -1734,6 +1735,7 @@
         if (!mySeat.id) return;
         try {
             await db.ref(`devices/${mySeat.id}`).update({
+                uid: SO.uid(),
                 lastSeen: SO.now(),
                 status: isHappy ? 'HAPPY' : (phase1Complete ? 'CALIBRATING' : 'ACTIVE'),
                 calibrated: isHappy,
@@ -2613,9 +2615,10 @@
     }
 
     window.onload = async () => {
-        log(`🚀 Loading... (devicedist build 2026-11-12d, config.js build ${SO.BUILD || "old"})`);
-        if (SO.BUILD !== "2026-11-11h") { log(`⚠️ config.js is build ${SO.BUILD || "old"}, this page needs 2026-11-11h: reload`, "warn"); SO.showWarning("build", [`This phone has an old copy of config.js (${SO.BUILD || "old"}). Close this tab and open the link again.`]); }
+        log(`🚀 Loading... (devicedist build 2026-11-13a, config.js build ${SO.BUILD || "old"})`);
+        if (SO.BUILD !== "2026-11-13a") { log(`⚠️ config.js is build ${SO.BUILD || "old"}, this page needs 2026-11-13a: reload`, "warn"); SO.showWarning("build", [`This phone has an old copy of config.js (${SO.BUILD || "old"}). Close this tab and open the link again.`]); }
         try {
+            await SO.signIn();   // anonymous: lets the database rules tie this seat to this phone
             await resolveIdentity();
             // Measure the clock before anything is calibrated or played
             SO.clock.setDeviceId(mySeat.id);

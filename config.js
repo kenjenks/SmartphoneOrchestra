@@ -16,6 +16,7 @@
  *   SO.clock.recheckBefore(startMs)          recheck right before calibration, finishing in time
  *   SO.clock.recheck()                       recheck at the end of a movement
  *   SO.requireCrew()                         sign-in gate for admin / conductor
+ *   SO.signIn() / SO.uid()                   anonymous sign-in for phones and pillars
  *   SO.loadPillarConfig(), SO.loadSeatConfig(), SO.getSeat(id), SO.loadTuningMode()
  *   SO.parseSeatTsv(text), SO.computeNeighborMap(seats)
  *   SO.validatePillarConfig(data), SO.validateSeatConfig(seats, pillarConfig)
@@ -142,6 +143,7 @@
         const ref = db.ref('clock_sync/' + id);
         const gen = clockSyncGen;
         const run = (async () => {
+            await signIn();
             let best = null, got = 0, lo = -Infinity, hi = Infinity;
             const within = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]);
             for (let i = 0; i < samples; i++) {
@@ -177,7 +179,7 @@
                 at: now(), rttMs: Math.round(best.rttMs), uncertaintyMs: Math.round((hi - lo) / 2 * 10) / 10,
                 changeMs: changeMs === null ? null : Math.round(changeMs * 10) / 10, samples: got
             };
-            if (clockDeviceId) db.ref(`devices/${clockDeviceId}/clock`).set(lastClockSync).catch(() => {});
+            if (clockDeviceId) Promise.resolve(seatClaim).then(() => db.ref(`devices/${clockDeviceId}/clock`).set(lastClockSync)).catch(() => {});
             notifyClock();
             return lastClockSync;
         })();
@@ -276,12 +278,6 @@
             else if (!isNum(p.micDelayMs) || p.micDelayMs < LIMITS.MIC_DELAY_MS[0] || p.micDelayMs > LIMITS.MIC_DELAY_MS[1])
                 errors.push(`${name}: micDelayMs ${p.micDelayMs} is outside ${LIMITS.MIC_DELAY_MS.join('–')} ms.`);
             if (!isNum(p.preferred_freq)) warnings.push(`${name}: no preferred_freq (needed only for the seat survey beacons).`);
-            // resetPillarSwoop is optional (only reset_pillar.html uses it).
-            // Warn only when the field is present but malformed, so existing deployments stay quiet.
-            if (p.resetPillarSwoop !== undefined && p.resetPillarSwoop !== null) {
-                if (typeof p.resetPillarSwoop !== 'string' || !/^https:\/\//.test(p.resetPillarSwoop))
-                    warnings.push(`${name}: resetPillarSwoop is not an https:// URL ("${String(p.resetPillarSwoop).slice(0, 40)}…"); reset_pillar.html will not be able to play this pillar's swoop.`);
-            }
         });
         if (data.pillars.length !== 4) warnings.push(`Expected 4 pillars, found ${data.pillars.length}.`);
         if (data.room_temp_c !== undefined &&
@@ -328,7 +324,7 @@
             const n = {
                 id: p.id, label: p.label || p.id, x: p.x, y: p.y,
                 audioUrl: p.audioUrl || null,
-                resetPillarSwoop: typeof p.resetPillarSwoop === 'string' ? p.resetPillarSwoop : null,
+                resetPillarSwoop: typeof p.resetPillarSwoop === 'string' ? p.resetPillarSwoop : null,   // reset_pillar's calibration sound
                 speakerDelayMs: pick('speakerDelayMs'),
                 micDelayMs: pick('micDelayMs'),
                 preferred_freq: isNum(p.preferred_freq) ? p.preferred_freq : null,
@@ -867,6 +863,51 @@
         return snap.val();
     }
 
+    // ---------------------------------------------------------------- Anonymous sign-in
+    // Phones and pillar tablets sign in anonymously (no screen, no account): each browser gets
+    // its own Firebase user ID, kept across reloads. The database rules use it so a device can
+    // only write its own seat. If sign-in fails (e.g. Anonymous sign-in not enabled in the
+    // Firebase console), the page carries on signed out and shows a warning.
+    let signInPromise = null;
+    function signIn() {
+        if (!firebase.auth) return Promise.resolve(null);
+        if (!signInPromise) signInPromise = (async () => {
+            const auth = firebase.auth();
+            await new Promise(r => { const off = auth.onAuthStateChanged(() => { off(); r(); }); });
+            if (!auth.currentUser) {
+                try { await auth.signInAnonymously(); }
+                catch (e) {
+                    console.warn('Anonymous sign-in failed', e);
+                    showWarning('auth', ['Could not sign in to Firebase (' + (e.code || e.message) + '). Writes may be refused.']);
+                }
+            }
+            return auth.currentUser;
+        })();
+        return signInPromise;
+    }
+    function uid() {
+        const u = firebase.auth && firebase.auth().currentUser;
+        return u ? u.uid : null;
+    }
+    // Takes this browser's seat in devices/<id> (the rules let the first device keep it while it
+    // stays alive; a seat silent for 10 minutes can be taken over).
+    let seatClaim = null;
+    function claimSeat(id) {
+        seatClaim = (async () => {
+            await signIn();
+            if (!uid()) return false;
+            try {
+                await db.ref('devices/' + id).update({ uid: uid(), lastSeen: now() });
+                return true;
+            } catch (e) {
+                console.warn('Seat claim refused', e);
+                showWarning('seat', ['Seat ' + id + ' is in use by another device. Close it there, or wait 10 minutes.']);
+                return false;
+            }
+        })();
+        return seatClaim;
+    }
+
     // ---------------------------------------------------------------- Crew sign-in
     // Only pages that change configs, cues or tuning need this (admin, conductor).
     // Needs firebase-auth-compat.js on the page.
@@ -874,7 +915,7 @@
         if (!firebase.auth) throw new Error('requireCrew needs firebase-auth-compat.js on this page.');
         const auth = firebase.auth();
         await new Promise(r => { const off = auth.onAuthStateChanged(() => { off(); r(); }); });
-        if (!auth.currentUser) {
+        if (!auth.currentUser || auth.currentUser.isAnonymous) {   // an anonymous user is not crew
             await new Promise(resolve => {
                 const btn = document.createElement('button');
                 btn.textContent = 'Sign in with Google';
@@ -908,19 +949,19 @@
 
     // ---------------------------------------------------------------- Export
     window.SO = {
-        BUILD: '2026-11-11h',
+        BUILD: '2026-11-13a',
         FIREBASE_CONFIG, LIMITS, FALLBACK, db,
         now, onClockSync,
         get serverOffset() { return now() - Date.now(); },   // legacy: server − Date.now()
         clock: {
             sync: clockSync, recheck: clockRecheck, recheckBefore: clockRecheckBefore, cancelPending: clockCancelPending,
-            setDeviceId: id => { clockDeviceId = id; },
+            setDeviceId: id => { clockDeviceId = id; claimSeat(id); },
             get status() { return lastClockSync; },
             get precise() { return clockPrecise; },
             get sleepJumps() { return clockSleepJumps; },
             SETTINGS: CLOCK
         },
-        requireCrew, showWarning,
+        requireCrew, showWarning, signIn, uid, claimSeat,
         speedFromTemp, resolveSpeedOfSound,
         validatePillarConfig, normalizePillarConfig, loadPillarConfig, watchPillarConfig,
         parseSeatTsv, computeNeighborMap, validateSeatConfig, normalizeSeatConfig, loadSeatConfig, getSeat,
