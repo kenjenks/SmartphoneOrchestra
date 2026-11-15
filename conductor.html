@@ -951,13 +951,18 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         currentMovement = movement;
         document.getElementById('go-button').innerText = `🚀 GO (in ${movement.buffer_s}s)`;
 
+        // Pillars play every pillar asset in every MASTER_MEDIA_SYNC cue (at GO + cue.time),
+        // so count them across all cues, not just the first one.
         PILLAR_URLS = {};
-        const firstCue = movement.cues?.[0];
-        (firstCue?.assets || []).forEach(asset => {
-            if (asset.type === 'pillar') {
+        let pillarAssets = 0;
+        (movement.cues || []).forEach(c => {
+            if (!c || c.type !== 'MASTER_MEDIA_SYNC') return;
+            (c.assets || []).forEach(asset => {
+                if (asset.type !== 'pillar') return;
+                pillarAssets++;
                 const pos = asset.id.replace('PILLAR_', '');
-                PILLAR_URLS[pos] = asset.audio_url;
-            }
+                if (!PILLAR_URLS[pos]) PILLAR_URLS[pos] = asset.audio_url;
+            });
         });
 
         const pillarCount = Object.keys(PILLAR_URLS).length;
@@ -968,7 +973,9 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         document.getElementById('current-movement-name').innerText = movement.movement_name;
         document.getElementById('go-button').disabled = false;
 
-        conductorLog(`Selected: ${movement.movement_name} | ${pillarCount} pillars, ${cueCount} cues, buffer: ${movement.buffer_s}s`, 'info');
+        conductorLog(`Selected: ${movement.movement_name} | ${pillarCount} pillars` +
+            (pillarAssets > pillarCount ? ` (${pillarAssets} pillar sounds)` : '') +
+            `, ${cueCount} cues, buffer: ${movement.buffer_s}s`, 'info');
     }
 
     // --- SEAT MAP GUI ---
