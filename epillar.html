@@ -170,7 +170,7 @@
     // Constants
     const HEARTBEAT_INTERVAL_MS = 10000;
 
-    const EPILLAR_BUILD = '2026-11-14d';
+    const EPILLAR_BUILD = '2026-11-14e';
 
     // ==================== UTILITY FUNCTIONS ====================
     // Log lines go to the console and to device_logs/<pillar>, so they show in the conductor's
@@ -340,7 +340,7 @@
     function startVisualizer() {
         if (animationFrame) cancelAnimationFrame(animationFrame);
         function updateVisualizer() {
-            if (currentSource && isPlaying && playDuration > 0) {
+            if ((currentSource || showPlaying.size) && isPlaying && playDuration > 0) {
                 const percent = Math.min(100, Math.max(0, (audioCtx.currentTime - playStartCtx) / playDuration * 100));
                 document.getElementById('visualizer-fill').style.width = percent + '%';
             }
@@ -474,13 +474,14 @@
                 db.ref(`devices/${mySeat.id}`).update({
                     uid: SO.uid ? SO.uid() : null,
                     lastSeen: SO.now(),
-                    status: isPlaying ? 'PLAYING' : 'ACTIVE',
+                    status: (isPlaying || showPlaying.size) ? 'PLAYING' : 'ACTIVE',
                     type: 'pillar',
                     audioUrl: pillarConfig[mySeat.id]?.audioUrl?.split('/').pop() || 'none',
                     speakerDelay: pillarConfig[mySeat.id]?.speakerDelayMs,
                     micDelay: pillarConfig[mySeat.id]?.micDelayMs,
-                    isPlaying: isPlaying,
-                    playbackType: currentPlaybackType,
+                    isPlaying: isPlaying || showPlaying.size > 0,
+                    playbackType: currentPlaybackType || (showPlaying.size ? 'show' : null),
+                    movements: showPlaying.size ? [...showPlaying.keys()] : null,
                     x: pillarConfig[mySeat.id]?.x || 0,
                     y: pillarConfig[mySeat.id]?.y || 0
                 });
@@ -581,36 +582,150 @@
                 }
                 log(`💀 KILL signal received - stopping playback`);
                 stopPlayback();
+                stopAllShow();
                 stopHeartbeat();
                 setTimeout(() => location.reload(), 500);
                 return;
             }
 
             if (cue.action === 'GO' && cue.startTime && cue.movement && cue.cues) {
-                log(`🎭 Show movement received: "${cue.movement}"`);
-
-                let foundPillarAsset = null;
-                for (const movementCue of cue.cues) {
-                    if (movementCue.assets) {
-                        for (const asset of movementCue.assets) {
-                            if (asset.type === 'pillar' && asset.id === mySeat.id) {
-                                foundPillarAsset = asset;
-                                break;
-                            }
-                        }
-                    }
-                    if (foundPillarAsset) break;
-                }
-
-                if (foundPillarAsset && foundPillarAsset.audio_url) {
-                    log(`🎵 Found pillar asset for ${mySeat.id}`);
-                    stopPlayback();
-                    schedulePlayback(cue.startTime, foundPillarAsset.audio_url, 'show');
-                } else {
-                    log(`⚠️ No pillar asset found for ${mySeat.id} in movement "${cue.movement}"`);
-                }
+                handleMovementStart(cue);
             }
         });
+    }
+
+    // ==================== SHOW MOVEMENTS (same rules as the phones) ====================
+    // A GO carries the movement's cue list. Like devicedist.html:
+    //   - only cues of type MASTER_MEDIA_SYNC count
+    //   - every pillar asset for this pillar plays, at GO start + cue.time (seconds)
+    //   - a cue that is already under way is joined part-way (up to the file's own length)
+    //   - other movements keep playing (they can overlap); a second GO for the same movement
+    //     restarts it
+    // Each asset is a separate source on the audio clock, started speakerDelayMs early, so the
+    // sound leaves the speaker at the same moment the phones' sound does.
+    // Calibration sounds (tuning, tuba) use schedulePlayback/currentSource and are separate.
+    const showPlaying = new Map();   // movement name -> { token, parts: [{ source, gain, endCtx }] }
+    let showToken = 0;
+
+    function pillarPartsFor(cues) {
+        const parts = [];
+        (cues || []).forEach(c => {
+            if (!c || c.type !== 'MASTER_MEDIA_SYNC') return;
+            const timeSec = Math.max(0, +c.time || 0);
+            (c.assets || []).forEach(a => {
+                if (a && a.type === 'pillar' && a.id === mySeat.id && a.audio_url) {
+                    parts.push({ url: a.audio_url, timeSec, label: c.label || '' });
+                }
+            });
+        });
+        return parts.sort((a, b) => a.timeSec - b.timeSec);
+    }
+
+    function stopShowMovement(name, quiet = false) {
+        const m = showPlaying.get(name);
+        if (!m) return;
+        showPlaying.delete(name);
+        m.parts.forEach(p => {
+            try { p.source.onended = null; p.source.stop(); } catch (e) {}
+            try { p.gain.disconnect(); } catch (e) {}
+        });
+        if (!quiet) log(`⏹️ "${name}" stopped`);
+        if (!showPlaying.size && !currentSource) { isPlaying = false; stopVisualizer(); }
+    }
+    function stopAllShow() {
+        for (const name of [...showPlaying.keys()]) stopShowMovement(name, true);
+    }
+
+    async function handleMovementStart(cue) {
+        const name = cue.movement;
+        log(`🎭 Show movement received: "${name}"`);
+        const parts = pillarPartsFor(cue.cues);
+        stopShowMovement(name, true);   // a second GO for the same movement restarts it
+        if (!parts.length) {
+            log(`🔇 "${name}": nothing for ${mySeat.id} in this movement`);
+            return;
+        }
+        if (!audioCtx) { log(`❌ Cannot play "${name}" - audio not started (tap ACTIVATE PILLAR)`); return; }
+        if (audioCtx.state === 'suspended') await audioCtx.resume().catch(() => {});
+
+        const token = ++showToken;
+        const entry = { token, parts: [], pending: true, played: 0 };
+        showPlaying.set(name, entry);
+        const speakerDelay = pillarConfig[mySeat.id]?.speakerDelayMs ?? SO.FALLBACK.speakerDelayMs;
+        log(`🎵 Found ${parts.length} pillar asset(s) for ${mySeat.id} in "${name}"` +
+            (parts.length > 1 || parts[0].timeSec ? ` at ${parts.map(p => p.timeSec + ' s').join(', ')}` : ''));
+
+        for (const part of parts) {
+            let buffer;
+            try {
+                buffer = await getBuffer(part.url);
+            } catch (e) {
+                log(`❌ Could not load ${part.url.split('/').pop()}: ${e.message}`, 'error');
+                continue;
+            }
+            if (showPlaying.get(name) !== entry) return;   // stopped or restarted while loading
+            const heardAt = cue.startTime + part.timeSec * 1000;   // server ms when it should be heard
+            const r = SO.audio.playAt(audioCtx, buffer, heardAt, {
+                leadMs: speakerDelay, gain: 1.0,
+                lateLimitMs: buffer.duration * 1000   // join late rather than stay silent
+            });
+            if (r.skipped) {
+                // a cue whose file has already ended (e.g. an old GO seen on reload) is not an error
+                log(`⏭️ "${name}" ${part.url.split('/').pop()} at ${part.timeSec} s not played: ${r.reason}`);
+                continue;
+            }
+            if (r.lateMs > 0) log(`⚠️ "${name}" at ${part.timeSec} s: ${Math.round(r.lateMs)} ms late, joined ${r.offset.toFixed(2)} s in`, 'warn');
+            else log(`🎵 ${mySeat.id} show: "${name}" at ${part.timeSec} s starts ${Math.round(-r.lateMs)} ms from now (audio clock ${r.when.toFixed(3)} s, speaker delay ${speakerDelay} ms)`);
+
+            entry.played++;
+            const p = { source: r.source, gain: r.gain, startCtx: r.when - r.offset, endCtx: r.when - r.offset + buffer.duration };
+            entry.parts.push(p);
+            r.source.onended = () => {
+                try { r.gain.disconnect(); } catch (e) {}
+                if (showPlaying.get(name) !== entry) return;
+                entry.parts = entry.parts.filter(x => x !== p);
+                if (entry.parts.length) return;
+                // The movement is finished only when nothing more is due from it
+                if (entry.pending) return;
+                showPlaying.delete(name);
+                log(`🔊 Pillar ${mySeat.id} FINISHED playing "${name}"`);
+                if (!showPlaying.size && !currentSource) {
+                    isPlaying = false;
+                    stopVisualizer();
+                    document.getElementById('performance-overlay').innerHTML = `Pillar: ${mySeat.id} | Status: Ready`;
+                    SO.clock.recheck().catch(() => {});   // end of the show audio
+                }
+            };
+
+            // Display and sync record when this part starts (the audio is already scheduled)
+            const sourceStartServer = heardAt - speakerDelay;
+            setTimeout(() => {
+                if (showPlaying.get(name) !== entry || !entry.parts.includes(p)) return;
+                isPlaying = true;
+                playStartCtx = Math.min(...entry.parts.map(x => x.startCtx));
+                playDuration = Math.max(...entry.parts.map(x => x.endCtx)) - playStartCtx;
+                db.ref(`pillar_sync/${mySeat.id}/${Date.now()}`).set({
+                    pillarId: mySeat.id, method: 'webaudio', movement: name, cueTime: part.timeSec,
+                    expectedStart: heardAt, sourceStart: sourceStartServer,
+                    lateJoinMs: Math.max(0, Math.round(r.lateMs)), speakerDelay,
+                    playbackType: 'show', timestamp: SO.now()
+                }).catch(e => log(`⚠️ Failed to log sync data: ${e.message}`));
+                document.getElementById('performance-overlay').innerHTML =
+                    `Pillar: ${mySeat.id} | Status: PLAYING "${name}" | Delay: ${speakerDelay}ms`;
+                const canvas = document.getElementById('stage-canvas');
+                const ctx = canvas.getContext('2d');
+                ctx.fillStyle = '#ffaa44';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                setTimeout(() => ctx.clearRect(0, 0, canvas.width, canvas.height), 200);
+                startVisualizer();
+            }, Math.max(0, (r.when - audioCtx.currentTime) * 1000));
+        }
+        entry.pending = false;
+        if (showPlaying.get(name) === entry && !entry.parts.length) {
+            showPlaying.delete(name);
+            if (!entry.played) log(`⚠️ "${name}": no pillar audio could be played`, 'warn');
+            else log(`🔊 Pillar ${mySeat.id} FINISHED playing "${name}"`);
+        }
     }
 
     // ==================== AUDIO CONTEXT ====================
@@ -773,6 +888,7 @@
 
     window.addEventListener('beforeunload', () => {
         stopPlayback();
+        stopAllShow();
         stopHeartbeat();
     });
 </script>
