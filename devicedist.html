@@ -1767,7 +1767,7 @@
     }
 
     // ---- Commands from the conductor's seat-map menu (devices/<seat>/command) ----
-    const DEVICEDIST_BUILD = '2026-11-18b';
+    const DEVICEDIST_BUILD = '2026-11-18c';
     const pageStartedAt = SO.now();
     let lastCommandNonce = null;
     function listenForCommands() {
@@ -2603,6 +2603,38 @@
         });
     }
 
+    // ==================== END OF THE SHOW (NEW AUDIENCE) ====================
+    // The conductor's NEW AUDIENCE button writes a new show/session. A page that entered the
+    // show under an earlier session is from the last audience: it stops for good, so a patron
+    // who walks out with the tab open doesn't keep its seat (and lock out tomorrow's patron).
+    let sessionAtEntry;   // undefined until the first read
+    let sessionEnded = false;
+    function watchSession() {
+        db.ref('show/session').on('value', snap => {
+            const v = snap.val();
+            if (sessionAtEntry === undefined) { sessionAtEntry = v; return; }
+            if (v !== sessionAtEntry && !sessionEnded) endSession();
+        });
+    }
+    function endSession() {
+        sessionEnded = true;
+        log('🎭 The show is over: the conductor started a new audience. This page has finished.');
+        try { clearAllScheduledCues(); } catch (e) {}
+        try { if (tuningStartTime && !tuningRunEnded) endTuningRun('show over'); } catch (e) {}
+        stopHeartbeat(); heartbeatInterval = null;
+        try { if (mySeat && mySeat.id) db.ref('devices/' + mySeat.id + '/lastSeen').onDisconnect().cancel().catch(() => {}); } catch (e) {}
+        try { if (micStream) micStream.getTracks().forEach(t => t.stop()); } catch (e) {}
+        try { if (wakeLock) wakeLock.release(); } catch (e) {}
+        try { if (audioCtx) audioCtx.suspend(); } catch (e) {}
+        const screen = document.getElementById('show-screen');
+        if (screen) screen.innerHTML =
+            '<div style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;' +
+            'text-align:center;background:#000;color:#ccc;font:20px/1.5 sans-serif;padding:30px">' +
+            '<div>Thank you for playing in the Smartphone Orchestra.<br><br>The show is over. You can close this page.</div></div>';
+        // Let the last log lines go out, then disconnect so nothing more is written
+        setTimeout(() => { try { firebase.database().goOffline(); } catch (e) {} }, 4000);
+    }
+
     // KILL reloads the page; this is for a stop without a reload.
     function clearAllScheduledCues() {
         activeTimeouts.forEach(t => clearTimeout(t)); activeTimeouts = [];
@@ -2727,6 +2759,7 @@
                     prepareNextMovement(null);   // mix the first movement now, while the house fills
                     initTuningListener();
                     startHeartbeat();
+                    watchSession();
                     log("🚀 Entered show mode");
                 } else {
                     log("⚠️ Not ready: assets still loading?");

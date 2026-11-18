@@ -384,6 +384,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         <div class="section">
             <h2>⚠️ Global Cues</h2>
             <button id="kill-all-btn" class="danger" style="color: #ff4444;">💀 KILL ALL DEVICES</button>
+            <button id="new-audience-btn" class="secondary" style="margin-top:8px;">🧹 NEW AUDIENCE (clear patron devices)</button>
         </div>
     </div>
 
@@ -777,6 +778,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             <div class="legend-item"><span class="legend-icon">🚪</span><span>Late</span></div>
             <div class="legend-item"><span class="legend-icon">❌</span><span>Failed</span></div>
             <div class="legend-item"><span class="legend-icon">💀</span><span>Dead</span></div>
+            <div class="legend-item"><span class="legend-icon">🙈</span><span>Hidden tab / locked screen</span></div>
             <div class="legend-item"><span class="legend-icon">📱</span><span>Active</span></div>
             <div class="legend-item"><span class="legend-icon">🏛️</span><span>Pillar</span></div>
             <div class="legend-item"><span class="legend-icon">⚫</span><span>Offline</span></div>
@@ -952,11 +954,11 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         document.getElementById('go-button').innerText = `🚀 GO (in ${movement.buffer_s}s)`;
 
         // Pillars play every pillar asset in every MASTER_MEDIA_SYNC cue (at GO + cue.time),
-        // so counkt them across all cues, not just the first one.
+        // so count them across all cues, not just the first one.
         PILLAR_URLS = {};
         let pillarAssets = 0;
         (movement.cues || []).forEach(c => {
-            if (!c || c.type !== 'MASTER_MEDIA_SYNC') returkn;
+            if (!c || c.type !== 'MASTER_MEDIA_SYNC') return;
             (c.assets || []).forEach(asset => {
                 if (asset.type !== 'pillar') return;
                 pillarAssets++;
@@ -1027,6 +1029,8 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
 
             const deviceInfo = deviceData[seat.id];
             const status = deviceInfo?.status || 'OFFLINE';
+            // Hidden tab or locked screen: still sounds, but doesn't hear, light up or report well
+            const isHidden = deviceInfo && deviceInfo.visible === false && status !== 'DEAD' && status !== 'OFFLINE';
             const isPillar = seat.id.startsWith('PILLAR_');
 
             let icon = '●';
@@ -1110,6 +1114,9 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             ctx.fillText(icon, screenX, screenY);
+            if (isHidden) {   // 🙈 badge: tab hidden or screen locked
+                ctx.font = '10px Arial'; ctx.fillText('🙈', screenX + 6, screenY - 6);
+            }
 
             // Label: pillars always (FL, FR...), seats in the front rows
             if (isPillar || seat.y < 10) {
@@ -1280,6 +1287,7 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
                 case 'DEAD': statusIcon = '💀'; statusText = 'DEAD'; break;
                 default: statusIcon = '⚫'; statusText = 'OFFLINE';
             }
+            if (dev.visible === false && dev.status !== 'DEAD') { statusIcon += '🙈'; statusText += ' (hidden)'; }
 
             const micDelay = dev.micDelay ? `${Math.round(dev.micDelay)}ms` : '--';
             const speakerDelay = dev.speakerDelay ? `${Math.round(dev.speakerDelay)}ms` : '--';
@@ -1476,7 +1484,12 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         }, 2000);
     }
 
+    // A double click started two runs 1.5 s apart (the second overwrote the first on every
+    // device). Ignore presses while a start is in progress and for 5 s after one.
+    let tuningStartBusyUntil = 0;
     async function startTuningMovement() {
+        if (Date.now() < tuningStartBusyUntil) { conductorLog("⏳ START PICCOLO pressed again while starting: ignored"); return; }
+        tuningStartBusyUntil = Date.now() + 5000;
         conductorLog("🔴 START PICCOLO BUTTON PRESSED");
 
         await db.ref('tuning/current').remove();
@@ -1555,6 +1568,28 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         conductorLog(`   😊 Calibrated: ${calibratedPatrons.length} (will listen only)`);
         conductorLog(`   🎵 Uncalibrated: ${uncalibratedPatrons.length} (will play notes)`);
         conductorLog(`🏛️ Active pillars: ${activePillarsList.length}`);
+
+        // Phones measure their mic delay from the pillars' sounds: a missing pillar (e.g. a
+        // tablet that went to sleep on battery) means a weaker calibration. Say which, and ask.
+        if (!pillarsOnly) {
+            let expected = ['PILLAR_FL', 'PILLAR_FR', 'PILLAR_BR', 'PILLAR_BL'];
+            try {
+                const pc = (await db.ref('pillar_config/pillars').once('value')).val();
+                const ids = (Array.isArray(pc) ? pc : Object.values(pc || {})).map(p => p && p.id).filter(Boolean);
+                if (ids.length) expected = ids;
+            } catch (e) {}
+            const alive = new Set(activePillarsList.map(p => p.id));
+            const missing = expected.filter(id => !alive.has(id));
+            if (missing.length) {
+                conductorLog(`⚠️ Pillars not responding: ${missing.join(', ')}`, 'warn');
+                if (!confirm(`${missing.length} of ${expected.length} pillars are not responding: ${missing.map(id => id.replace('PILLAR_', '')).join(', ')}.\n\n` +
+                             `Check that those tablets are awake (plugged in) with epillar activated. Phones calibrate less well without them.\n\nStart anyway?`)) {
+                    conductorLog('⏹️ START PICCOLO cancelled: waiting for pillars');
+                    tuningStartBusyUntil = 0;
+                    return;
+                }
+            }
+        }
 
         if (pillarsOnly) {
             conductorLog("No patron phones connected; nothing for the piccolo to calibrate. For the pillars, use START PILLAR CAL.", 'error');
@@ -1924,6 +1959,29 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
     };
     document.getElementById('stop-tuning-btn').onclick = stopTuning;
 
+    // Clears the last audience: every patron device record, its logs, clock-sync and neighbour
+    // measurements, and any cue or tuning run in progress. Pillars, configs, the show and the
+    // pillar calibration are kept. A new show/session tells pages still open from the last
+    // audience to stop, so they can't hold seats for the next one.
+    document.getElementById('new-audience-btn').onclick = async () => {
+        try {
+            const devs = (await db.ref('devices').once('value')).val() || {};
+            const patrons = Object.keys(devs).filter(id => !id.startsWith('PILLAR_'));
+            if (!confirm(`Start a new audience?\n\nThis removes ${patrons.length} patron device(s) from the conductor` +
+                         ` (${patrons.slice(0, 12).join(', ')}${patrons.length > 12 ? ', …' : ''}), their logs and calibration measurements,` +
+                         ` and stops any cue or tuning run. Phones still open from the last show will stop.\n\nPillars and all settings are kept.`)) return;
+            const upd = { 'show/session': Date.now() + serverOffset, 'show/currentCue': null, 'tuning/current': null, 'measurements': null };
+            patrons.forEach(id => { upd['devices/' + id] = null; upd['device_logs/' + id] = null; upd['clock_sync/' + id] = null; });
+            await db.ref().update(upd);
+            allLogs = allLogs.filter(l => !patrons.includes(l.seatId));
+            scheduleLogDisplayUpdate();
+            conductorLog(`🧹 New audience: cleared ${patrons.length} patron device(s). Pillars and settings kept.`);
+        } catch (e) {
+            conductorLog(`❌ New audience failed: ${e.message}`, 'error');
+            alert('Could not clear the audience: ' + e.message);
+        }
+    };
+
     document.getElementById('kill-all-btn').onclick = () => {
         if(confirm("⚠️ Send KILL signal to all devices? This will reload them.")) {
             db.ref('show/currentCue').set({ action: 'KILL', triggerTime: Date.now() + serverOffset });
@@ -1937,6 +1995,21 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
             alert("No movement selected");
             return;
         }
+
+        // Phones build each movement's mix ahead of time (30-80 s on a Chromebook). A phone
+        // still building joins late, so say who isn't ready and offer to wait.
+        try {
+            const devs = (await db.ref('devices').once('value')).val() || {};
+            const nowMs = Date.now() + serverOffset;
+            const notReady = Object.entries(devs)
+                .filter(([id, d]) => !id.startsWith('PILLAR_') && d && d.lastSeen > nowMs - 15000 && Array.isArray(d.mixReady))
+                .filter(([id, d]) => !d.mixReady.includes(currentMovement.movement_name))
+                .map(([id]) => id);
+            if (notReady.length) {
+                conductorLog(`⏳ Not ready for "${currentMovement.movement_name}": ${notReady.join(', ')} (still building; they would join late)`, 'warn');
+                if (!confirm(`${notReady.length} device(s) are still preparing "${currentMovement.movement_name}" (${notReady.join(', ')}). They would start late.\n\nGO anyway?`)) return;
+            }
+        } catch (e) { conductorLog(`⚠️ Could not check readiness: ${e.message}`, 'warn'); }
 
         const bufferMs = (currentMovement.buffer_s || 1.0) * 1000;
         const startTime = Date.now() + serverOffset + bufferMs;
