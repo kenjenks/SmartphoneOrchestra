@@ -1101,6 +1101,13 @@
         if (Math.abs(median) <= CONVERGENCE_STD_DEV_MS && stdDev <= CONVERGENCE_STD_DEV_MS) {
             if (!isHappy) {
                 log(`✅ Converged! error=${Math.abs(median).toFixed(1)}ms, σ=${stdDev.toFixed(1)}ms`, 'success');
+                // "Within 15 ms" is good enough to stop, but a steady leftover is still a known
+                // error (A0 stopped at 114 ms while hearing itself 13.8 ms early, σ 0.3 ms).
+                // Fold it into the saved delay; the show uses the saved value.
+                if (Math.abs(median) >= 2 && stdDev <= 5) {
+                    currentSpeakerDelay = curDelay + median;
+                    log(`🎯 Final adjustment: ${curDelay.toFixed(1)} → ${currentSpeakerDelay.toFixed(1)} ms (the steady ${median > 0 ? '+' : ''}${median.toFixed(1)} ms left over)`);
+                }
                 completeCalibration();
             }
             return;
@@ -1660,6 +1667,9 @@
                                 const oldMic = myMicDelayMs;
                                 myMicDelayMs = calculateMedian(micDelaySamples);
                                 phase1Complete = true;
+                                const spread = Math.max(...micDelaySamples) - Math.min(...micDelaySamples);
+                                if (micDelaySamples.length >= 3 && spread > 30)
+                                    log(`⚠️ The pillars disagree about my mic delay by ${spread.toFixed(0)} ms (${micDelaySamples.map(v => v.toFixed(0)).join(', ')}): treat it, and my speaker delay, as uncertain`, 'warn');
                                 log(`🎤 Mic delay: ${myMicDelayMs.toFixed(1)}ms (${micDelaySamples.length} detections)${isListenOnlyMode && oldMic != null ? `, was ${oldMic.toFixed(1)}ms` : ''}`);
                                 if (isListenOnlyMode) saveCalibration();
                                 updateCalibrationDisplay();
@@ -1767,7 +1777,7 @@
     }
 
     // ---- Commands from the conductor's seat-map menu (devices/<seat>/command) ----
-    const DEVICEDIST_BUILD = '2026-11-18c';
+    const DEVICEDIST_BUILD = '2026-11-18d';
     const pageStartedAt = SO.now();
     let lastCommandNonce = null;
     function listenForCommands() {
