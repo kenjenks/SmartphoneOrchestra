@@ -1983,8 +1983,9 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
     };
 
     document.getElementById('kill-all-btn').onclick = () => {
-        if(confirm("⚠️ Send KILL signal to all devices? This will reload them.")) {
+        if(confirm("⚠️ Send KILL to all devices?\n\nEvery phone and pillar stops all sound and light at once. They stay connected, and the next GO plays normally.")) {
             db.ref('show/currentCue').set({ action: 'KILL', triggerTime: Date.now() + serverOffset });
+            db.ref('tuning/current').remove().catch(() => {});   // a tuning run stops too, and doesn't restart on a reload
             conductorLog("💀 Global Kill Signal sent.", 'info');
             showToast("💀 Kill signal sent to all devices", false);
         }

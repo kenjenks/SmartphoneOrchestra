@@ -170,7 +170,7 @@
     // Constants
     const HEARTBEAT_INTERVAL_MS = 10000;
 
-    const EPILLAR_BUILD = '2026-11-18a';
+    const EPILLAR_BUILD = '2026-11-18c';
 
     // ==================== UTILITY FUNCTIONS ====================
     // Log lines go to the console and to device_logs/<pillar>, so they show in the conductor's
@@ -601,11 +601,11 @@
                     log(`⏭️ Ignoring an earlier KILL (${cue.triggerTime ? new Date(cue.triggerTime).toISOString().substr(11, 8) + ' UTC' : 'no time'})`);
                     return;
                 }
-                log(`💀 KILL signal received - stopping playback`);
+                // Stop, but stay activated: a reload left the tablet at its ACTIVATE screen until
+                // someone tapped it. The next GO or START PICCOLO plays normally.
+                log(`💀 KILL: playback stopped; still activated and ready for the next cue`);
                 stopPlayback();
                 stopAllShow();
-                stopHeartbeat();
-                setTimeout(() => location.reload(), 500);
                 return;
             }
 
@@ -657,8 +657,15 @@
         for (const name of [...showPlaying.keys()]) stopShowMovement(name, true);
     }
 
+    // Firebase hands every new listener the stored cue, so a tablet started after a show sees
+    // its last GO. Like the phones, a GO this old is a leftover, not a movement to join.
+    const STALE_GO_MS = 20 * 60 * 1000;
     async function handleMovementStart(cue) {
         const name = cue.movement;
+        if (SO.now() - cue.startTime > STALE_GO_MS && !showPlaying.has(name)) {
+            log(`⏭️ Ignoring an earlier GO for "${name}" (${Math.round((SO.now() - cue.startTime) / 60000)} min ago)`);
+            return;
+        }
         log(`🎭 Show movement received: "${name}"`);
         const parts = pillarPartsFor(cue.cues);
         stopShowMovement(name, true);   // a second GO for the same movement restarts it
@@ -692,7 +699,8 @@
             });
             if (r.skipped) {
                 // a cue whose file has already ended (e.g. an old GO seen on reload) is not an error
-                log(`⏭️ "${name}" ${part.url.split('/').pop()} at ${part.timeSec} s not played: ${r.reason}`);
+                log(`⏭️ "${name}" ${part.url.split('/').pop()} at ${part.timeSec} s already over, not played (${r.reason})`);
+                entry.over = (entry.over || 0) + 1;
                 continue;
             }
             if (r.lateMs > 0) log(`⚠️ "${name}" at ${part.timeSec} s: ${Math.round(r.lateMs)} ms late, joined ${r.offset.toFixed(2)} s in`, 'warn');
@@ -744,7 +752,7 @@
         entry.pending = false;
         if (showPlaying.get(name) === entry && !entry.parts.length) {
             showPlaying.delete(name);
-            if (!entry.played) log(`⚠️ "${name}": no pillar audio could be played`, 'warn');
+            if (!entry.played && entry.over !== parts.length) log(`⚠️ "${name}": no pillar audio could be played`, 'warn');
             else log(`🔊 Pillar ${mySeat.id} FINISHED playing "${name}"`);
         }
     }

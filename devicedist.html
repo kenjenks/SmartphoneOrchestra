@@ -1777,7 +1777,7 @@
     }
 
     // ---- Commands from the conductor's seat-map menu (devices/<seat>/command) ----
-    const DEVICEDIST_BUILD = '2026-11-18d';
+    const DEVICEDIST_BUILD = '2026-11-18e';
     const pageStartedAt = SO.now();
     let lastCommandNonce = null;
     function listenForCommands() {
@@ -2645,7 +2645,7 @@
         setTimeout(() => { try { firebase.database().goOffline(); } catch (e) {} }, 4000);
     }
 
-    // KILL reloads the page; this is for a stop without a reload.
+    // Stops everything scheduled or playing (KILL, end of show). The page stays live.
     function clearAllScheduledCues() {
         activeTimeouts.forEach(t => clearTimeout(t)); activeTimeouts = [];
         for (const name of [...playingMovements.keys()]) stopMovement(name);
@@ -2687,8 +2687,11 @@
                     log(`⏭️ Ignoring an earlier KILL (${cue.triggerTime ? new Date(cue.triggerTime).toISOString().substr(11, 8) + ' UTC' : 'no time'})`, 'info');
                     return;
                 }
-                log("💀 KILL signal");
-                location.reload();
+                // Stop all sound and light, but stay live: a reload would leave the phone silent
+                // in its bag until someone tapped it. The next GO plays normally.
+                log("💀 KILL: all sound and light stopped; still connected and ready for the next cue");
+                try { clearAllScheduledCues(); } catch (e) {}
+                try { if (tuningStartTime && !tuningRunEnded) endTuningRun('KILL'); } catch (e) {}
             } else if (cue.action === 'GO') {
                 handleMovementStart(cue);
             } else if (cue.type === 'SPEAKER_CAL' && cue.instrument === 'oboe') {
