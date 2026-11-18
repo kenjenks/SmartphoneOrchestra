@@ -7,7 +7,7 @@
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
-    <script src="config.js?v=2026-11-13a"></script>
+    <script src="config.js?v=2026-11-18a"></script>
     <style>
         body {
             margin: 0;
@@ -170,7 +170,7 @@
     // Constants
     const HEARTBEAT_INTERVAL_MS = 10000;
 
-    const EPILLAR_BUILD = '2026-11-14e';
+    const EPILLAR_BUILD = '2026-11-18a';
 
     // ==================== UTILITY FUNCTIONS ====================
     // Log lines go to the console and to device_logs/<pillar>, so they show in the conductor's
@@ -488,7 +488,28 @@
             }
         }, HEARTBEAT_INTERVAL_MS);
         log(`💓 Heartbeat started for ${mySeat.id}`);
+        requestWakeLock();
     }
+
+    // ==================== SCREEN WAKE LOCK ====================
+    // A tablet whose screen sleeps lets Chrome throttle the page and drop its connection: three
+    // pillars missed a START PICCOLO (got it 24-43 s late, or never) after sitting idle. The lock
+    // is released whenever the page is hidden, so it is asked for again when it comes back.
+    let wakeLock = null;
+    async function requestWakeLock() {
+        if (!('wakeLock' in navigator)) { log('⚠️ No screen wake lock on this browser; set the tablet to never sleep'); return; }
+        if (document.visibilityState !== 'visible' || wakeLock) return;
+        try {
+            wakeLock = await navigator.wakeLock.request('screen');
+            wakeLock.addEventListener('release', () => { wakeLock = null; log('🔅 Screen wake lock released'); });
+            log('🔆 Screen wake lock held');
+        } catch (e) { log(`⚠️ Wake lock request failed: ${e.name} ${e.message}`); }
+    }
+    document.addEventListener('visibilitychange', () => {
+        if (!heartbeatInterval) return;
+        if (document.visibilityState === 'visible') { log('👀 Page visible again'); requestWakeLock(); }
+        else log('🙈 Page hidden: Chrome may slow this page down');
+    });
 
     function stopHeartbeat() {
         if (heartbeatInterval) {
@@ -839,8 +860,8 @@
     // ==================== INITIALIZATION ====================
     window.onload = async () => {
         log(`🎧 ePillar starting (epillar build ${EPILLAR_BUILD}, config.js build ${SO.BUILD || 'old'})`);
-        if (SO.BUILD !== '2026-11-13a') {
-            log(`⚠️ config.js is build ${SO.BUILD || 'old'}, this page needs 2026-11-13a: close and reopen`);
+        if (SO.BUILD !== '2026-11-18a') {
+            log(`⚠️ config.js is build ${SO.BUILD || 'old'}, this page needs 2026-11-18a: close and reopen`);
             SO.showWarning('build', [`Old copy of config.js (${SO.BUILD || 'old'}). Close this tab and open the link again.`]);
         }
 

@@ -952,11 +952,11 @@ pillar_config.json, visual_timeline.json) are handled by admin.html
         document.getElementById('go-button').innerText = `🚀 GO (in ${movement.buffer_s}s)`;
 
         // Pillars play every pillar asset in every MASTER_MEDIA_SYNC cue (at GO + cue.time),
-        // so count them across all cues, not just the first one.
+        // so counkt them across all cues, not just the first one.
         PILLAR_URLS = {};
         let pillarAssets = 0;
         (movement.cues || []).forEach(c => {
-            if (!c || c.type !== 'MASTER_MEDIA_SYNC') return;
+            if (!c || c.type !== 'MASTER_MEDIA_SYNC') returkn;
             (c.assets || []).forEach(asset => {
                 if (asset.type !== 'pillar') return;
                 pillarAssets++;

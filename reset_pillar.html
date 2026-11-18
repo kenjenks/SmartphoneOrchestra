@@ -7,7 +7,7 @@
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
-    <script src="config.js?v=2026-11-13a"></script>
+    <script src="config.js?v=2026-11-18a"></script>
     <style>
         * { box-sizing: border-box; user-select: none; }
         body {
@@ -190,7 +190,7 @@
     // Each pillar plays its swoop this many times per run; every listener takes the median of
     // its own measurements, so one smeared match is outvoted.
     const CAL_ROUNDS = 4;
-    const RESET_PILLAR_BUILD = '2026-11-14-swoop11';
+    const RESET_PILLAR_BUILD = '2026-11-18a';
     const EDGE_MARGIN_MS = 5;         // reject a match that touches the search window's edge
 
     // Game over: require at least this many distinct listeners per target, and
@@ -1326,8 +1326,8 @@
         }
         myId = seatParam;
         addLog(`🚀 ${myId} loaded (reset_pillar build ${RESET_PILLAR_BUILD}, config.js build ${SO.BUILD || "old"})`);
-        if (SO.BUILD !== "2026-11-13a") {
-            addLog(`❌ config.js is build ${SO.BUILD || "old"}, this page needs 2026-11-13a. Close and reopen.`, "error");
+        if (SO.BUILD !== "2026-11-18a") {
+            addLog(`❌ config.js is build ${SO.BUILD || "old"}, this page needs 2026-11-18a. Close and reopen.`, "error");
             SO.showWarning("build", [`Old copy of config.js (${SO.BUILD || "old"}). Close and reopen.`]);
         }
         document.getElementById('pillar-id-badge').innerText = myId;

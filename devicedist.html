@@ -8,7 +8,7 @@
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
-    <script src="config.js?v=2026-11-13a"></script>
+    <script src="config.js?v=2026-11-18a"></script>
 
     <style>
         body {
@@ -1684,6 +1684,9 @@
     // ============================================================================
     async function completeCalibration() {
         if (isHappy) return;
+        if (document.visibilityState === 'hidden' || (hiddenDuringRun && hiddenSince)) {
+            return failCalibration('page was hidden when the calibration finished');
+        }
         isHappy = true;
         stopSelfReportListener();
         log(`✅✅✅ CALIBRATION COMPLETE ✅✅✅`);
@@ -1764,7 +1767,7 @@
     }
 
     // ---- Commands from the conductor's seat-map menu (devices/<seat>/command) ----
-    const DEVICEDIST_BUILD = '2026-11-14d';
+    const DEVICEDIST_BUILD = '2026-11-18b';
     const pageStartedAt = SO.now();
     let lastCommandNonce = null;
     function listenForCommands() {
@@ -1795,6 +1798,7 @@
         if (heartbeatInterval) sendHeartbeat();   // so the conductor shows it as uncalibrated now
     }
 
+    let heartbeatDenied = 0;
     async function sendHeartbeat() {
         if (!mySeat.id) return;
         try {
@@ -1811,9 +1815,20 @@
                 charging: battery ? battery.charging : null,
                 wakeLock: wakeLockState,
                 visible: document.visibilityState === 'visible',
-                audio: audioCtx ? audioCtx.state : 'none'
+                audio: audioCtx ? audioCtx.state : 'none',
+                mixReady: [...mixes.values()].filter(e => e.buffer).map(e => e.name)
             });
-        } catch (e) { log(`💔 Heartbeat failed: ${e.message}`); }
+            heartbeatDenied = 0;
+        } catch (e) {
+            // PERMISSION_DENIED: another device holds this seat (see SO.claimSeat). Say so once,
+            // plainly, instead of a failure line every heartbeat.
+            if (/PERMISSION_DENIED/.test(e.message)) {
+                if (heartbeatDenied++ === 0) {
+                    log(`⛔ Seat ${mySeat.id} is held by another device: the conductor can't see this one. Close the other one (or wait 10 minutes).`, 'error');
+                    SO.showWarning('seat', [`Seat ${mySeat.id} is in use by another device. Close it there, or wait 10 minutes.`]);
+                }
+            } else log(`💔 Heartbeat failed: ${e.message}`);
+        }
     }
 
     function stopHeartbeat() { if (heartbeatInterval) clearTimeout(heartbeatInterval); }
@@ -1897,8 +1912,28 @@
     // Ends the current tuning run on this phone: its playback, its listening and its reports.
     // Called before a new START PICCOLO and on STOP. (Without it, a phone ignored every start
     // after the first until it was reloaded: a re-run never reached it.)
+    let tuningRunEnded = false;
+    // A hidden page (another tab, a locked screen) still plays its notes, but it stops hearing:
+    // the note detector runs on screen refreshes and the analysis on timers, both of which Chrome
+    // stops or slows. So results from a run that was interrupted can't be trusted.
+    let hiddenDuringRun = false;
+    const HIDDEN_RUN_TOLERANCE_MS = 1500;
+    function tuningInProgress() { return !!tuningStartTime && !tuningRunEnded && tuningBusy; }
+    function voidRunAfterHiding(awayMs) {
+        if (awayMs < HIDDEN_RUN_TOLERANCE_MS) { hiddenDuringRun = false; return; }
+        const why = `page was hidden for ${(awayMs / 1000).toFixed(0)} s during the run`;
+        if (!isListenOnlyMode && !isHappy) {
+            failCalibration(why);   // plays again in the next run
+        } else {
+            // A listener's reports about its neighbours could be wrong: stop sending them.
+            log(`⏹️ Stopped listening for this run (${why}); my reports so far stand, nothing more is sent`, 'warn');
+            endTuningRun('hidden during the run');
+        }
+    }
     function endTuningRun(reason) {
         if (!tuningStartTime) return;
+        tuningRunEnded = true;
+        tuningBusy = false;
         // Fade out over 1.5 s instead of cutting off
         const t = audioCtx ? audioCtx.currentTime : 0, FADE = 1.5;
         for (const st of allStreams) {
@@ -1915,7 +1950,10 @@
         db.ref('tuning/current').on('value', async snap => {
             const sched = snap.val();
             if (!sched || sched.status !== 'ACTIVE') {
-                if (tuningStartTime && !isProcessingTuning && allStreams.length) endTuningRun('STOP from conductor');
+                // Listen-only phones have no streams but still listen and log: end those too.
+                // (They used to keep listening and logging STATUS through the whole show.)
+                if (tuningStartTime && !isProcessingTuning && !tuningRunEnded) endTuningRun('STOP from conductor');
+                tuningBusy = false;
                 return;
             }
             if (sched.mode === 'PILLAR_CAL') { log('🏛️ Pillar calibration running; this phone stays quiet'); return; }
@@ -1932,6 +1970,9 @@
 
             // Normal piccolo tuning
             endTuningRun('new START PICCOLO');
+            tuningRunEnded = false;
+            tuningBusy = true;   // background mix builds wait until the run is over
+            hiddenDuringRun = document.visibilityState === 'hidden';
             log(`🎵 Tuning schedule received: start=${new Date(sched.startTime).toISOString().substr(11,12)}`);
             isProcessingTuning = true;
             setTimeout(() => { isProcessingTuning = false; }, 15000);   // setup never takes this long
@@ -2109,12 +2150,15 @@
         if (document.visibilityState === 'hidden') {
             hiddenSince = SO.now();
             log(`🙈 Page hidden`, 'warn');
+            if (tuningInProgress()) hiddenDuringRun = true;
             sendHeartbeat();   // last word before timers are throttled, so the conductor knows why
             return;
         }
-        const away = hiddenSince ? Math.round((SO.now() - hiddenSince) / 1000) : 0;
+        const awayMs = hiddenSince ? SO.now() - hiddenSince : 0;
+        const away = Math.round(awayMs / 1000);
         hiddenSince = null;
         log(`👀 Page visible again after ${away} s`, 'info');
+        if (hiddenDuringRun && tuningInProgress()) voidRunAfterHiding(awayMs);
         if (audioCtx && audioCtx.state !== 'running') {
             try { await audioCtx.resume(); } catch (e) {}
             log(`🎛️ Audio engine ${audioCtx.state} after returning`, audioCtx.state === 'running' ? 'info' : 'warn');
@@ -2433,13 +2477,24 @@
     }
 
     // Returns the mix entry for a movement, building it if needed (one build at a time).
-    function ensureMix(name, plan) {
+    // A tuning run needs the CPU: a 30-80 s mix build during one made recordings start late and
+    // spoiled measurements. Background builds wait for the run to end; a GO's build doesn't.
+    let tuningBusy = false;
+    function ensureMix(name, plan, urgent = false) {
         let entry = mixes.get(name);
-        if (entry && entry.signature === plan.signature && !entry.failed && !entry.cancelled) return entry;
+        if (entry && entry.signature === plan.signature && !entry.failed && !entry.cancelled) {
+            if (urgent) entry.urgent = true;
+            return entry;
+        }
         if (entry) releaseMix(name);
-        entry = { name, plan, signature: plan.signature, buffer: null, cancelled: false, failed: false };
+        entry = { name, plan, signature: plan.signature, buffer: null, cancelled: false, failed: false, urgent };
         entry.promise = mixChain.then(async () => {
             if (entry.cancelled) throw cancelledError();
+            if (tuningBusy && !entry.urgent) {
+                log(`⏸️ Mix "${name}" waits until the tuning run is over`, 'info');
+                while (tuningBusy && !entry.urgent && !entry.cancelled) await new Promise(r => setTimeout(r, 500));
+                if (entry.cancelled) throw cancelledError();
+            }
             entry.buffer = await buildMix(entry);
             return entry.buffer;
         });
@@ -2490,9 +2545,16 @@
 
     // --- GO: play this movement's mix (other movements keep playing) -------------
     let movementToken = 0;
+    // A GO older than this is a leftover (Firebase hands every new listener the stored cue).
+    // Joining late within it still works; past it, the movement is over in any real show.
+    const STALE_GO_MS = 20 * 60 * 1000;
     function handleMovementStart(cue) {
         if (!cue.startTime || !cue.movement || !cue.cues) return;
         const name = cue.movement;
+        if (SO.now() - cue.startTime > STALE_GO_MS && !playingMovements.has(name)) {
+            log(`⏭️ Ignoring an earlier GO for "${name}" (${new Date(cue.startTime).toISOString().substr(11, 8)} UTC, ${Math.round((SO.now() - cue.startTime) / 60000)} min ago)`, 'info');
+            return;
+        }
         log(`🎬 MOVEMENT START: "${name}"`);
         stopIdleClockRechecks();
         currentMovement = name;
@@ -2510,7 +2572,7 @@
         }
         // An unplanned jump: stop building anything else so this one starts sooner
         for (const [key, e] of mixes) if (key !== name && !e.buffer && !playingMovements.has(key)) releaseMix(key);
-        const entry = ensureMix(name, plan);
+        const entry = ensureMix(name, plan, true);
         if (!entry.buffer) log(`⏳ "${name}" mix not ready yet; it will join late`, 'warn');
         entry.promise.then(buffer => {
             if (token !== movementToken && playingMovements.has(name)) return;   // superseded by a restart
@@ -2528,16 +2590,11 @@
             r.source.onended = () => {
                 try { r.gain.disconnect(); } catch (e) {}
                 if (playingMovements.get(name) === playing) playingMovements.delete(name);
-                if (!playingMovements.has(name) && mixes.get(name) === entry) {
-                    const i = showMovements.findIndex(m => movementName(m) === name);
-                    // keep it if it is the next one up (e.g. a restart); otherwise free it
-                    const playingNames = [...playingMovements.keys()];
-                    const isNext = playingNames.some(n => {
-                        const j = showMovements.findIndex(m => movementName(m) === n);
-                        return j >= 0 && j + 1 === i;
-                    });
-                    if (!isNext) releaseMix(name);
-                }
+                // The latest movement's mix is kept: a second GO for it (a rehearsal restart) then
+                // starts on time instead of rebuilding for 30 s; the next GO for another movement
+                // frees it. An earlier movement that ends under a later one is freed now, so a
+                // phone never holds more than the current and the next mix.
+                if (!playingMovements.has(name) && mixes.get(name) === entry && name !== currentMovement) releaseMix(name);
                 log(`🏁 "${name}" finished`, 'info');
                 if (!playingMovements.size) clockRecheckWhenQuiet();   // end of the movement(s)
             };
@@ -2685,7 +2742,7 @@
 
     window.onload = async () => {
         log(`🚀 Loading... (devicedist build ${DEVICEDIST_BUILD}, config.js build ${SO.BUILD || "old"})`);
-        if (SO.BUILD !== "2026-11-13a") { log(`⚠️ config.js is build ${SO.BUILD || "old"}, this page needs 2026-11-13a: reload`, "warn"); SO.showWarning("build", [`This phone has an old copy of config.js (${SO.BUILD || "old"}). Close this tab and open the link again.`]); }
+        if (SO.BUILD !== "2026-11-18a") { log(`⚠️ config.js is build ${SO.BUILD || "old"}, this page needs 2026-11-18a: reload`, "warn"); SO.showWarning("build", [`This phone has an old copy of config.js (${SO.BUILD || "old"}). Close this tab and open the link again.`]); }
         try {
             await SO.signIn();   // anonymous: lets the database rules tie this seat to this phone
             await resolveIdentity();

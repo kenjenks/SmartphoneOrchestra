@@ -898,6 +898,10 @@
             if (!uid()) return false;
             try {
                 await db.ref('devices/' + id).update({ uid: uid(), lastSeen: now() });
+                // When this page closes (or its connection drops), mark the seat as long silent so
+                // another device can take it at once instead of being refused for 10 minutes.
+                // A live page's next heartbeat sets lastSeen again.
+                db.ref('devices/' + id + '/lastSeen').onDisconnect().set(0).catch(() => {});
                 return true;
             } catch (e) {
                 console.warn('Seat claim refused', e);
@@ -949,7 +953,7 @@
 
     // ---------------------------------------------------------------- Export
     window.SO = {
-        BUILD: '2026-11-13a',
+        BUILD: '2026-11-18a',
         FIREBASE_CONFIG, LIMITS, FALLBACK, db,
         now, onClockSync,
         get serverOffset() { return now() - Date.now(); },   // legacy: server − Date.now()
